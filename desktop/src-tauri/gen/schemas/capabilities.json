@@ -1,0 +1,1 @@
+{"default":{"identifier":"default","description":"Core APIs for the main window: event listen/emit so the UI receives live status-updated/sidecar-status/log-line events, plus invoking the app's own control commands.","local":true,"windows":["main"],"permissions":["core:default","core:event:default"]}}

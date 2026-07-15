@@ -1,0 +1,759 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>LeadFlow — Pulse · Dashboard</title>
+<script>
+(function(){var l="dock";try{l=localStorage.getItem("pulse.layout")||"dock"}catch(e){}
+document.documentElement.setAttribute("data-layout",/^(dock|sidebar)$/.test(l)?l:"dock");})();
+</script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Sora:wght@500;600;700;800&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="assets/pulse.css">
+<style>
+  /* ============ DASHBOARD-ONLY STYLES ============ */
+  .t-hero      { grid-column: span 2; grid-row: span 2; }
+  .t-goal      { grid-column: span 1; grid-row: span 2; }
+  .t-cpl       { grid-column: span 1; grid-row: span 1; }
+  .t-conv      { grid-column: span 1; grid-row: span 1; }
+  .t-channels  { grid-column: span 3; grid-row: span 2; }
+  .t-active    { grid-column: span 1; grid-row: span 1; }
+  .t-ticker    { grid-column: span 1; grid-row: span 1; }
+  .t-campaigns { grid-column: span 2; grid-row: span 2; }
+  .t-funnel    { grid-column: span 1; grid-row: span 2; }
+  .t-hour      { grid-column: span 1; grid-row: span 2; }
+
+  /* ---- 1. INDIGO HERO ---- */
+  .t-hero {
+    background: linear-gradient(150deg, #5a51f0 0%, var(--indigo) 45%, var(--indigo-deep) 100%);
+    color: #fff;
+    display: flex;
+    flex-direction: column;
+    padding: 26px 28px 0;
+  }
+  .t-hero::before {
+    content: "";
+    position: absolute;
+    top: -60%;
+    left: -45%;
+    width: 55%;
+    height: 220%;
+    background: linear-gradient(100deg, transparent 30%, rgba(255,255,255,.14) 50%, transparent 70%);
+    transform: rotate(14deg);
+    animation: shine 5.5s ease-in-out infinite;
+    pointer-events: none;
+  }
+  @keyframes shine {
+    0%, 55% { left: -55%; }
+    85%, 100% { left: 130%; }
+  }
+  .t-hero .tile-label { color: rgba(255,255,255,.62); }
+  .hero-num {
+    font-size: 68px;
+    margin-top: 18px;
+    display: flex;
+    align-items: baseline;
+    gap: 14px;
+    flex-wrap: wrap;
+  }
+  .hero-sub {
+    font-size: 13px;
+    color: rgba(255,255,255,.66);
+    margin-top: 10px;
+    font-weight: 500;
+  }
+  .hero-spark {
+    margin-top: auto;
+    margin-left: -28px;
+    margin-right: -28px;
+    height: 116px;
+  }
+  .hero-spark svg { width: 100%; height: 100%; display: block; }
+  #heroLine {
+    fill: none;
+    stroke: #fff;
+    stroke-width: 2.5;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+  }
+  #heroLine.draw { transition: stroke-dashoffset 1.4s cubic-bezier(.4,0,.2,1) .25s; }
+  #heroArea { fill: url(#heroFill); opacity: 0; }
+  #heroArea.draw { transition: opacity 1s ease .55s; opacity: 1; }
+  #heroDot { fill: var(--lime); stroke: rgba(255,255,255,.85); stroke-width: 2; opacity: 0; transition: opacity .3s ease 1.5s; }
+  #heroDot.draw { opacity: 1; }
+
+  /* ---- 2. LIME GOAL GAUGE ---- */
+  .t-goal {
+    background: var(--lime);
+    color: var(--ink);
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    text-align: center;
+    padding-top: 24px;
+  }
+  .t-goal .tile-label { color: rgba(22,22,26,.55); width: 100%; justify-content: center; }
+  .gauge-wrap { position: relative; width: 178px; height: 178px; margin-top: 14px; }
+  .gauge-wrap svg { width: 100%; height: 100%; display: block; }
+  .gauge-track { fill: none; stroke: rgba(22,22,26,.12); stroke-width: 15; stroke-linecap: round; }
+  .gauge-val   { fill: none; stroke: var(--ink); stroke-width: 15; stroke-linecap: round; }
+  .gauge-center {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 2px;
+  }
+  .gauge-center .big-num { font-size: 46px; }
+  .gauge-center .pct { font-size: 20px; font-weight: 700; margin-left: 2px; }
+  .gauge-center small { font-size: 10.5px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; color: rgba(22,22,26,.5); }
+  .goal-caption { margin-top: auto; padding-bottom: 4px; font-size: 12.5px; font-weight: 600; color: rgba(22,22,26,.72); font-variant-numeric: tabular-nums; }
+  .goal-caption strong { font-weight: 800; }
+
+  /* ---- 3. BLACK CPL ---- */
+  .t-cpl {
+    background: var(--ink);
+    color: #fff;
+    display: flex;
+    flex-direction: column;
+  }
+  .t-cpl .tile-label { color: rgba(255,255,255,.46); }
+  .cpl-row { display: flex; align-items: flex-end; justify-content: space-between; gap: 12px; margin-top: auto; }
+  .cpl-num { font-size: 42px; }
+  .cpl-num .cur { font-size: 22px; vertical-align: 14px; margin-right: 2px; color: rgba(255,255,255,.55); }
+  .cpl-bars { display: flex; align-items: flex-end; gap: 4px; height: 46px; padding-bottom: 4px; }
+  .cpl-bars i {
+    width: 7px;
+    border-radius: 3px;
+    background: rgba(255,255,255,.34);
+    transform: scaleY(0);
+    transform-origin: bottom;
+    transition: transform .6s cubic-bezier(.2,.8,.3,1.1);
+  }
+  .cpl-bars i:last-child { background: var(--lime); }
+  .cpl-bars.grown i { transform: scaleY(1); }
+
+  /* ---- 4. WHITE KPI TILES ---- */
+  .kpi-num { font-size: 42px; margin-top: auto; }
+  .kpi-flex { display: flex; flex-direction: column; height: 100%; }
+  .kpi-foot { font-size: 12px; color: var(--ink-faint); margin-top: 7px; font-weight: 500; }
+  .t-active .ch-dots { margin-top: 9px; }
+
+  /* ---- 5. CHANNELS CHART ---- */
+  .t-channels { display: flex; flex-direction: column; }
+  .legend .l-cur i { background: var(--indigo); }
+  .legend .l-prev i { background: #d6d9e2; }
+
+  /* ---- 6. FUNNEL ---- */
+  .t-funnel { display: flex; flex-direction: column; }
+  .funnel-body { display: flex; flex-direction: column; flex: 1; margin-top: 14px; justify-content: space-between; }
+  .f-head { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 6px; }
+  .f-name { font-size: 12.5px; font-weight: 600; color: var(--ink-soft); }
+  .f-val  { font-family: var(--font-head); font-size: 15px; font-weight: 700; font-variant-numeric: tabular-nums; }
+  .f-bar  { height: 14px; background: #f0f1f5; border-radius: 999px; overflow: hidden; }
+  .f-fill {
+    height: 100%;
+    border-radius: 999px;
+    width: 0%;
+    transition: width .9s cubic-bezier(.25,.8,.3,1);
+  }
+  .f-stage:nth-child(1) .f-fill { background: var(--indigo); }
+  .f-stage:nth-child(3) .f-fill { background: #818cf8; }
+  .f-stage:nth-child(5) .f-fill { background: var(--ink); }
+  .f-stage:nth-child(7) .f-fill { background: #b7d916; }
+  .f-rate {
+    font-size: 10.5px;
+    font-weight: 700;
+    color: var(--ink-faint);
+    padding: 5px 0 5px 2px;
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    font-variant-numeric: tabular-nums;
+  }
+  .f-rate svg { width: 9px; height: 9px; }
+
+  /* ---- 7. CAMPAIGNS LIST ---- */
+  .t-campaigns { display: flex; flex-direction: column; padding-bottom: 12px; }
+  .t-campaigns .view-all { text-transform: none; letter-spacing: 0; font-weight: 600; color: var(--indigo); text-decoration: none; font-size: 12px; }
+  .camp-list { margin-top: 10px; flex: 1; display: flex; flex-direction: column; }
+  .camp-row {
+    display: grid;
+    grid-template-columns: 1.55fr .82fr .78fr .6fr .52fr 36px;
+    align-items: center;
+    gap: 10px;
+    padding: 9px 2px;
+    border-bottom: 1px solid #f1f2f6;
+    flex: 1;
+  }
+  .camp-row:last-child { border-bottom: none; }
+  .camp-head {
+    display: grid;
+    grid-template-columns: 1.55fr .82fr .78fr .6fr .52fr 36px;
+    gap: 10px;
+    padding: 4px 2px 8px;
+    font-size: 10.5px;
+    font-weight: 700;
+    letter-spacing: .07em;
+    text-transform: uppercase;
+    color: var(--ink-faint);
+    border-bottom: 1px solid #eef0f4;
+  }
+  .camp-name { font-size: 13px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .camp-num { font-family: var(--font-head); font-size: 13.5px; font-weight: 700; font-variant-numeric: tabular-nums; text-align: right; }
+  .camp-cpl { font-size: 12.5px; font-weight: 600; color: var(--ink-soft); font-variant-numeric: tabular-nums; text-align: right; }
+
+  /* ---- 8. BEST HOUR ---- */
+  .t-hour { display: flex; flex-direction: column; }
+  .hour-num { font-size: 38px; margin-top: 16px; letter-spacing: -.02em; }
+  .hour-sub { font-size: 12px; color: var(--ink-faint); font-weight: 500; margin-top: 6px; }
+  .heat {
+    display: grid;
+    grid-template-columns: repeat(12, 1fr);
+    gap: 5px;
+    margin-top: auto;
+  }
+  .heat .cell {
+    position: relative;
+    aspect-ratio: 1;
+    border-radius: 5px;
+    background: var(--indigo);
+    cursor: pointer;
+    opacity: 0;
+    animation: cellIn .45s ease forwards;
+    transition: transform .15s ease;
+  }
+  .heat .cell:hover { transform: scale(1.3); z-index: 3; }
+  @keyframes cellIn { from { opacity: 0; } to { opacity: 1; } }
+  .heat .cell::after {
+    content: attr(data-h);
+    position: absolute;
+    bottom: calc(100% + 7px);
+    left: 50%;
+    transform: translateX(-50%);
+    background: var(--ink);
+    color: #fff;
+    font-size: 10px;
+    font-weight: 600;
+    padding: 4px 7px;
+    border-radius: 6px;
+    white-space: nowrap;
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity .14s ease;
+    z-index: 4;
+  }
+  .heat .cell:hover::after { opacity: 1; }
+  .heat-scale { display: flex; justify-content: space-between; font-size: 10px; font-weight: 600; color: var(--ink-faint); margin-top: 8px; }
+
+  /* ---- 9. LIVE TICKER ---- */
+  .t-ticker { display: flex; flex-direction: column; }
+  .ticker-num { font-size: 46px; margin-top: auto; display: inline-block; }
+  .ticker-num.pop { animation: numPop .45s cubic-bezier(.2,.9,.3,1.4); }
+  @keyframes numPop {
+    0%   { transform: scale(1); color: var(--ink); }
+    35%  { transform: scale(1.12); color: var(--indigo); }
+    100% { transform: scale(1); color: var(--ink); }
+  }
+  .ticker-foot { font-size: 11.5px; color: var(--ink-faint); font-weight: 500; margin-top: 6px; }
+  .ticker-foot b { color: #15803d; font-weight: 700; }
+
+  /* ---- PAGE RESPONSIVE (tile spans) ---- */
+  @media (max-width: 1180px) {
+    .t-hero, .t-channels, .t-campaigns { grid-column: span 2; }
+    .t-goal, .t-funnel, .t-hour { grid-column: span 1; }
+    .hero-num { font-size: 56px; }
+  }
+  @media (max-width: 1428px) {
+    html[data-layout="sidebar"] .t-hero,
+    html[data-layout="sidebar"] .t-channels,
+    html[data-layout="sidebar"] .t-campaigns { grid-column: span 2; }
+    html[data-layout="sidebar"] .t-goal,
+    html[data-layout="sidebar"] .t-funnel,
+    html[data-layout="sidebar"] .t-hour { grid-column: span 1; }
+    html[data-layout="sidebar"] .hero-num { font-size: 56px; }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .cpl-bars i { transform: scaleY(1) !important; }
+    .heat .cell { opacity: 1; }
+  }
+</style>
+</head>
+<body data-page="dashboard">
+
+<div class="page">
+
+  <header class="greeting">
+    <div>
+      <h1>Campaign HQ</h1>
+      <p class="sub">Welcome back, Jordan — <strong data-ws-name>Acme</strong> is pulling strong numbers this period.</p>
+    </div>
+    <div class="seg" role="tablist" aria-label="Time period">
+      <button data-period="today" role="tab" aria-selected="false">Today</button>
+      <button data-period="week" role="tab" aria-selected="false">7 days</button>
+      <button data-period="month" class="active" role="tab" aria-selected="true">30 days</button>
+    </div>
+  </header>
+
+  <main class="bento" id="bento">
+
+    <!-- 1. INDIGO HERO -->
+    <section class="tile t-hero" style="--i:0">
+      <div class="tile-label">
+        <span>Total leads</span>
+        <span class="chip glass" id="heroChip">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3.2" stroke-linecap="round" stroke-linejoin="round"><path d="M7 17L17 7"/><path d="M9 7h8v8"/></svg>
+          <span id="heroDelta">+18.2%</span>
+        </span>
+      </div>
+      <div class="hero-num big-num" id="heroNum">0</div>
+      <p class="hero-sub" id="heroSub">vs. previous 30 days · all channels combined</p>
+      <div class="hero-spark">
+        <svg id="heroSvg" viewBox="0 0 560 116" preserveAspectRatio="none" aria-hidden="true">
+          <defs>
+            <linearGradient id="heroFill" x1="0" y1="0" x2="0" y2="1">
+              <stop offset="0%" stop-color="#ffffff" stop-opacity=".28"/>
+              <stop offset="100%" stop-color="#ffffff" stop-opacity="0"/>
+            </linearGradient>
+          </defs>
+          <path id="heroArea" d=""/>
+          <path id="heroLine" d=""/>
+          <circle id="heroDot" r="4.5" cx="0" cy="0"/>
+        </svg>
+      </div>
+    </section>
+
+    <!-- 2. LIME GOAL GAUGE -->
+    <section class="tile t-goal" style="--i:1">
+      <div class="tile-label"><span>Goal progress</span></div>
+      <div class="gauge-wrap">
+        <svg viewBox="0 0 178 178" aria-hidden="true">
+          <circle class="gauge-track" id="gaugeTrack" cx="89" cy="89" r="74"/>
+          <circle class="gauge-val" id="gaugeVal" cx="89" cy="89" r="74"/>
+        </svg>
+        <div class="gauge-center">
+          <div><span class="big-num" id="gaugeNum">0</span><span class="pct big-num">%</span></div>
+          <small>to goal</small>
+        </div>
+      </div>
+      <p class="goal-caption" id="goalCaption"><strong>12,847</strong> of 20,000 monthly goal</p>
+    </section>
+
+    <!-- 3. BLACK CPL -->
+    <section class="tile t-cpl" style="--i:2">
+      <div class="tile-label">
+        <span>Cost per lead</span>
+        <span class="chip lime">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3.2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 7L7 17"/><path d="M15 17H7V9"/></svg>
+          <span id="cplDelta">−12%</span>
+        </span>
+      </div>
+      <div class="cpl-row">
+        <div class="cpl-num big-num"><span class="cur">$</span><span id="cplNum">0.00</span></div>
+        <div class="cpl-bars" id="cplBars"></div>
+      </div>
+    </section>
+
+    <!-- 4a. CONVERSION RATE -->
+    <section class="tile t-conv" style="--i:3">
+      <div class="kpi-flex">
+        <div class="tile-label">
+          <span>Conversion rate</span>
+          <span class="chip up" id="convChip">+0.4pt</span>
+        </div>
+        <div class="kpi-num big-num"><span id="convNum">0.0</span><span style="font-size:24px">%</span></div>
+        <p class="kpi-foot">visitors → captured leads</p>
+      </div>
+    </section>
+
+    <!-- 5. CHANNELS GROUPED BARS -->
+    <section class="tile t-channels" style="--i:4">
+      <div class="tile-label">
+        <span>Leads by channel</span>
+        <span class="legend"><span class="l-cur"><i></i>This period</span><span class="l-prev"><i></i>Last period</span></span>
+      </div>
+      <div class="chart-wrap" id="chartWrap">
+        <svg id="barSvg" viewBox="0 0 640 252" preserveAspectRatio="none" aria-label="Leads by channel"></svg>
+        <div class="chart-tip" id="chartTip"></div>
+      </div>
+    </section>
+
+    <!-- 4b. ACTIVE CAMPAIGNS -->
+    <section class="tile t-active" style="--i:5">
+      <div class="kpi-flex">
+        <div class="tile-label"><span>Active campaigns</span></div>
+        <div class="kpi-num big-num" id="activeNum">0</div>
+        <div class="ch-dots" aria-label="Channels in use">
+          <span style="background:var(--fb)">f</span>
+          <span style="background:var(--ig)">ig</span>
+          <span style="background:var(--li)">in</span>
+          <span style="background:var(--tt)">tt</span>
+          <span style="background:var(--x)">x</span>
+        </div>
+      </div>
+    </section>
+
+    <!-- 9. LIVE TICKER -->
+    <section class="tile t-ticker" style="--i:6">
+      <div class="tile-label">
+        <span>New leads today</span>
+        <span class="live-tag"><span class="dot"></span>LIVE</span>
+      </div>
+      <div class="ticker-num big-num" id="tickerNum">218</div>
+      <p class="ticker-foot">last lead <b id="tickerAgo">just now</b> · Instagram</p>
+    </section>
+
+    <!-- 7. CAMPAIGNS LIST -->
+    <section class="tile t-campaigns" style="--i:7">
+      <div class="tile-label"><span>Campaigns</span><a class="view-all" href="campaigns.html">View all →</a></div>
+      <div class="camp-list">
+        <div class="camp-head">
+          <span>Name</span><span>Channel</span><span>Status</span>
+          <span style="text-align:right">Leads</span><span style="text-align:right">CPL</span><span></span>
+        </div>
+        <div id="campRows"></div>
+      </div>
+    </section>
+
+    <!-- 6. FUNNEL -->
+    <section class="tile t-funnel" style="--i:8">
+      <div class="tile-label"><span>Funnel</span></div>
+      <div class="funnel-body" id="funnelBody"></div>
+    </section>
+
+    <!-- 8. BEST HOUR -->
+    <section class="tile t-hour" style="--i:9">
+      <div class="tile-label"><span>Best hour to post</span></div>
+      <div class="hour-num big-num" id="hourNum">6–8 PM</div>
+      <p class="hour-sub" id="hourSub">highest lead capture window</p>
+      <div class="heat" id="heat"></div>
+      <div class="heat-scale"><span>12 AM</span><span>12 PM</span><span>11 PM</span></div>
+    </section>
+
+  </main>
+</div>
+
+<script src="assets/data.js"></script>
+<script src="assets/shell.js"></script>
+<script>
+(function () {
+  "use strict";
+
+  var S = window.Shell, D = window.PulseData;
+  var $ = S.$, fmt = S.fmt, el = S.el, countUp = S.countUp;
+  var REDUCED = S.REDUCED;
+  var CHANNELS = D.CHANNELS;
+  var CAMPAIGNS = D.DASH_CAMPAIGNS;
+  var DATA = D.DASHBOARD;
+
+  /* ================= 1. HERO SPARKLINE ================= */
+  function renderHero(d) {
+    countUp($("heroNum"), d.leads);
+    $("heroDelta").textContent = d.delta;
+    $("heroSub").textContent = d.sub;
+
+    var W = 560, H = 116, P = 10;
+    var pts = d.spark;
+    var min = Math.min.apply(null, pts), max = Math.max.apply(null, pts);
+    var span = (max - min) || 1;
+    var coords = pts.map(function (v, i) {
+      return [
+        (i / (pts.length - 1)) * W,
+        P + (1 - (v - min) / span) * (H - P * 2)
+      ];
+    });
+    var line = coords.map(function (c, i) {
+      return (i === 0 ? "M" : "L") + c[0].toFixed(1) + " " + c[1].toFixed(1);
+    }).join(" ");
+    var area = line + " L " + W + " " + H + " L 0 " + H + " Z";
+
+    var lineEl = $("heroLine"), areaEl = $("heroArea"), dotEl = $("heroDot");
+    lineEl.classList.remove("draw");
+    areaEl.classList.remove("draw");
+    dotEl.classList.remove("draw");
+    lineEl.setAttribute("d", line);
+    areaEl.setAttribute("d", area);
+    var last = coords[coords.length - 1];
+    dotEl.setAttribute("cx", last[0] - 6);
+    dotEl.setAttribute("cy", last[1]);
+
+    var len = lineEl.getTotalLength();
+    lineEl.style.strokeDasharray = len;
+    lineEl.style.strokeDashoffset = len;
+    void lineEl.getBoundingClientRect();
+    lineEl.classList.add("draw");
+    areaEl.classList.add("draw");
+    dotEl.classList.add("draw");
+    lineEl.style.strokeDashoffset = 0;
+  }
+
+  /* ================= 2. GAUGE ================= */
+  var R = 74, CIRC = 2 * Math.PI * R, ARC = 0.72;
+  (function initGauge() {
+    var track = $("gaugeTrack"), val = $("gaugeVal");
+    var rot = "rotate(" + (90 + (360 * (1 - ARC)) / 2) + " 89 89)";
+    track.setAttribute("transform", rot);
+    val.setAttribute("transform", rot);
+    track.style.strokeDasharray = (CIRC * ARC) + " " + CIRC;
+    val.style.strokeDasharray = "0 " + CIRC;
+  })();
+
+  function renderGauge(d) {
+    var val = $("gaugeVal"), num = $("gaugeNum");
+    $("goalCaption").innerHTML = d.goalCap;
+    var target = d.goalPct;
+    if (REDUCED) {
+      num.textContent = target;
+      val.style.strokeDasharray = (CIRC * ARC * target / 100) + " " + CIRC;
+      return;
+    }
+    var start = null, dur = 1500;
+    function step(ts) {
+      if (start === null) start = ts;
+      var t = S.easeOut(Math.min((ts - start) / dur, 1));
+      num.textContent = Math.round(target * t);
+      val.style.strokeDasharray = (CIRC * ARC * (target * t) / 100) + " " + CIRC;
+      if (t < 1) requestAnimationFrame(step);
+    }
+    val.style.strokeDasharray = "0 " + CIRC;
+    requestAnimationFrame(step);
+  }
+
+  /* ================= 3. CPL ================= */
+  function renderCpl(d) {
+    countUp($("cplNum"), d.cpl, { dec: 2, dur: 1100 });
+    $("cplDelta").textContent = d.cplDelta;
+    var wrap = $("cplBars");
+    wrap.classList.remove("grown");
+    wrap.innerHTML = "";
+    var max = Math.max.apply(null, d.cplBars);
+    d.cplBars.forEach(function (v, i) {
+      var b = document.createElement("i");
+      b.style.height = Math.round((v / max) * 100) + "%";
+      b.style.transitionDelay = (i * 55) + "ms";
+      wrap.appendChild(b);
+    });
+    void wrap.getBoundingClientRect();
+    wrap.classList.add("grown");
+  }
+
+  /* ================= 4. KPI TILES ================= */
+  function renderKpis(d) {
+    countUp($("convNum"), d.conv, { dec: 1, dur: 1100 });
+    $("convChip").textContent = d.convDelta;
+    countUp($("activeNum"), d.active, { dur: 900 });
+  }
+
+  /* ================= 5. CHANNELS BAR CHART ================= */
+  var chartWrap = $("chartWrap"), barSvg = $("barSvg"), chartTip = $("chartTip");
+  var tip = S.tipController(chartWrap, chartTip, barSvg, 640, 252);
+
+  function renderChannels(d) {
+    chartWrap.classList.remove("grown");
+    barSvg.innerHTML = "";
+    tip.hide();
+
+    var W = 640, H = 252, padL = 38, padR = 8, padT = 12, base = H - 30;
+    var plotW = W - padL - padR, plotH = base - padT;
+    var max = 0;
+    d.bars.forEach(function (p) { max = Math.max(max, p[0], p[1]); });
+    var mag = Math.pow(10, Math.floor(Math.log10(max)));
+    var n = max / mag;
+    var f = n <= 1 ? 1 : n <= 2 ? 2 : n <= 4 ? 4 : n <= 5 ? 5 : n <= 8 ? 8 : 10;
+    var niceMax = f * mag;
+
+    function fmtTick(v) {
+      return v >= 1000 ? (v / 1000).toFixed(v % 1000 === 0 ? 0 : 1) + "k" : String(v);
+    }
+
+    for (var g = 0; g <= 4; g++) {
+      var y = base - (g / 4) * plotH;
+      barSvg.appendChild(el("line", { x1: padL, x2: W - padR, y1: y, y2: y, "class": g === 0 ? "axis-base" : "grid-line" }));
+      var lbl = el("text", { x: padL - 8, y: y + 3.5, "class": "grid-label", "text-anchor": "end" });
+      lbl.textContent = fmtTick(Math.round(niceMax * g / 4));
+      barSvg.appendChild(lbl);
+    }
+
+    var groupW = plotW / 5, barW = Math.min(30, groupW * 0.24), gap = 7;
+
+    d.bars.forEach(function (pair, i) {
+      var cx = padL + groupW * i + groupW / 2;
+      var ch = CHANNELS[i];
+      var group = el("g", { "class": "bar-group" });
+
+      var hCur = Math.max(3, (pair[0] / niceMax) * plotH);
+      var hPrev = Math.max(3, (pair[1] / niceMax) * plotH);
+
+      var prev = el("rect", {
+        x: cx - barW - gap / 2, y: base - hPrev, width: barW, height: hPrev,
+        rx: 6, fill: "#d6d9e2", "class": "bar"
+      });
+      prev.style.transitionDelay = (i * 80) + "ms";
+
+      var cur = el("rect", {
+        x: cx + gap / 2, y: base - hCur, width: barW, height: hCur,
+        rx: 6, fill: ch.color, "class": "bar"
+      });
+      cur.style.transitionDelay = (i * 80 + 50) + "ms";
+
+      var lbl = el("text", { x: cx, y: H - 8, "class": "bar-label" });
+      lbl.textContent = ch.name;
+
+      group.appendChild(prev);
+      group.appendChild(cur);
+      group.appendChild(lbl);
+      barSvg.appendChild(group);
+
+      group.addEventListener("mouseenter", function () {
+        var deltaPct = ((pair[0] - pair[1]) / pair[1]) * 100;
+        var sign = deltaPct >= 0 ? "+" : "−";
+        var html =
+          '<div class="t-name"><i style="background:' + ch.color + '"></i>' + ch.name + "</div>" +
+          '<div class="t-row">This period: <b>' + fmt(pair[0]) + "</b></div>" +
+          '<div class="t-row">Last period: <b>' + fmt(pair[1]) + "</b></div>" +
+          '<div class="t-delta">' + sign + Math.abs(deltaPct).toFixed(1) + "% vs last</div>";
+        tip.show(cx, base - Math.max(hCur, hPrev), html);
+      });
+      group.addEventListener("mouseleave", tip.hide);
+    });
+
+    void barSvg.getBoundingClientRect();
+    chartWrap.classList.add("grown");
+  }
+
+  /* ================= 6. FUNNEL ================= */
+  function renderFunnel(d) {
+    var body = $("funnelBody");
+    body.innerHTML = "";
+    var fills = [];
+    d.funnel.forEach(function (item) {
+      if (item.rate) {
+        var r = document.createElement("div");
+        r.className = "f-rate";
+        r.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M12 4v16"/><path d="M6 14l6 6 6-6"/></svg>' + item.rate;
+        body.appendChild(r);
+      } else {
+        var s = document.createElement("div");
+        s.className = "f-stage";
+        s.innerHTML =
+          '<div class="f-head"><span class="f-name">' + item.name + '</span>' +
+          '<span class="f-val">' + item.val + "</span></div>" +
+          '<div class="f-bar"><div class="f-fill" data-w="' + item.w + '"></div></div>';
+        body.appendChild(s);
+        fills.push(s.querySelector(".f-fill"));
+      }
+    });
+    void body.getBoundingClientRect();
+    fills.forEach(function (f, i) {
+      f.style.transitionDelay = (i * 110) + "ms";
+      f.style.width = f.getAttribute("data-w") + "%";
+    });
+  }
+
+  /* ================= 7. CAMPAIGNS LIST ================= */
+  var PLAY_ICON = '<svg viewBox="0 0 24 24" fill="currentColor"><path d="M7 4.5v15l13-7.5z"/></svg>';
+  var PAUSE_ICON = '<svg viewBox="0 0 24 24" fill="currentColor"><rect x="5.5" y="4" width="4.5" height="16" rx="1.5"/><rect x="14" y="4" width="4.5" height="16" rx="1.5"/></svg>';
+
+  function renderCampaigns(d) {
+    var box = $("campRows");
+    box.innerHTML = "";
+    CAMPAIGNS.forEach(function (c, i) {
+      var ch = CHANNELS[c.channel];
+      var stats = d.camp[i];
+      var row = document.createElement("div");
+      row.className = "camp-row";
+      row.innerHTML =
+        '<span class="camp-name">' + c.name + "</span>" +
+        '<span class="camp-chip" style="background:' + ch.color + '">' + ch.name + "</span>" +
+        '<span class="status ' + (c.live ? "live" : "paused") + '"><span class="dot"></span><span class="st-txt">' + (c.live ? "Live" : "Paused") + "</span></span>" +
+        '<span class="camp-num">' + fmt(stats[0]) + "</span>" +
+        '<span class="camp-cpl">$' + stats[1].toFixed(2) + "</span>" +
+        '<button class="toggle-btn" aria-label="Toggle campaign">' + (c.live ? PAUSE_ICON : PLAY_ICON) + "</button>";
+      var btn = row.querySelector(".toggle-btn");
+      var status = row.querySelector(".status");
+      var txt = row.querySelector(".st-txt");
+      btn.addEventListener("click", function () {
+        c.live = !c.live;
+        status.className = "status " + (c.live ? "live" : "paused");
+        txt.textContent = c.live ? "Live" : "Paused";
+        btn.innerHTML = c.live ? PAUSE_ICON : PLAY_ICON;
+      });
+      box.appendChild(row);
+    });
+  }
+
+  /* ================= 8. HEAT STRIP ================= */
+  function hourLabel(h) {
+    if (h === 0) return "12 AM";
+    if (h < 12) return h + " AM";
+    if (h === 12) return "12 PM";
+    return (h - 12) + " PM";
+  }
+
+  function renderHeat(d) {
+    $("hourNum").textContent = d.hour;
+    $("hourSub").textContent = d.hourSub;
+    var heat = $("heat");
+    heat.innerHTML = "";
+    d.heat.forEach(function (v, h) {
+      var c = document.createElement("div");
+      c.className = "cell";
+      c.style.opacity = "0";
+      c.style.animationDelay = (h * 28) + "ms";
+      c.style.background = "rgba(79,70,229," + (0.07 + v * 0.93).toFixed(2) + ")";
+      c.setAttribute("data-h", hourLabel(h) + " · " + Math.round(v * 100) + "%");
+      heat.appendChild(c);
+    });
+  }
+
+  /* ================= 9. LIVE TICKER ================= */
+  var tickerVal = 218;
+  var tickerEl = $("tickerNum");
+  var agoEl = $("tickerAgo");
+  var lastTick = Date.now();
+  var TICK_CHANNELS = ["Instagram", "Facebook", "TikTok", "LinkedIn", "X"];
+
+  setInterval(function () {
+    tickerVal += 1 + Math.floor(Math.random() * 3);
+    tickerEl.textContent = fmt(tickerVal);
+    lastTick = Date.now();
+    agoEl.textContent = "just now";
+    agoEl.parentNode.lastChild.textContent = " · " + TICK_CHANNELS[Math.floor(Math.random() * TICK_CHANNELS.length)];
+    if (!REDUCED) {
+      tickerEl.classList.remove("pop");
+      void tickerEl.offsetWidth;
+      tickerEl.classList.add("pop");
+    }
+  }, 5000);
+
+  setInterval(function () {
+    var s = Math.round((Date.now() - lastTick) / 1000);
+    if (s >= 2) agoEl.textContent = s + "s ago";
+  }, 1000);
+
+  /* ================= RENDER ALL / PERIOD SWITCH ================= */
+  function renderAll(period, withPop) {
+    S.clearTimers();
+    var d = DATA[period];
+    if (withPop) S.popTiles();
+    renderHero(d);
+    renderGauge(d);
+    renderCpl(d);
+    renderKpis(d);
+    renderChannels(d);
+    renderFunnel(d);
+    renderCampaigns(d);
+    renderHeat(d);
+  }
+
+  /* ================= BOOT ================= */
+  var initial = S.initPeriodSeg(function (p) { renderAll(p, true); }) || "month";
+  renderAll(initial, true);
+})();
+</script>
+</body>
+</html>

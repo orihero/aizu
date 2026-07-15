@@ -1,0 +1,993 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>LeadFlow — Pulse · Reports</title>
+<script>
+(function(){var l="dock";try{l=localStorage.getItem("pulse.layout")||"dock"}catch(e){}
+document.documentElement.setAttribute("data-layout",/^(dock|sidebar)$/.test(l)?l:"dock");})();
+</script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Sora:wght@500;600;700;800&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="assets/pulse.css">
+<style>
+  /* ============ REPORTS-ONLY STYLES ============ */
+  .bento { grid-auto-rows: auto; }
+  .t-lines     { grid-column: 1 / -1; min-height: 384px; display: flex; flex-direction: column; }
+  .t-cpltrend  { grid-column: span 2; min-height: 330px; display: flex; flex-direction: column; }
+  .t-donut     { grid-column: span 2; min-height: 330px; display: flex; flex-direction: column; }
+  .t-compare   { grid-column: span 2; min-height: 318px; display: flex; flex-direction: column; }
+  .t-insights  { grid-column: span 2; min-height: 318px; display: flex; flex-direction: column; }
+  .t-table     { grid-column: 1 / -1; }
+
+  .lbl-note { font-size: 11px; font-weight: 600; color: var(--ink-faint); text-transform: none; letter-spacing: 0; white-space: nowrap; }
+
+  /* ---- 1. HERO MULTI-LINE ---- */
+  .lg-bar { margin-top: 13px; gap: 8px; flex-wrap: wrap; }
+  .lg-item {
+    display: inline-flex;
+    align-items: center;
+    border: 1px solid var(--line);
+    background: #fff;
+    border-radius: 999px;
+    padding: 6px 12px;
+    font-family: var(--font-body);
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--ink-soft);
+    cursor: pointer;
+    transition: border-color .18s ease, color .18s ease, transform .18s ease, opacity .18s ease, background .18s ease;
+  }
+  .lg-item:hover { border-color: #cdd1dd; color: var(--ink); transform: translateY(-1px); }
+  .lg-item:active { transform: scale(.96); }
+  .lg-item.off { opacity: .42; text-decoration: line-through; background: #f3f4f8; }
+  .lg-item.nope { animation: nope .32s ease; }
+  @keyframes nope {
+    25% { transform: translateX(-4px); }
+    75% { transform: translateX(4px); }
+  }
+
+  .t-lines .chart-wrap { min-height: 190px; }
+  .l-series { transition: opacity .35s ease; }
+  .l-series.off { opacity: 0; pointer-events: none; }
+  .l-dot { opacity: 0; transition: opacity .4s ease; pointer-events: none; }
+  #lineSvg.drawn .l-dot { opacity: 1; }
+  .cross { stroke: #c9cdd9; stroke-width: 1; stroke-dasharray: 4 4; opacity: 0; transition: opacity .15s ease; pointer-events: none; }
+  .cross.show { opacity: 1; }
+  .chart-tip .t-row i { width: 8px; height: 8px; border-radius: 50%; display: inline-block; margin-right: 6px; }
+
+  /* ---- 2a. CPL TREND ---- */
+  .cpl-top { display: flex; align-items: baseline; gap: 10px; margin-top: 14px; }
+  .cpl-big { font-size: 40px; }
+  .cpl-big .cur { font-size: 20px; color: var(--ink-faint); vertical-align: 12px; margin-right: 2px; }
+  .cpl-cap { font-size: 12px; font-weight: 500; color: var(--ink-faint); }
+  .mm-label { font-family: var(--font-body); font-size: 10.5px; font-weight: 600; fill: var(--ink-soft); text-anchor: middle; }
+
+  /* ---- 2b. SPEND DONUT ---- */
+  .donut-flex { display: flex; align-items: center; gap: 22px; flex: 1; margin-top: 8px; min-height: 0; }
+  .donut-box { position: relative; width: 212px; flex: none; }
+  .donut-box svg { width: 100%; height: auto; display: block; overflow: visible; }
+  .d-seg { cursor: pointer; }
+  #donutSvg.dim .d-seg { opacity: .22; }
+  #donutSvg.dim .d-seg.hot { opacity: 1; stroke-width: 31; }
+  .donut-center {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 3px;
+    pointer-events: none;
+  }
+  .donut-center .big-num { font-size: 25px; }
+  .donut-center .cur { font-size: 14px; color: var(--ink-faint); margin-right: 1px; }
+  .donut-center small { font-size: 9.5px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; color: var(--ink-faint); }
+  .donut-legend { flex: 1; min-width: 0; }
+  .dl-row {
+    display: flex;
+    align-items: center;
+    gap: 9px;
+    padding: 8px 8px;
+    border-radius: 10px;
+    font-size: 12.5px;
+    font-weight: 600;
+    opacity: 0;
+    animation: rowIn .5s ease forwards;
+    transition: background .15s ease;
+  }
+  .dl-row:hover { background: #f4f5f9; }
+  .dl-row i { width: 9px; height: 9px; border-radius: 3px; flex: none; }
+  .dl-name { color: var(--ink-soft); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .dl-amt { margin-left: auto; font-family: var(--font-head); font-weight: 700; font-variant-numeric: tabular-nums; }
+  .dl-share { color: var(--ink-faint); font-size: 11.5px; width: 36px; text-align: right; font-variant-numeric: tabular-nums; flex: none; }
+
+  /* ---- 3a. CHANNEL COMPARISON ---- */
+  .cmp-list { margin-top: 8px; flex: 1; display: flex; flex-direction: column; justify-content: space-around; }
+  .cmp-row { display: grid; grid-template-columns: 24px 86px 1fr auto; align-items: center; gap: 12px; padding: 7px 0; }
+  .cmp-rank { font-family: var(--font-head); font-size: 13px; font-weight: 800; color: var(--ink-faint); font-variant-numeric: tabular-nums; }
+  .cmp-name { font-size: 12.5px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .cmp-track { height: 12px; background: #f0f1f5; border-radius: 999px; overflow: hidden; }
+  .cmp-fill { height: 100%; border-radius: 999px; width: 0%; transition: width .9s cubic-bezier(.25,.8,.3,1); }
+  .cmp-val { font-family: var(--font-head); font-size: 13px; font-weight: 700; text-align: right; font-variant-numeric: tabular-nums; min-width: 96px; }
+  .cmp-val small { color: var(--ink-faint); font-weight: 600; font-family: var(--font-body); margin-left: 6px; }
+
+  /* ---- 3b. HIGHLIGHTS ---- */
+  .ins-list { margin-top: 6px; flex: 1; display: flex; flex-direction: column; justify-content: space-around; }
+  .ins-row {
+    display: flex;
+    align-items: flex-start;
+    gap: 13px;
+    padding: 11px 2px;
+    border-bottom: 1px solid #f1f2f6;
+    opacity: 0;
+    animation: insIn .5s ease forwards;
+  }
+  .ins-row:last-child { border-bottom: none; }
+  .ins-dot { width: 10px; height: 10px; border-radius: 50%; margin-top: 4px; flex: none; box-shadow: 0 0 0 4px rgba(22,22,26,.05); }
+  .ins-t { font-size: 13.5px; font-weight: 700; letter-spacing: -.005em; }
+  .ins-s { font-size: 12px; font-weight: 500; color: var(--ink-soft); margin-top: 2px; font-variant-numeric: tabular-nums; }
+  @keyframes insIn {
+    from { opacity: 0; transform: translateX(12px); }
+    to   { opacity: 1; transform: none; }
+  }
+
+  /* ---- 4. CAMPAIGN TABLE ---- */
+  .rep-head, .rep-row {
+    display: grid;
+    grid-template-columns: 1.7fr .9fr .6fr .55fr .65fr 110px;
+    gap: 10px;
+    align-items: center;
+  }
+  .rep-head {
+    padding: 14px 2px 9px;
+    font-size: 10.5px;
+    font-weight: 700;
+    letter-spacing: .07em;
+    text-transform: uppercase;
+    color: var(--ink-faint);
+    border-bottom: 1px solid #eef0f4;
+  }
+  .th-num { text-align: right; }
+  .th-spark { text-align: right; }
+  .th-sort {
+    border: none;
+    background: transparent;
+    font: inherit;
+    color: inherit;
+    letter-spacing: inherit;
+    text-transform: inherit;
+    cursor: pointer;
+    padding: 0;
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    transition: color .15s ease;
+  }
+  .th-sort:hover { color: var(--ink); }
+  .th-sort svg { width: 10px; height: 10px; opacity: 0; transition: opacity .18s ease, transform .25s ease; }
+  .th-sort.on { color: var(--ink); }
+  .th-sort.on svg { opacity: 1; }
+  .th-sort.asc svg { transform: rotate(180deg); }
+  .rep-row {
+    padding: 10px 2px;
+    border-bottom: 1px solid #f1f2f6;
+    opacity: 0;
+    animation: rowIn .45s ease forwards;
+    background: #fff;
+  }
+  .rep-row:last-child { border-bottom: none; }
+  @keyframes rowIn {
+    from { opacity: 0; transform: translateY(8px); }
+    to   { opacity: 1; transform: none; }
+  }
+  .rep-name { font-size: 13px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .rep-num { font-family: var(--font-head); font-size: 13.5px; font-weight: 700; text-align: right; font-variant-numeric: tabular-nums; }
+  .rep-cpl { font-size: 12.5px; font-weight: 600; color: var(--ink-soft); text-align: right; font-variant-numeric: tabular-nums; }
+  .rep-trend { display: flex; justify-content: flex-end; }
+  .rep-spark { width: 100px; height: 28px; justify-self: end; display: block; overflow: visible; }
+
+  /* ---- EXPORT + TOAST ---- */
+  .spin {
+    width: 13px; height: 13px;
+    border-radius: 50%;
+    border: 2px solid rgba(255,255,255,.35);
+    border-top-color: #fff;
+    display: inline-block;
+    flex: none;
+    animation: spin .7s linear infinite;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  .toast {
+    position: fixed;
+    left: 50%;
+    bottom: 28px;
+    transform: translateX(-50%) translateY(16px);
+    background: var(--ink);
+    color: #fff;
+    font-size: 13px;
+    font-weight: 600;
+    padding: 12px 22px;
+    border-radius: 999px;
+    box-shadow: var(--shadow-lift);
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity .25s ease, transform .25s cubic-bezier(.2,.9,.3,1.2);
+    z-index: 320;
+  }
+  .toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
+
+  /* ---- PAGE RESPONSIVE ---- */
+  @media (max-width: 1180px) {
+    .t-lines { min-height: 332px; }
+    .t-cpltrend, .t-donut, .t-compare, .t-insights { min-height: 300px; }
+    .donut-flex { gap: 14px; }
+    .donut-box { width: 188px; }
+    .rep-head, .rep-row { grid-template-columns: 1.5fr .85fr .55fr .5fr .65fr 88px; }
+    .rep-spark { width: 88px; }
+  }
+  @media (max-width: 1428px) {
+    html[data-layout="sidebar"] .t-lines { min-height: 332px; }
+    html[data-layout="sidebar"] .t-cpltrend,
+    html[data-layout="sidebar"] .t-donut,
+    html[data-layout="sidebar"] .t-compare,
+    html[data-layout="sidebar"] .t-insights { min-height: 300px; }
+    html[data-layout="sidebar"] .donut-flex { gap: 14px; }
+    html[data-layout="sidebar"] .donut-box { width: 188px; }
+    html[data-layout="sidebar"] .rep-head,
+    html[data-layout="sidebar"] .rep-row { grid-template-columns: 1.5fr .85fr .55fr .5fr .65fr 88px; }
+    html[data-layout="sidebar"] .rep-spark { width: 88px; }
+  }
+  @media (max-width: 760px) {
+    .rep-head, .rep-row { grid-template-columns: 1.6fr .9fr .6fr .55fr .7fr; }
+    .rep-spark, .th-spark { display: none; }
+    .donut-flex { flex-direction: column; align-items: center; }
+    .cmp-row { grid-template-columns: 22px 76px 1fr auto; gap: 8px; }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .rep-row, .ins-row, .dl-row { opacity: 1; animation: none; }
+    .l-dot { opacity: 1 !important; transition: none; }
+    .l-line { stroke-dasharray: none !important; stroke-dashoffset: 0 !important; }
+    .cmp-fill { transition: none; }
+  }
+</style>
+</head>
+<body data-page="reports">
+
+<div class="page">
+
+  <header class="greeting">
+    <div>
+      <h1>Reports</h1>
+      <p class="sub">Cross-channel analytics for <strong data-ws-name>Acme</strong> — leads, spend and CPL in one view.</p>
+    </div>
+    <div class="greeting-actions">
+      <div class="seg" role="tablist" aria-label="Time period">
+        <button data-period="today" role="tab" aria-selected="false">Today</button>
+        <button data-period="week" role="tab" aria-selected="false">7 days</button>
+        <button data-period="month" class="active" role="tab" aria-selected="true">30 days</button>
+      </div>
+      <button class="btn btn-ink" id="exportBtn" type="button">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12"/><path d="M7 10l5 5 5-5"/><path d="M4 21h16"/></svg>
+        Export report
+      </button>
+    </div>
+  </header>
+
+  <main class="bento" id="bento">
+
+    <!-- 1. HERO MULTI-LINE -->
+    <section class="tile t-lines" style="--i:0">
+      <div class="tile-label">
+        <span>Leads over time by channel</span>
+        <span class="lbl-note" id="linePeriodLbl">30 days</span>
+      </div>
+      <div class="legend lg-bar" id="lineLegend" role="group" aria-label="Toggle channels"></div>
+      <div class="chart-wrap" id="lineWrap">
+        <svg id="lineSvg" viewBox="0 0 1180 300" preserveAspectRatio="none" aria-label="Leads over time by channel"></svg>
+        <div class="chart-tip" id="lineTip"></div>
+      </div>
+    </section>
+
+    <!-- 2a. CPL TREND -->
+    <section class="tile t-cpltrend" style="--i:1">
+      <div class="tile-label">
+        <span>Cost per lead trend</span>
+        <span class="chip up" id="cplChip">−12%</span>
+      </div>
+      <div class="cpl-top">
+        <span class="big-num cpl-big"><span class="cur">$</span><span id="cplVal">0.00</span></span>
+        <span class="cpl-cap">current CPL · end of period</span>
+      </div>
+      <div class="chart-wrap" id="cplWrap">
+        <svg id="cplSvg" viewBox="0 0 560 190" preserveAspectRatio="none" aria-label="Cost per lead trend">
+          <defs>
+            <linearGradient id="cplFill" x1="0" y1="0" x2="0" y2="1">
+              <stop offset="0%" style="stop-color:var(--indigo)" stop-opacity=".22"/>
+              <stop offset="100%" style="stop-color:var(--indigo)" stop-opacity="0"/>
+            </linearGradient>
+          </defs>
+          <g id="cplPlot"></g>
+        </svg>
+      </div>
+    </section>
+
+    <!-- 2b. SPEND DONUT -->
+    <section class="tile t-donut" style="--i:2">
+      <div class="tile-label">
+        <span>Spend by channel</span>
+        <span class="lbl-note">this period</span>
+      </div>
+      <div class="donut-flex">
+        <div class="donut-box" id="donutWrap">
+          <svg id="donutSvg" viewBox="0 0 200 200" aria-label="Spend by channel"></svg>
+          <div class="donut-center">
+            <span class="big-num"><span class="cur">$</span><span id="donutTotal">0</span></span>
+            <small>total spend</small>
+          </div>
+          <div class="chart-tip" id="donutTip"></div>
+        </div>
+        <div class="donut-legend" id="donutLegend"></div>
+      </div>
+    </section>
+
+    <!-- 3a. CHANNEL COMPARISON -->
+    <section class="tile t-compare" style="--i:3">
+      <div class="tile-label">
+        <span>Channel comparison</span>
+        <span class="lbl-note">ranked by leads</span>
+      </div>
+      <div class="cmp-list" id="cmpRows"></div>
+    </section>
+
+    <!-- 3b. HIGHLIGHTS -->
+    <section class="tile t-insights" style="--i:4">
+      <div class="tile-label">
+        <span>Highlights</span>
+        <span class="lbl-note">auto-generated</span>
+      </div>
+      <div class="ins-list" id="insRows"></div>
+    </section>
+
+    <!-- 4. CAMPAIGN PERFORMANCE -->
+    <section class="tile t-table" style="--i:5">
+      <div class="tile-label">
+        <span>Campaign performance</span>
+        <span class="lbl-note" id="tblCount">6 campaigns</span>
+      </div>
+      <div class="rep-head">
+        <span>Campaign</span>
+        <span>Channel</span>
+        <span class="th-num"><button class="th-sort" id="thLeads" type="button" aria-label="Sort by leads">Leads <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"/></svg></button></span>
+        <span class="th-num"><button class="th-sort" id="thCpl" type="button" aria-label="Sort by cost per lead">CPL <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"/></svg></button></span>
+        <span class="th-num">Trend</span>
+        <span class="th-spark">Last 12</span>
+      </div>
+      <div id="repRows"></div>
+    </section>
+
+  </main>
+</div>
+
+<div class="toast" id="toast" role="status" aria-live="polite"></div>
+
+<script src="assets/data.js"></script>
+<script src="assets/shell.js"></script>
+<script>
+(function () {
+  "use strict";
+
+  var S = window.Shell, D = window.PulseData;
+  var $ = S.$, fmt = S.fmt, el = S.el, countUp = S.countUp;
+  var REDUCED = S.REDUCED;
+  var CH = D.CHANNELS;
+  var DATA = D.REPORTS;
+
+  var UP_ARROW   = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3.2" stroke-linecap="round" stroke-linejoin="round"><path d="M7 17L17 7"/><path d="M9 7h8v8"/></svg>';
+  var DOWN_ARROW = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3.2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 7L7 17"/><path d="M15 17H7V9"/></svg>';
+
+  /* ================= SHARED MATH ================= */
+  function niceMax(max) {
+    var mag = Math.pow(10, Math.floor(Math.log10(max)));
+    var n = max / mag;
+    var f = n <= 1 ? 1 : n <= 2 ? 2 : n <= 4 ? 4 : n <= 5 ? 5 : n <= 8 ? 8 : 10;
+    return f * mag;
+  }
+  function fmtTick(v) {
+    return v >= 1000 ? (v / 1000).toFixed(v % 1000 === 0 ? 0 : 1) + "k" : String(v);
+  }
+  function sum(arr) {
+    var t = 0;
+    for (var i = 0; i < arr.length; i++) t += arr[i];
+    return t;
+  }
+  function money(n) { return "$" + fmt(n); }
+
+  /* Catmull-Rom-ish bezier smoothing through coords [[x,y],…] */
+  function smoothPath(c) {
+    if (c.length < 3) {
+      return c.map(function (p, i) {
+        return (i === 0 ? "M" : "L") + p[0].toFixed(1) + " " + p[1].toFixed(1);
+      }).join(" ");
+    }
+    var d = "M" + c[0][0].toFixed(1) + " " + c[0][1].toFixed(1);
+    for (var i = 1; i < c.length; i++) {
+      var p0 = c[i - 1], p1 = c[i];
+      var pm = c[i - 2] || p0, p2 = c[i + 1] || p1;
+      var c1x = p0[0] + (p1[0] - pm[0]) / 6, c1y = p0[1] + (p1[1] - pm[1]) / 6;
+      var c2x = p1[0] - (p2[0] - p0[0]) / 6, c2y = p1[1] - (p2[1] - p0[1]) / 6;
+      d += " C" + c1x.toFixed(1) + " " + c1y.toFixed(1) + " " + c2x.toFixed(1) + " " + c2y.toFixed(1) + " " + p1[0].toFixed(1) + " " + p1[1].toFixed(1);
+    }
+    return d;
+  }
+
+  /* ================= 1. HERO MULTI-LINE ================= */
+  var LW = 1180, LH = 300, lPadL = 44, lPadR = 16, lPadT = 16, lBase = LH - 28;
+  var lineWrap = $("lineWrap"), lineSvg = $("lineSvg"), lineTip = $("lineTip");
+  var lineTipCtl = S.tipController(lineWrap, lineTip, lineSvg, LW, LH);
+  var hiddenCh = {};
+  var lineGeom = null;
+
+  /* interactive legend — built once, state survives period switches */
+  (function buildLegend() {
+    var box = $("lineLegend");
+    CH.forEach(function (c, i) {
+      var b = document.createElement("button");
+      b.type = "button";
+      b.className = "lg-item";
+      b.setAttribute("aria-pressed", "true");
+      b.innerHTML = '<i style="background:' + c.color + '"></i>' + c.name;
+      b.addEventListener("click", function () {
+        var willHide = !hiddenCh[i];
+        if (willHide) {
+          var visLeft = CH.filter(function (_, j) { return !hiddenCh[j] && j !== i; }).length;
+          if (!visLeft) {
+            b.classList.remove("nope");
+            void b.offsetWidth;
+            b.classList.add("nope");
+            return;
+          }
+        }
+        hiddenCh[i] = willHide;
+        b.classList.toggle("off", willHide);
+        b.setAttribute("aria-pressed", willHide ? "false" : "true");
+        var g = lineSvg.querySelector('[data-ch="' + i + '"]');
+        if (g) g.classList.toggle("off", willHide);
+        lineTipCtl.hide();
+        if (lineGeom) lineGeom.cross.classList.remove("show");
+      });
+      box.appendChild(b);
+    });
+  })();
+
+  function renderLines(d) {
+    lineSvg.classList.remove("drawn");
+    lineSvg.innerHTML = "";
+    lineTipCtl.hide();
+
+    var plotW = LW - lPadL - lPadR, plotH = lBase - lPadT;
+    var max = 0;
+    d.series.forEach(function (row) {
+      row.forEach(function (v) { if (v > max) max = v; });
+    });
+    var nm = niceMax(max);
+
+    /* gridlines + y labels */
+    for (var g = 0; g <= 4; g++) {
+      var y = lBase - (g / 4) * plotH;
+      lineSvg.appendChild(el("line", { x1: lPadL, x2: LW - lPadR, y1: y, y2: y, "class": g === 0 ? "axis-base" : "grid-line" }));
+      var lbl = el("text", { x: lPadL - 8, y: y + 3.5, "class": "grid-label", "text-anchor": "end" });
+      lbl.textContent = fmtTick(Math.round(nm * g / 4));
+      lineSvg.appendChild(lbl);
+    }
+
+    /* x ticks */
+    var n = d.ticks.length, step = plotW / (n - 1);
+    var every = window.innerWidth < 760 ? 2 : 1;
+    var xs = [];
+    d.ticks.forEach(function (t, i) {
+      xs.push(lPadL + step * i);
+      if (i % every) return;
+      var tx = el("text", { x: lPadL + step * i, y: LH - 8, "class": "bar-label" });
+      tx.textContent = t;
+      lineSvg.appendChild(tx);
+    });
+
+    /* series */
+    var ys = [], paths = [];
+    d.series.forEach(function (row, ci) {
+      var coords = row.map(function (v, i) {
+        return [xs[i], lBase - (v / nm) * plotH];
+      });
+      ys.push(coords.map(function (c) { return c[1]; }));
+
+      var grp = el("g", { "class": "l-series" + (hiddenCh[ci] ? " off" : ""), "data-ch": ci });
+      var p = el("path", {
+        d: smoothPath(coords), fill: "none", stroke: CH[ci].color,
+        "stroke-width": 2.5, "stroke-linecap": "round", "stroke-linejoin": "round", "class": "l-line"
+      });
+      grp.appendChild(p);
+      paths.push([p, ci]);
+
+      coords.forEach(function (c, i) {
+        var dot = el("circle", { cx: c[0], cy: c[1], r: 3, fill: "#fff", stroke: CH[ci].color, "stroke-width": 2, "class": "l-dot" });
+        if (!REDUCED) dot.style.transitionDelay = (ci * 140 + 650 + i * 30) + "ms";
+        grp.appendChild(dot);
+      });
+      lineSvg.appendChild(grp);
+    });
+
+    /* crosshair on top */
+    var cross = el("line", { x1: lPadL, x2: lPadL, y1: lPadT, y2: lBase, "class": "cross" });
+    lineSvg.appendChild(cross);
+
+    lineGeom = { xs: xs, ys: ys, vals: d.series, ticks: d.ticks, cross: cross };
+
+    /* draw-in animation: dashoffset sweep with stagger */
+    if (REDUCED) {
+      lineSvg.classList.add("drawn");
+      return;
+    }
+    paths.forEach(function (pair) {
+      var p = pair[0];
+      var len = p.getTotalLength();
+      p.style.transition = "none";
+      p.style.strokeDasharray = len;
+      p.style.strokeDashoffset = len;
+    });
+    void lineSvg.getBoundingClientRect();
+    paths.forEach(function (pair) {
+      var p = pair[0], ci = pair[1];
+      p.style.transition = "stroke-dashoffset 1.25s cubic-bezier(.4,0,.2,1) " + (ci * 140) + "ms";
+      p.style.strokeDashoffset = "0";
+    });
+    lineSvg.classList.add("drawn");
+  }
+
+  /* hover: snapping crosshair + multi-row tooltip */
+  lineSvg.addEventListener("mousemove", function (e) {
+    if (!lineGeom) return;
+    var r = lineSvg.getBoundingClientRect();
+    if (!r.width) return;
+    var x = (e.clientX - r.left) * (LW / r.width);
+    var nPts = lineGeom.xs.length;
+    var stepX = (LW - lPadL - lPadR) / (nPts - 1);
+    var idx = Math.round((x - lPadL) / stepX);
+    idx = Math.max(0, Math.min(nPts - 1, idx));
+    var cx = lineGeom.xs[idx];
+
+    lineGeom.cross.setAttribute("x1", cx);
+    lineGeom.cross.setAttribute("x2", cx);
+    lineGeom.cross.classList.add("show");
+
+    var items = [];
+    CH.forEach(function (c, ci) {
+      if (hiddenCh[ci]) return;
+      items.push({ c: c, v: lineGeom.vals[ci][idx], y: lineGeom.ys[ci][idx] });
+    });
+    items.sort(function (a, b) { return b.v - a.v; });
+
+    var html = '<div class="t-name">' + lineGeom.ticks[idx] + "</div>" +
+      items.map(function (it) {
+        return '<div class="t-row"><i style="background:' + it.c.color + '"></i>' + it.c.name + ": <b>" + fmt(it.v) + "</b></div>";
+      }).join("");
+    var topY = Math.min.apply(null, items.map(function (it) { return it.y; }));
+    lineTipCtl.show(cx, topY - 8, html);
+  });
+  lineSvg.addEventListener("mouseleave", function () {
+    if (lineGeom) lineGeom.cross.classList.remove("show");
+    lineTipCtl.hide();
+  });
+
+  /* ================= 2a. CPL TREND ================= */
+  function renderCpl(d) {
+    var t = d.cplTrend, n = t.length;
+    var first = t[0], last = t[n - 1];
+    countUp($("cplVal"), last, { dec: 2, dur: 1100 });
+
+    var pct = ((last - first) / first) * 100;
+    var falling = pct <= 0;
+    var chip = $("cplChip");
+    chip.className = "chip " + (falling ? "up" : "down");
+    chip.innerHTML = (falling ? DOWN_ARROW : UP_ARROW) +
+      "<span>" + (falling ? "−" : "+") + Math.abs(pct).toFixed(1) + "% this period</span>";
+
+    var W = 560, H = 190, pl = 14, pr = 14, pt = 30, pb = 26;
+    var min = Math.min.apply(null, t), max = Math.max.apply(null, t);
+    var span = (max - min) || 1;
+    var coords = t.map(function (v, i) {
+      return [pl + (i / (n - 1)) * (W - pl - pr), pt + (1 - (v - min) / span) * (H - pt - pb)];
+    });
+    var lineD = smoothPath(coords);
+    var areaD = lineD + " L " + coords[n - 1][0].toFixed(1) + " " + (H - 6) + " L " + coords[0][0].toFixed(1) + " " + (H - 6) + " Z";
+
+    var plot = $("cplPlot");
+    plot.innerHTML = "";
+
+    var area = el("path", { d: areaD, fill: "url(#cplFill)" });
+    plot.appendChild(area);
+
+    var line = el("path", { d: lineD, fill: "none", "stroke-width": 2.5, "stroke-linecap": "round", "stroke-linejoin": "round", "class": "l-line" });
+    line.style.stroke = "var(--indigo)";
+    plot.appendChild(line);
+
+    /* min / max labels (first occurrence) */
+    var minI = t.indexOf(min), maxI = t.indexOf(max);
+    var maxLbl = el("text", { x: Math.max(26, Math.min(W - 26, coords[maxI][0])), y: coords[maxI][1] - 11, "class": "mm-label" });
+    maxLbl.textContent = "high $" + max.toFixed(2);
+    plot.appendChild(maxLbl);
+    var minLbl = el("text", { x: Math.max(26, Math.min(W - 26, coords[minI][0])), y: coords[minI][1] + 17, "class": "mm-label" });
+    minLbl.textContent = "low $" + min.toFixed(2);
+    plot.appendChild(minLbl);
+
+    /* end dot */
+    var dot = el("circle", { cx: coords[n - 1][0], cy: coords[n - 1][1], r: 4.5, stroke: "#fff", "stroke-width": 2 });
+    dot.style.fill = "var(--indigo)";
+    plot.appendChild(dot);
+
+    if (REDUCED) return;
+    var len = line.getTotalLength();
+    line.style.transition = "none";
+    line.style.strokeDasharray = len;
+    line.style.strokeDashoffset = len;
+    area.style.transition = "none";
+    area.style.opacity = "0";
+    dot.style.transition = "none";
+    dot.style.opacity = "0";
+    void plot.getBoundingClientRect();
+    line.style.transition = "stroke-dashoffset 1.2s cubic-bezier(.4,0,.2,1) .1s";
+    line.style.strokeDashoffset = "0";
+    area.style.transition = "opacity .9s ease .5s";
+    area.style.opacity = "1";
+    dot.style.transition = "opacity .3s ease 1.25s";
+    dot.style.opacity = "1";
+  }
+
+  /* ================= 2b. SPEND DONUT ================= */
+  var DR = 64, DC = 2 * Math.PI * DR;
+  var donutTipCtl = S.tipController($("donutWrap"), $("donutTip"), $("donutSvg"), 200, 200);
+  var segEls = [];
+
+  function highlightSeg(i, on) {
+    var svg = $("donutSvg");
+    svg.classList.toggle("dim", on);
+    segEls.forEach(function (c, j) { c.classList.toggle("hot", on && j === i); });
+  }
+
+  function renderDonut(d) {
+    var svg = $("donutSvg");
+    svg.innerHTML = "";
+    segEls = [];
+    donutTipCtl.hide();
+    svg.classList.remove("dim");
+
+    var total = sum(d.spend);
+    countUp($("donutTotal"), total, { dur: 1200 });
+
+    var accLen = 0;
+    d.spend.forEach(function (v, i) {
+      var frac = v / total;
+      var segLen = Math.max(0, frac * DC - 3);
+      var dashTarget = segLen + " " + (DC - segLen);
+      var c = el("circle", {
+        cx: 100, cy: 100, r: DR, fill: "none",
+        stroke: CH[i].color, "stroke-width": 28,
+        transform: "rotate(-90 100 100)", "class": "d-seg"
+      });
+      c.style.strokeDashoffset = -(accLen + 1.5);
+      if (REDUCED) {
+        c.style.strokeDasharray = dashTarget;
+      } else {
+        c.style.transition = "none";
+        c.style.strokeDasharray = "0 " + DC;
+      }
+      svg.appendChild(c);
+      segEls.push(c);
+
+      var midFrac = (accLen + frac * DC / 2) / DC;
+      var ang = midFrac * 2 * Math.PI - Math.PI / 2;
+      var tipX = 100 + Math.cos(ang) * DR;
+      var tipY = 100 + Math.sin(ang) * DR;
+      var share = (frac * 100).toFixed(0);
+
+      c.addEventListener("mouseenter", function () {
+        highlightSeg(i, true);
+        donutTipCtl.show(tipX, tipY,
+          '<div class="t-name"><i style="background:' + CH[i].color + '"></i>' + CH[i].name + "</div>" +
+          '<div class="t-row">Spend: <b>' + money(v) + "</b></div>" +
+          '<div class="t-row">Share: <b>' + share + "%</b></div>");
+      });
+      c.addEventListener("mouseleave", function () {
+        highlightSeg(i, false);
+        donutTipCtl.hide();
+      });
+
+      accLen += frac * DC;
+    });
+
+    if (!REDUCED) {
+      void svg.getBoundingClientRect();
+      segEls.forEach(function (c, i) {
+        var v = d.spend[i];
+        var segLen = Math.max(0, (v / total) * DC - 3);
+        c.style.transition = "stroke-dasharray .9s cubic-bezier(.25,.8,.3,1) " + (i * 120) + "ms, opacity .25s ease, stroke-width .2s ease";
+        c.style.strokeDasharray = segLen + " " + (DC - segLen);
+      });
+    }
+
+    /* legend rows */
+    var box = $("donutLegend");
+    box.innerHTML = "";
+    d.spend.forEach(function (v, i) {
+      var row = document.createElement("div");
+      row.className = "dl-row";
+      row.style.animationDelay = (i * 70) + "ms";
+      row.innerHTML =
+        '<i style="background:' + CH[i].color + '"></i>' +
+        '<span class="dl-name">' + CH[i].name + "</span>" +
+        '<span class="dl-amt">' + money(v) + "</span>" +
+        '<span class="dl-share">' + ((v / total) * 100).toFixed(0) + "%</span>";
+      row.addEventListener("mouseenter", function () { highlightSeg(i, true); });
+      row.addEventListener("mouseleave", function () { highlightSeg(i, false); });
+      box.appendChild(row);
+    });
+  }
+
+  /* ================= 3a. CHANNEL COMPARISON ================= */
+  function renderCompare(d) {
+    var totals = d.series.map(function (row, i) { return { i: i, v: sum(row) }; });
+    totals.sort(function (a, b) { return b.v - a.v; });
+    var all = totals.reduce(function (t, e) { return t + e.v; }, 0);
+    var maxV = totals[0].v;
+
+    var box = $("cmpRows");
+    box.innerHTML = "";
+    var fills = [];
+    totals.forEach(function (t, rank) {
+      var ch = CH[t.i];
+      var row = document.createElement("div");
+      row.className = "cmp-row";
+      row.innerHTML =
+        '<span class="cmp-rank">' + (rank + 1) + "</span>" +
+        '<span class="cmp-name">' + ch.name + "</span>" +
+        '<div class="cmp-track"><div class="cmp-fill" style="background:' + ch.color + '"></div></div>' +
+        '<span class="cmp-val">' + fmt(t.v) + "<small>" + ((t.v / all) * 100).toFixed(0) + "%</small></span>";
+      box.appendChild(row);
+      fills.push([row.querySelector(".cmp-fill"), (t.v / maxV) * 100, rank]);
+    });
+    void box.getBoundingClientRect();
+    fills.forEach(function (f) {
+      f[0].style.transitionDelay = (f[2] * 90) + "ms";
+      f[0].style.width = f[1].toFixed(1) + "%";
+    });
+  }
+
+  /* ================= 3b. HIGHLIGHTS ================= */
+  function renderInsights(d) {
+    var rows = [];
+
+    /* fastest growing channel */
+    var gi = 0, gBest = -Infinity;
+    d.series.forEach(function (r, i) {
+      var p = ((r[r.length - 1] - r[0]) / r[0]) * 100;
+      if (p > gBest) { gBest = p; gi = i; }
+    });
+    rows.push({
+      color: CH[gi].color,
+      t: CH[gi].name + " grew fastest",
+      s: "+" + gBest.toFixed(0) + "% from start to end of the period"
+    });
+
+    /* best CPL campaign */
+    var best = null;
+    d.table.forEach(function (r) { if (!best || r[3] < best[3]) best = r; });
+    rows.push({
+      color: CH[best[1]].color,
+      t: "Best CPL: " + best[0],
+      s: "$" + best[3].toFixed(2) + " per lead on " + CH[best[1]].name
+    });
+
+    /* peak tick */
+    var pi = 0, pv = -1;
+    d.ticks.forEach(function (_, i) {
+      var tot = 0;
+      d.series.forEach(function (r) { tot += r[i]; });
+      if (tot > pv) { pv = tot; pi = i; }
+    });
+    rows.push({
+      color: "var(--indigo)",
+      t: "Peak: " + d.ticks[pi],
+      s: fmt(pv) + " leads — strongest point this period"
+    });
+
+    /* spend concentration */
+    var si = 0;
+    d.spend.forEach(function (v, i) { if (v > d.spend[si]) si = i; });
+    var totalSpend = sum(d.spend);
+    rows.push({
+      color: CH[si].color,
+      t: CH[si].name + " takes " + ((d.spend[si] / totalSpend) * 100).toFixed(0) + "% of spend",
+      s: money(d.spend[si]) + " of " + money(totalSpend) + " total"
+    });
+
+    var box = $("insRows");
+    box.innerHTML = "";
+    rows.forEach(function (r, i) {
+      var div = document.createElement("div");
+      div.className = "ins-row";
+      div.style.animationDelay = (i * 110) + "ms";
+      div.innerHTML =
+        '<span class="ins-dot" style="background:' + r.color + '"></span>' +
+        '<span><span class="ins-t">' + r.t + '</span><br><span class="ins-s">' + r.s + "</span></span>";
+      box.appendChild(div);
+    });
+  }
+
+  /* ================= 4. CAMPAIGN TABLE ================= */
+  var sortState = { key: null, dir: -1 };
+
+  function sparkD(row, w, h) {
+    var min = Math.min.apply(null, row), max = Math.max.apply(null, row);
+    var span = (max - min) || 1;
+    var coords = row.map(function (v, i) {
+      return [(i / (row.length - 1)) * w, 3 + (1 - (v - min) / span) * (h - 6)];
+    });
+    return smoothPath(coords);
+  }
+
+  function updateSortHeads() {
+    [["thLeads", "leads"], ["thCpl", "cpl"]].forEach(function (p) {
+      var b = $(p[0]);
+      var on = sortState.key === p[1];
+      b.classList.toggle("on", on);
+      b.classList.toggle("asc", on && sortState.dir === 1);
+    });
+  }
+
+  function renderTable(d) {
+    $("tblCount").textContent = d.table.length + " campaigns";
+    var rows = d.table.slice();
+    if (sortState.key) {
+      var k = sortState.key === "leads" ? 2 : 3;
+      rows.sort(function (a, b) { return (a[k] - b[k]) * sortState.dir; });
+    }
+
+    var box = $("repRows");
+    box.innerHTML = "";
+    var sparks = [];
+    rows.forEach(function (r, i) {
+      var ch = CH[r[1]];
+      var deltaDown = r[4].charAt(0) === "−" || r[4].charAt(0) === "-";
+      var row = document.createElement("div");
+      row.className = "rep-row";
+      row.style.animationDelay = (i * 50) + "ms";
+      row.dataset.key = r[0];
+      row.dataset.leads = r[2];
+      row.dataset.cpl = r[3];
+      row.innerHTML =
+        '<span class="rep-name">' + r[0] + "</span>" +
+        '<span class="camp-chip" style="background:' + ch.color + '">' + ch.name + "</span>" +
+        '<span class="rep-num">' + fmt(r[2]) + "</span>" +
+        '<span class="rep-cpl">$' + r[3].toFixed(2) + "</span>" +
+        '<span class="rep-trend"><span class="chip ' + (deltaDown ? "down" : "up") + '">' + (deltaDown ? DOWN_ARROW : UP_ARROW) + r[4] + "</span></span>" +
+        '<svg class="rep-spark" viewBox="0 0 100 28" preserveAspectRatio="none" aria-hidden="true"></svg>';
+
+      /* mini sparkline — channel series shape scaled by this campaign's leads share (visual only) */
+      var share = r[2] / Math.max(1, sum(d.series[r[1]]));
+      var vals = d.series[r[1]].map(function (v) { return v * share; });
+      var sp = row.querySelector(".rep-spark");
+      var path = el("path", { d: sparkD(vals, 100, 28), fill: "none", stroke: ch.color, "stroke-width": 2, "stroke-linecap": "round", "stroke-linejoin": "round" });
+      sp.appendChild(path);
+      sparks.push([path, i]);
+
+      box.appendChild(row);
+    });
+
+    if (!REDUCED) {
+      sparks.forEach(function (p) {
+        var len = p[0].getTotalLength();
+        p[0].style.transition = "none";
+        p[0].style.strokeDasharray = len;
+        p[0].style.strokeDashoffset = len;
+      });
+      void box.getBoundingClientRect();
+      sparks.forEach(function (p) {
+        p[0].style.transition = "stroke-dashoffset .9s ease " + (p[1] * 70 + 200) + "ms";
+        p[0].style.strokeDashoffset = "0";
+      });
+    }
+    updateSortHeads();
+  }
+
+  /* FLIP reorder on header click */
+  function flipSort() {
+    var box = $("repRows");
+    var rows = Array.prototype.slice.call(box.children);
+    if (!rows.length) return;
+    var k = sortState.key, dir = sortState.dir;
+
+    var firstTops = {};
+    rows.forEach(function (r) {
+      firstTops[r.dataset.key] = r.getBoundingClientRect().top;
+      r.style.animation = "none";
+      r.style.opacity = "1";
+    });
+    rows.sort(function (a, b) { return (parseFloat(a.dataset[k]) - parseFloat(b.dataset[k])) * dir; });
+    rows.forEach(function (r) { box.appendChild(r); });
+    if (REDUCED) return;
+
+    rows.forEach(function (r) {
+      var dy = firstTops[r.dataset.key] - r.getBoundingClientRect().top;
+      if (dy) {
+        r.style.transition = "none";
+        r.style.transform = "translateY(" + dy + "px)";
+      }
+    });
+    void box.getBoundingClientRect();
+    rows.forEach(function (r) {
+      r.style.transition = "transform .5s cubic-bezier(.22,.9,.32,1)";
+      r.style.transform = "";
+    });
+  }
+
+  function setSort(key) {
+    if (sortState.key === key) {
+      sortState.dir *= -1;
+    } else {
+      sortState.key = key;
+      sortState.dir = key === "cpl" ? 1 : -1;
+    }
+    updateSortHeads();
+    flipSort();
+  }
+  $("thLeads").addEventListener("click", function () { setSort("leads"); });
+  $("thCpl").addEventListener("click", function () { setSort("cpl"); });
+
+  /* ================= EXPORT + TOAST ================= */
+  var toastTimer = 0;
+  function showToast(msg) {
+    var t = $("toast");
+    t.textContent = msg;
+    t.classList.add("show");
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(function () { t.classList.remove("show"); }, 2400);
+  }
+
+  var exportBtn = $("exportBtn");
+  var exportHtml = exportBtn.innerHTML;
+  exportBtn.addEventListener("click", function () {
+    if (exportBtn.classList.contains("busy")) return;
+    exportBtn.classList.add("busy");
+    exportBtn.setAttribute("aria-busy", "true");
+    exportBtn.innerHTML = '<span class="spin"></span>Exporting…';
+    setTimeout(function () {
+      exportBtn.innerHTML = exportHtml;
+      exportBtn.classList.remove("busy");
+      exportBtn.removeAttribute("aria-busy");
+      showToast("Report exported ✓");
+    }, 950);
+  });
+
+  /* ================= RENDER ALL / PERIOD SWITCH ================= */
+  function renderAll(period, withPop) {
+    S.clearTimers();
+    var d = DATA[period];
+    $("linePeriodLbl").textContent = d.label;
+    if (withPop) S.popTiles();
+    renderLines(d);
+    renderCpl(d);
+    renderDonut(d);
+    renderCompare(d);
+    renderInsights(d);
+    renderTable(d);
+  }
+
+  /* ================= BOOT ================= */
+  var initial = S.initPeriodSeg(function (p) { renderAll(p, true); }) || "month";
+  renderAll(initial, true);
+})();
+</script>
+</body>
+</html>

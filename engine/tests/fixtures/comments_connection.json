@@ -1,0 +1,66 @@
+{
+  "data": {
+    "xdt_api__v1__media__media_id__comments__connection": {
+      "edges": [
+        {
+          "node": {
+            "__typename": "XDTCommentDict",
+            "pk": "17900000000000001",
+            "text": "How much is the Pro plan? Want a demo, +1 415 555 0142",
+            "created_at": 1781010000,
+            "comment_like_count": 4,
+            "child_comment_count": 1,
+            "parent_comment_id": null,
+            "user": {
+              "pk": "1000001",
+              "id": "1000001",
+              "username": "aziz_dev",
+              "is_verified": false,
+              "profile_pic_url": "https://example.invalid/a.jpg"
+            }
+          }
+        },
+        {
+          "node": {
+            "__typename": "XDTCommentDict",
+            "pk": "17900000000000002",
+            "text": "Is there a trial? Send me the pricing details",
+            "created_at": 1781010500,
+            "comment_like_count": 1,
+            "child_comment_count": 0,
+            "parent_comment_id": null,
+            "user": {
+              "pk": "1000002",
+              "id": "1000002",
+              "username": "marina_pm",
+              "is_verified": false,
+              "profile_pic_url": "https://example.invalid/b.jpg"
+            }
+          }
+        },
+        {
+          "node": {
+            "__typename": "XDTCommentDict",
+            "pk": "17900000000000003",
+            "text": "Thanks, that answers it",
+            "created_at": 1781011000,
+            "comment_like_count": 0,
+            "child_comment_count": 0,
+            "parent_comment_id": "17900000000000001",
+            "user": {
+              "pk": "1000003",
+              "id": "1000003",
+              "username": "reply_guy",
+              "is_verified": false,
+              "profile_pic_url": "https://example.invalid/c.jpg"
+            }
+          }
+        }
+      ],
+      "page_info": {
+        "end_cursor": "CURSOR_PAGE_2_TOKEN",
+        "has_next_page": true
+      }
+    }
+  }
+}

@@ -1,0 +1,559 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>LeadFlow — Pulse · Campaigns</title>
+<script>
+(function(){var l="dock";try{l=localStorage.getItem("pulse.layout")||"dock"}catch(e){}
+document.documentElement.setAttribute("data-layout",/^(dock|sidebar)$/.test(l)?l:"dock");})();
+</script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Sora:wght@500;600;700;800&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="assets/pulse.css">
+<style>
+  /* ============ CAMPAIGNS-ONLY STYLES ============ */
+  #campSearch { width: 225px; }
+
+  /* ---- FILTER PILLS ---- */
+  .toolbar { margin-bottom: 18px; }
+  .pills { display: flex; gap: 8px; flex-wrap: wrap; }
+  .pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 7px;
+    border: none;
+    background: #fff;
+    box-shadow: var(--shadow-tile);
+    border-radius: 999px;
+    padding: 8px 9px 8px 15px;
+    font-family: var(--font-body);
+    font-size: 12.5px;
+    font-weight: 600;
+    color: var(--ink-soft);
+    cursor: pointer;
+    transition: color .16s ease, background .16s ease, transform .14s ease, box-shadow .16s ease;
+  }
+  .pill:hover { color: var(--ink); transform: translateY(-1px); box-shadow: var(--shadow-lift); }
+  .pill:active { transform: scale(.97); }
+  .pill.active { background: var(--ink); color: #fff; }
+  .pill-n {
+    background: #eef0f4;
+    color: var(--ink-soft);
+    border-radius: 999px;
+    padding: 2px 7px;
+    font-size: 10.5px;
+    font-weight: 700;
+    min-width: 14px;
+    text-align: center;
+    font-variant-numeric: tabular-nums;
+    transition: background .16s ease, color .16s ease;
+  }
+  .pill.active .pill-n { background: var(--lime); color: var(--ink); }
+
+  /* ---- CARD GRID ---- */
+  .camp-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; align-items: stretch; }
+
+  /* ---- CAMPAIGN CARD ---- */
+  .camp-card {
+    overflow: visible;             /* kebab menu must escape the tile */
+    display: flex;
+    flex-direction: column;
+    padding: 20px 22px 15px;
+  }
+  .camp-card.menu-open { z-index: 6; }
+
+  .cc-top { display: flex; align-items: flex-start; justify-content: space-between; gap: 8px; }
+  .cc-name {
+    font-family: var(--font-head);
+    font-size: 16.5px;
+    font-weight: 700;
+    letter-spacing: -.015em;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    padding-top: 4px;
+    min-width: 0;
+  }
+
+  /* kebab + dropdown */
+  .cc-kebab-wrap { position: relative; flex: none; }
+  .cc-kebab {
+    width: 30px; height: 30px;
+    border: none;
+    border-radius: 50%;
+    background: transparent;
+    color: var(--ink-faint);
+    font-size: 18px;
+    font-weight: 700;
+    line-height: 1;
+    display: grid;
+    place-items: center;
+    cursor: pointer;
+    transition: background .15s ease, color .15s ease;
+  }
+  .cc-kebab:hover, .cc-kebab[aria-expanded="true"] { background: #f0f1f5; color: var(--ink); }
+  .cc-menu {
+    position: absolute;
+    top: calc(100% + 6px);
+    right: 0;
+    min-width: 152px;
+    background: #fff;
+    border-radius: 14px;
+    padding: 5px;
+    box-shadow: 0 4px 12px rgba(22,22,26,.08), 0 24px 50px -14px rgba(22,22,26,.30);
+    opacity: 0;
+    transform: translateY(-5px) scale(.96);
+    transform-origin: top right;
+    pointer-events: none;
+    transition: opacity .16s ease, transform .16s ease;
+    z-index: 40;
+  }
+  .cc-menu.open { opacity: 1; transform: translateY(0) scale(1); pointer-events: auto; }
+  .cc-menu button {
+    display: flex;
+    align-items: center;
+    gap: 9px;
+    width: 100%;
+    border: none;
+    background: transparent;
+    font-family: var(--font-body);
+    font-size: 12.5px;
+    font-weight: 600;
+    color: var(--ink);
+    padding: 8px 11px;
+    border-radius: 9px;
+    cursor: pointer;
+    text-align: left;
+    transition: background .13s ease;
+  }
+  .cc-menu button:hover { background: #f2f3f7; }
+  .cc-menu button svg { width: 13px; height: 13px; flex: none; color: var(--ink-faint); }
+  .cc-menu button.danger { color: var(--red); }
+  .cc-menu button.danger svg { color: var(--red); }
+
+  /* meta row */
+  .cc-meta { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; margin-top: 12px; }
+  .cc-meta .status { margin-left: auto; }
+
+  /* stats */
+  .cc-stats { display: flex; gap: 30px; margin-top: 16px; }
+  .cc-stat-label {
+    display: block;
+    font-size: 10.5px;
+    font-weight: 700;
+    letter-spacing: .07em;
+    text-transform: uppercase;
+    color: var(--ink-faint);
+    margin-bottom: 5px;
+  }
+  .cc-stat-num { font-size: 25px; }
+  .cc-stat-num .cur { font-size: 15px; color: var(--ink-faint); margin-right: 1px; vertical-align: 5px; }
+  .cc-stat-num.dash { color: var(--ink-faint); }
+
+  /* budget bar */
+  .cc-bud { margin-top: 15px; }
+  .cc-bud-bar { height: 6px; border-radius: 999px; background: #eef0f4; overflow: hidden; }
+  .cc-bud-fill {
+    height: 100%;
+    border-radius: 999px;
+    background: var(--indigo);
+    width: 0%;
+    transition: width .9s cubic-bezier(.25,.8,.3,1) .2s;
+  }
+  .cc-bud-fill.hot { background: var(--amber); }
+  .cc-bud-cap {
+    display: flex;
+    justify-content: space-between;
+    gap: 8px;
+    margin-top: 6px;
+    font-size: 11.5px;
+    font-weight: 600;
+    color: var(--ink-faint);
+    font-variant-numeric: tabular-nums;
+  }
+  .cc-bud-cap b { color: var(--ink-soft); font-weight: 700; }
+
+  /* sparkline */
+  .cc-spark { height: 44px; margin-top: 13px; }
+  .cc-spark svg { width: 100%; height: 100%; display: block; overflow: visible; }
+  .sp-line {
+    fill: none;
+    stroke: var(--indigo);
+    stroke-width: 2;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+    opacity: .8;
+  }
+  .sp-line.draw { transition: stroke-dashoffset 1s cubic-bezier(.4,0,.2,1) .15s; }
+  .sp-flat { stroke: #dadde6; stroke-width: 2; stroke-dasharray: 2 7; stroke-linecap: round; }
+
+  /* footer */
+  .cc-foot {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    margin-top: 14px;
+    padding-top: 12px;
+    border-top: 1px solid #f1f2f6;
+    min-height: 32px;
+  }
+  .cc-started { font-size: 11.5px; color: var(--ink-faint); font-weight: 500; }
+  .cc-act { font-size: 12px; font-weight: 700; color: var(--indigo); text-decoration: none; white-space: nowrap; }
+  .cc-act:hover { text-decoration: underline; }
+
+  /* ---- EMPTY STATE ---- */
+  .empty-tile {
+    grid-column: 1 / -1;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    text-align: center;
+    padding: 48px 24px;
+  }
+  .empty-ic {
+    width: 52px; height: 52px;
+    border-radius: 50%;
+    background: #eef0f4;
+    color: var(--ink-faint);
+    display: grid;
+    place-items: center;
+    margin-bottom: 14px;
+  }
+  .empty-ic svg { width: 22px; height: 22px; }
+  .empty-tile h3 { font-family: var(--font-head); font-size: 17px; font-weight: 700; letter-spacing: -.01em; }
+  .empty-tile p { font-size: 13px; color: var(--ink-soft); font-weight: 500; margin: 6px 0 18px; }
+
+  /* ---- PAGE RESPONSIVE ---- */
+  @media (max-width: 1180px) {
+    .camp-grid { grid-template-columns: repeat(2, 1fr); }
+  }
+  @media (max-width: 680px) {
+    .camp-grid { grid-template-columns: 1fr; }
+    #campSearch { width: 100%; }
+    .greeting-actions { width: 100%; }
+  }
+  /* sidebar steals 248px — collapse earlier in sidebar mode */
+  @media (max-width: 1428px) {
+    html[data-layout="sidebar"] .camp-grid { grid-template-columns: repeat(2, 1fr); }
+  }
+  @media (min-width: 901px) and (max-width: 960px) {
+    html[data-layout="sidebar"] .camp-grid { grid-template-columns: 1fr; }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .cc-bud-fill { transition: none; }
+    .sp-line { stroke-dasharray: none !important; stroke-dashoffset: 0 !important; }
+    .cc-menu { opacity: 0; }
+    .cc-menu.open { opacity: 1; }
+  }
+</style>
+</head>
+<body data-page="campaigns">
+
+<div class="page">
+
+  <header class="greeting">
+    <div>
+      <h1>Campaigns</h1>
+      <p class="sub"><span id="subCount">12</span> campaigns across <span id="subCh">5</span> channels for <strong data-ws-name>Acme</strong></p>
+    </div>
+    <div class="greeting-actions">
+      <input class="input" id="campSearch" type="text" placeholder="Search campaigns…" aria-label="Search campaigns">
+      <a class="btn btn-primary" href="campaign-new.html">＋ New campaign</a>
+    </div>
+  </header>
+
+  <div class="toolbar">
+    <div class="pills" id="pills" role="group" aria-label="Filter by status">
+      <button class="pill active" data-f="all" aria-pressed="true">All <span class="pill-n">0</span></button>
+      <button class="pill" data-f="live" aria-pressed="false">Live <span class="pill-n">0</span></button>
+      <button class="pill" data-f="paused" aria-pressed="false">Paused <span class="pill-n">0</span></button>
+      <button class="pill" data-f="draft" aria-pressed="false">Draft <span class="pill-n">0</span></button>
+      <button class="pill" data-f="ended" aria-pressed="false">Ended <span class="pill-n">0</span></button>
+    </div>
+  </div>
+
+  <main class="camp-grid" id="campGrid" aria-live="polite"></main>
+
+</div>
+
+<script src="assets/data.js"></script>
+<script src="assets/shell.js"></script>
+<script>
+(function () {
+  "use strict";
+
+  var S = window.Shell, D = window.PulseData;
+  var $ = S.$, fmt = S.fmt, countUp = S.countUp, REDUCED = S.REDUCED;
+  var CHANNELS = D.CHANNELS;
+  var CAMPAIGNS = D.CAMPAIGNS;
+
+  var PLAY_ICON  = '<svg viewBox="0 0 24 24" fill="currentColor"><path d="M7 4.5v15l13-7.5z"/></svg>';
+  var PAUSE_ICON = '<svg viewBox="0 0 24 24" fill="currentColor"><rect x="5.5" y="4" width="4.5" height="16" rx="1.5"/><rect x="14" y="4" width="4.5" height="16" rx="1.5"/></svg>';
+  var MENU_ICONS = {
+    duplicate: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="12" height="12" rx="2.5"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>',
+    edit:      '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 3a2.8 2.8 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5z"/></svg>',
+    archive:   '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="3" width="20" height="5" rx="1.5"/><path d="M4 8v11a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8"/><path d="M10 12h4"/></svg>'
+  };
+  var STATUS_LABEL = { live: "Live", paused: "Paused", draft: "Draft", ended: "Ended" };
+
+  var grid = $("campGrid");
+  var pills = $("pills");
+  var search = $("campSearch");
+  var state = { filter: "all", q: "" };
+
+  /* ================= GREETING SUB ================= */
+  (function subLine() {
+    var used = {};
+    CAMPAIGNS.forEach(function (c) { c.channels.forEach(function (i) { used[i] = 1; }); });
+    $("subCount").textContent = CAMPAIGNS.length;
+    $("subCh").textContent = Object.keys(used).length;
+  })();
+
+  /* ================= FILTER COUNTS ================= */
+  function updateCounts() {
+    var c = { all: CAMPAIGNS.length, live: 0, paused: 0, draft: 0, ended: 0 };
+    CAMPAIGNS.forEach(function (x) { c[x.status]++; });
+    pills.querySelectorAll(".pill").forEach(function (p) {
+      p.querySelector(".pill-n").textContent = c[p.dataset.f];
+    });
+  }
+
+  /* ================= KEBAB MENU (one open at a time) ================= */
+  var openMenu = null;
+  function closeMenu() {
+    if (!openMenu) return;
+    openMenu.classList.remove("open");
+    var wrap = openMenu.parentNode;
+    wrap.querySelector(".cc-kebab").setAttribute("aria-expanded", "false");
+    var card = openMenu.closest(".camp-card");
+    if (card) card.classList.remove("menu-open");
+    openMenu = null;
+  }
+  document.addEventListener("click", closeMenu);
+  document.addEventListener("keydown", function (e) {
+    if (e.key === "Escape") closeMenu();
+  });
+
+  /* ================= SPARKLINE PATH ================= */
+  function sparkPath(pts) {
+    var W = 240, H = 44, P = 4;
+    var min = Math.min.apply(null, pts), max = Math.max.apply(null, pts);
+    var span = (max - min) || 1;
+    return pts.map(function (v, i) {
+      var x = (i / (pts.length - 1)) * (W - P * 2) + P;
+      var y = P + (1 - (v - min) / span) * (H - P * 2);
+      return (i === 0 ? "M" : "L") + x.toFixed(1) + " " + y.toFixed(1);
+    }).join(" ");
+  }
+
+  /* ================= CARD TEMPLATE ================= */
+  function cardHtml(c, i) {
+    var isDraft = c.status === "draft";
+
+    var chips = c.channels.map(function (ci) {
+      var ch = CHANNELS[ci];
+      return '<span class="camp-chip" style="background:' + ch.color + '">' + ch.name + "</span>";
+    }).join("");
+
+    var leads = isDraft
+      ? '<span class="cc-stat-num big-num dash">—</span>'
+      : '<span class="cc-stat-num big-num" data-count="' + c.leads + '">0</span>';
+    var cpl = isDraft
+      ? '<span class="cc-stat-num big-num dash">—</span>'
+      : '<span class="cc-stat-num big-num"><span class="cur">$</span>' + c.cpl.toFixed(2) + "</span>";
+
+    var pct = c.budget > 0 ? Math.round((c.spent / c.budget) * 100) : 0;
+
+    var spark = isDraft
+      ? '<svg viewBox="0 0 240 44" preserveAspectRatio="none" aria-hidden="true"><line class="sp-flat" x1="4" y1="22" x2="236" y2="22"/></svg>'
+      : '<svg viewBox="0 0 240 44" preserveAspectRatio="none" aria-hidden="true"><path class="sp-line" d="' + sparkPath(c.spark) + '"/></svg>';
+
+    var started = c.started === "—" ? "Not started" : "Started " + c.started;
+
+    var action;
+    if (c.status === "live" || c.status === "paused") {
+      action = '<button class="toggle-btn" data-toggle aria-label="' +
+        (c.status === "live" ? "Pause campaign" : "Resume campaign") + '">' +
+        (c.status === "live" ? PAUSE_ICON : PLAY_ICON) + "</button>";
+    } else if (isDraft) {
+      action = '<a class="cc-act" href="campaign-new.html">Edit draft</a>';
+    } else {
+      action = '<a class="cc-act" href="reports.html">View report →</a>';
+    }
+
+    return '<article class="tile camp-card" style="--i:' + i + '" data-id="' + c.id + '">' +
+      '<div class="cc-top">' +
+        '<h3 class="cc-name" title="' + c.name + '">' + c.name + "</h3>" +
+        '<div class="cc-kebab-wrap">' +
+          '<button class="cc-kebab" aria-label="Campaign actions" aria-haspopup="true" aria-expanded="false">⋯</button>' +
+          '<div class="cc-menu" role="menu">' +
+            '<button role="menuitem">' + MENU_ICONS.duplicate + "Duplicate</button>" +
+            '<button role="menuitem">' + MENU_ICONS.edit + "Edit</button>" +
+            '<button class="danger" role="menuitem">' + MENU_ICONS.archive + "Archive</button>" +
+          "</div>" +
+        "</div>" +
+      "</div>" +
+      '<div class="cc-meta">' + chips +
+        '<span class="status ' + c.status + '"><span class="dot"></span><span class="st-txt">' + STATUS_LABEL[c.status] + "</span></span>" +
+      "</div>" +
+      '<div class="cc-stats">' +
+        '<div><span class="cc-stat-label">Leads</span>' + leads + "</div>" +
+        '<div><span class="cc-stat-label">CPL</span>' + cpl + "</div>" +
+      "</div>" +
+      '<div class="cc-bud">' +
+        '<div class="cc-bud-bar"><div class="cc-bud-fill' + (pct >= 90 ? " hot" : "") + '" data-pct="' + pct + '"></div></div>' +
+        '<div class="cc-bud-cap"><span><b>$' + fmt(c.spent) + "</b> of $" + fmt(c.budget) + "</span><span>" + pct + "%</span></div>" +
+      "</div>" +
+      '<div class="cc-spark">' + spark + "</div>" +
+      '<div class="cc-foot"><span class="cc-started">' + started + "</span>" + action + "</div>" +
+    "</article>";
+  }
+
+  var EMPTY_HTML =
+    '<div class="tile empty-tile" style="--i:0">' +
+      '<div class="empty-ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/></svg></div>' +
+      "<h3>No campaigns match</h3>" +
+      "<p>Try a different status or clear your search.</p>" +
+      '<button class="btn btn-ghost" id="clearFilters">Clear filters</button>' +
+    "</div>";
+
+  /* ================= CARD WIRING ================= */
+  function wireCard(card, c) {
+    /* kebab dropdown */
+    var kebab = card.querySelector(".cc-kebab");
+    var menu = card.querySelector(".cc-menu");
+    kebab.addEventListener("click", function (e) {
+      e.stopPropagation();
+      if (openMenu === menu) { closeMenu(); return; }
+      closeMenu();
+      menu.classList.add("open");
+      kebab.setAttribute("aria-expanded", "true");
+      card.classList.add("menu-open");
+      openMenu = menu;
+    });
+    menu.querySelectorAll("button").forEach(function (item) {
+      item.addEventListener("click", function (e) {
+        e.stopPropagation();
+        closeMenu();
+      });
+    });
+
+    /* pause / play toggle */
+    var toggle = card.querySelector("[data-toggle]");
+    if (toggle) {
+      var statusEl = card.querySelector(".status");
+      var txtEl = card.querySelector(".st-txt");
+      toggle.addEventListener("click", function () {
+        var live = c.status === "live";
+        c.status = live ? "paused" : "live";
+        statusEl.className = "status " + c.status;
+        txtEl.textContent = STATUS_LABEL[c.status];
+        toggle.innerHTML = c.status === "live" ? PAUSE_ICON : PLAY_ICON;
+        toggle.setAttribute("aria-label", c.status === "live" ? "Pause campaign" : "Resume campaign");
+        updateCounts();
+      });
+    }
+  }
+
+  /* ================= POST-RENDER ANIMATIONS ================= */
+  function animate() {
+    /* leads count-up */
+    grid.querySelectorAll("[data-count]").forEach(function (n) {
+      countUp(n, parseInt(n.getAttribute("data-count"), 10), { dur: 950 });
+    });
+
+    /* budget fills + sparkline draws */
+    var fills = grid.querySelectorAll(".cc-bud-fill");
+    var lines = grid.querySelectorAll(".sp-line");
+    if (REDUCED) {
+      fills.forEach(function (f) { f.style.width = f.getAttribute("data-pct") + "%"; });
+      return;
+    }
+    lines.forEach(function (p) {
+      var len = p.getTotalLength();
+      p.style.strokeDasharray = len;
+      p.style.strokeDashoffset = len;
+    });
+    void grid.getBoundingClientRect();
+    fills.forEach(function (f) { f.style.width = f.getAttribute("data-pct") + "%"; });
+    lines.forEach(function (p) {
+      p.classList.add("draw");
+      p.style.strokeDashoffset = 0;
+    });
+  }
+
+  /* ================= RENDER ================= */
+  function render() {
+    closeMenu();
+    S.clearTimers();
+    var q = state.q.toLowerCase();
+    var list = CAMPAIGNS.filter(function (c) {
+      return (state.filter === "all" || c.status === state.filter) &&
+             (!q || c.name.toLowerCase().indexOf(q) >= 0);
+    });
+
+    if (!list.length) {
+      grid.innerHTML = EMPTY_HTML;
+      $("clearFilters").addEventListener("click", function () {
+        state.filter = "all";
+        state.q = "";
+        search.value = "";
+        pills.querySelectorAll(".pill").forEach(function (p) {
+          var on = p.dataset.f === "all";
+          p.classList.toggle("active", on);
+          p.setAttribute("aria-pressed", on ? "true" : "false");
+        });
+        render();
+      });
+      S.popTiles(grid);
+      return;
+    }
+
+    grid.innerHTML = list.map(cardHtml).join("");
+    grid.querySelectorAll(".camp-card").forEach(function (card) {
+      var id = card.getAttribute("data-id");
+      for (var j = 0; j < CAMPAIGNS.length; j++) {
+        if (CAMPAIGNS[j].id === id) { wireCard(card, CAMPAIGNS[j]); break; }
+      }
+    });
+    S.popTiles(grid);
+    animate();
+  }
+
+  /* ================= FILTER + SEARCH ================= */
+  pills.querySelectorAll(".pill").forEach(function (p) {
+    p.addEventListener("click", function () {
+      if (state.filter === p.dataset.f) return;
+      state.filter = p.dataset.f;
+      pills.querySelectorAll(".pill").forEach(function (b) {
+        var on = b === p;
+        b.classList.toggle("active", on);
+        b.setAttribute("aria-pressed", on ? "true" : "false");
+      });
+      render();
+    });
+  });
+
+  var debounce = 0;
+  search.addEventListener("input", function () {
+    clearTimeout(debounce);
+    debounce = setTimeout(function () {
+      var q = search.value.trim();
+      if (q === state.q) return;
+      state.q = q;
+      render();
+    }, 140);
+  });
+
+  /* ================= BOOT ================= */
+  updateCounts();
+  render();
+})();
+</script>
+</body>
+</html>

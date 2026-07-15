@@ -1,0 +1,60 @@
+# AIZU Worker — Tauri 2.x manifest (Phase 6 SCAFFOLD, UNCOMPILED).
+#
+# SCAFFOLD SOURCE ONLY: this environment has no cargo/rustc. Every version below is a
+# BEST-GUESS pin from the Tauri 2.x line and MUST be reconciled by an engineer with the
+# toolchain via `cargo update` + `cargo check` (some minor versions may not resolve as
+# written; adjust to the latest compatible 2.x releases). Do not treat these as verified.
+
+[package]
+name = "aizu-worker"
+version = "0.1.0"
+description = "AIZU Worker — desktop shell supervising the reelradar-worker sidecar"
+authors = ["AIZU"]
+edition = "2021"
+rust-version = "1.77"
+
+# Desktop-only binary crate (no mobile target, so no lib.rs / [lib] split needed).
+[[bin]]
+name = "aizu-worker"
+path = "src/main.rs"
+
+[build-dependencies]
+# Runs in build.rs; wires tauri.conf.json into the build.
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+# --- Tauri core + plugins (2.x line) -----------------------------------------------
+tauri = { version = "2", features = [] }
+tauri-plugin-shell = "2"        # spawn/manage the reelradar-worker child process
+tauri-plugin-fs = "2"           # read the on-disk TOML config + tail the per-run log file
+tauri-plugin-autostart = "2"    # run-at-login (C3 option A)
+# tauri-plugin-updater: re-add for the signed/keyed build — the ad-hoc fleet build ships
+# without auto-update until a minisign updater keypair is generated (see docs/ops).
+
+# --- Serialization -----------------------------------------------------------------
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+toml = "0.8"                     # parse DesktopConfig from app_config_dir/config.toml
+
+# --- Async runtime + HTTP ----------------------------------------------------------
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "process", "time", "sync", "signal"] }
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+# ^ reqwest talks ONLY to the loopback control surface (127.0.0.1:<control_port>).
+#   rustls-tls avoids a system OpenSSL build dep; loopback HTTP needs no TLS but the
+#   feature is harmless and keeps the client uniform.
+
+# --- Filesystem watch (log tail) ---------------------------------------------------
+notify = "6"                    # watch currentJob.logFilePath; reopen-on-rotate aware
+
+# --- Errors ------------------------------------------------------------------------
+thiserror = "1"
+
+# --- Misc --------------------------------------------------------------------------
+rand = "0.8"                    # generate the per-spawn control-surface token + backoff jitter
+
+[profile.release]
+codegen-units = 1
+lto = true
+opt-level = "s"
+panic = "abort"
+strip = true

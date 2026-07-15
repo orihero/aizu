@@ -1,0 +1,312 @@
+<!--
+  AIZU Worker — Operator Command Center (thin control UI, Phase 6).
+
+  Vanilla HTML/JS/CSS (NO React, NO framework, NO build step). It is a THIN client:
+  ALL state truth comes from the Rust side, which polls the sidecar's loopback control
+  surface GET /status and emits `status-updated` / `sidecar-status` / `log-line` events.
+  Buttons invoke Tauri commands (see src-tauri/src/commands.rs). This markup contains NO
+  business logic — main.js only renders events and forwards clicks. Charts are hand-drawn
+  inline SVG built in main.js from a rolling in-memory buffer of the SAME event stream
+  (pure visualization, not new state).
+
+  CSP (from tauri.conf.json): no remote fonts/CDN, no inline <script>, images self/data:
+  only. All JS lives in the external main.js referenced at the bottom.
+-->
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>AIZU Worker</title>
+    <link rel="stylesheet" href="style.css" />
+  </head>
+  <body>
+<div class="app" id="app">
+  <!-- ======================= LEFT RAIL (248px, persistent) ======================= -->
+  <aside class="rail">
+    <!-- Brand block — 7-tap target reveals the hidden dev menu (env switch). -->
+    <div class="rail-brand" id="brand-tap" title="">
+      <span class="brand-glyph" aria-hidden="true">
+        <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true">
+          <circle cx="12" cy="12" r="4" fill="var(--brand)"></circle>
+          <circle cx="12" cy="12" r="9" fill="none" stroke="var(--brand)" stroke-width="1.5" opacity="0.35"></circle>
+        </svg>
+      </span>
+      <span class="brand-wordmark">AIZU&nbsp;Worker</span>
+    </div>
+    <div class="rail-workerid mono" id="worker-id" title="">—</div>
+
+    <!-- CONNECTION -->
+    <section class="rail-section">
+      <div class="eyebrow">Connection</div>
+      <div class="conn-row">
+        <span class="live-dot" id="conn-dot" aria-hidden="true"></span>
+        <span id="conn-badge">connecting…</span>
+      </div>
+      <div class="rail-env">
+        <span class="env-chip" id="env-chip">Local</span>
+        <span class="mono muted small" id="dispatch-host">—</span>
+      </div>
+    </section>
+
+    <!-- CONTROLS -->
+    <section class="rail-section">
+      <div class="eyebrow">Controls</div>
+      <div class="segmented" role="group" aria-label="Leasing">
+        <button id="btn-pause" class="seg" type="button">
+          <span aria-hidden="true">⏸</span> Pause
+        </button>
+        <button id="btn-resume" class="seg" type="button">
+          <span aria-hidden="true">▶</span> Resume
+        </button>
+      </div>
+      <div class="rail-subnote muted small" id="lease-note">Leasing new jobs.</div>
+      <button id="btn-stop" class="btn btn-danger-outline full" type="button"
+              title="Hard-stop the running job (does not kill the worker)"
+              disabled aria-disabled="true">
+        <span aria-hidden="true">⏹</span> Stop current job
+      </button>
+      <button id="btn-restart" class="btn btn-ghost full" type="button"
+              title="Restart the worker process">
+        <span aria-hidden="true">⟳</span> Restart worker
+      </button>
+    </section>
+
+    <!-- CAPACITY -->
+    <section class="rail-section">
+      <div class="eyebrow">Capacity</div>
+      <div class="cap-row">
+        <button id="cap-minus" class="stepper" type="button" aria-label="Decrease capacity">–</button>
+        <div class="cap-readout mono" id="cap-readout">1</div>
+        <button id="cap-plus" class="stepper" type="button" aria-label="Increase capacity">+</button>
+        <button id="btn-capacity" class="btn btn-brand btn-small" type="button" disabled aria-disabled="true">Set</button>
+      </div>
+      <input id="capacity" type="range" min="0" max="8" step="1" value="1"
+             class="cap-slider" aria-label="Capacity override (0 to 8)" />
+      <div class="cap-scale muted small"><span>0</span><span>8</span></div>
+      <div class="rail-subnote muted small">Last requested — applied on Set.</div>
+    </section>
+
+    <!-- LOGIN CHECKPOINT (pinned near bottom) -->
+    <section class="rail-section checkpoint-block" id="checkpoint-block">
+      <div class="eyebrow"><span class="cp-warn" id="cp-warn" aria-hidden="true">⚠</span> Login checkpoint</div>
+      <div class="muted small" id="checkpoint-sub">A 2FA prompt or captcha may need a human.</div>
+      <button id="btn-focus" class="btn btn-ghost full" type="button">
+        <span aria-hidden="true">◎</span> Focus Chrome (2FA)
+      </button>
+    </section>
+
+    <div class="rail-footer muted small mono">Ⓥ 0.1.0</div>
+  </aside>
+
+  <!-- ============================ CONTENT (fluid grid) ============================ -->
+  <div class="content">
+    <!-- HERO BAND — calm ribbon by default, checkpoint takeover on 2FA. -->
+    <section class="hero-band" id="hero-band">
+      <!-- calm ribbon -->
+      <div class="hero-calm" id="hero-calm">
+        <span class="live-dot" id="hero-dot" aria-hidden="true"></span>
+        <span class="hero-calm-text">
+          Session <span class="mono" id="session-uptime-hero">00:00:00</span>
+          <span class="hero-sep">·</span>
+          <span class="mono" id="hero-jobs">0</span> jobs this session
+        </span>
+        <button id="hero-focus" class="btn btn-ghost btn-small hero-focus-btn" type="button">
+          Focus Chrome <span aria-hidden="true">→</span>
+        </button>
+      </div>
+      <!-- checkpoint takeover (hidden until latched) -->
+      <div class="hero-takeover hidden" id="hero-takeover">
+        <div class="hero-takeover-copy">
+          <div class="hero-headline"><span aria-hidden="true">⚠</span> Login checkpoint — a human is needed</div>
+          <div class="hero-subline muted" id="hero-takeover-sub">Waiting on 2FA / captcha.</div>
+        </div>
+        <button id="hero-focus-big" class="btn btn-brand hero-btn-big" type="button">
+          Focus Chrome <span aria-hidden="true">→</span>
+        </button>
+      </div>
+    </section>
+
+    <!-- Update-required strip (hidden unless controls.updateRequired). -->
+    <div class="update-strip hidden" id="update-strip">
+      <span class="pill pill-cloud">update required</span>
+      Worker update required — restart to apply.
+    </div>
+
+    <!-- KPI STRIP (6 tiles) -->
+    <section class="kpi-strip" id="kpi-strip">
+      <div class="kpi reveal" style="--reveal-delay:0ms">
+        <div class="eyebrow">Worker</div>
+        <div class="kpi-value"><span class="live-dot sm" id="worker-dot" aria-hidden="true"></span><span id="worker-word">connecting</span></div>
+        <div class="kpi-sub muted small" id="worker-sub">process</div>
+      </div>
+      <div class="kpi reveal" style="--reveal-delay:40ms">
+        <div class="eyebrow">Chrome</div>
+        <div class="kpi-value"><span id="chrome-badge" class="pill pill-warn">unknown</span></div>
+        <div class="kpi-sub muted small mono" id="chrome-version">—</div>
+      </div>
+      <div class="kpi reveal" style="--reveal-delay:80ms">
+        <div class="eyebrow">Accounts</div>
+        <div class="kpi-value mono"><span id="acct-busy">0</span> / <span id="acct-total">0</span></div>
+        <div class="kpi-mini-bar" id="acct-mini-bar" aria-hidden="true"></div>
+      </div>
+      <div class="kpi reveal" style="--reveal-delay:120ms">
+        <div class="eyebrow">Current</div>
+        <div class="kpi-value"><span class="live-dot sm" id="job-dot" aria-hidden="true"></span><span id="job-state" class="pill pill-neutral">idle</span></div>
+        <div class="kpi-sub muted small mono" id="kpi-run-duration">—</div>
+      </div>
+      <div class="kpi reveal" style="--reveal-delay:160ms">
+        <div class="eyebrow">Session uptime</div>
+        <div class="kpi-value mono" id="session-uptime">00:00:00</div>
+        <div class="kpi-sub muted small">since launch</div>
+      </div>
+      <div class="kpi reveal" style="--reveal-delay:200ms">
+        <div class="eyebrow">Jobs / session</div>
+        <div class="kpi-value mono" id="jobs-count">0</div>
+        <div class="kpi-sub muted small">distinct ids</div>
+      </div>
+    </section>
+
+    <!-- MAIN: chart grid + docked log console -->
+    <div class="main" id="main">
+      <section class="chart-grid">
+        <!-- Card 1 — NOW PLAYING -->
+        <article class="card chart-card reveal shimmer-on" id="card-now-playing" style="--reveal-delay:0ms">
+          <div class="card-head">
+            <div class="eyebrow">Now playing</div>
+            <span id="np-state" class="pill pill-neutral">idle</span>
+          </div>
+          <div id="job-detail" class="np-detail muted small">No job leasing right now.</div>
+          <div class="np-duration mono" id="run-duration">—</div>
+          <div class="np-bar-label eyebrow">Session busy-ratio</div>
+          <div class="np-bar" id="np-busy-bar" aria-hidden="true"><span></span></div>
+          <div class="np-footer mono muted small" id="np-footer"></div>
+        </article>
+
+        <!-- Card 2 — ACCOUNTS BREAKDOWN (donut + per-platform bars) -->
+        <article class="card chart-card reveal shimmer-on" id="card-accounts" style="--reveal-delay:60ms">
+          <div class="card-head">
+            <div class="eyebrow">Accounts breakdown</div>
+            <span class="caption muted small">this session · live</span>
+          </div>
+          <div class="accounts-split">
+            <div class="donut-wrap">
+              <svg id="svg-donut" viewBox="0 0 120 120" preserveAspectRatio="xMidYMid meet" role="img" aria-label="Busy vs idle accounts"></svg>
+              <div class="donut-legend">
+                <span><span class="swatch swatch-busy"></span>busy <b class="mono" id="legend-busy">0</b></span>
+                <span><span class="swatch swatch-idle"></span>idle <b class="mono" id="legend-idle">0</b></span>
+              </div>
+            </div>
+            <div class="platforms-wrap">
+              <div class="scroll-x">
+                <svg id="svg-platforms" viewBox="0 0 200 120" preserveAspectRatio="xMidYMid meet" role="img" aria-label="Accounts per platform"></svg>
+              </div>
+            </div>
+          </div>
+        </article>
+
+        <!-- Card 3 — ACTIVITY TIMELINE (busy-ratio area) -->
+        <article class="card chart-card reveal shimmer-on" id="card-activity" style="--reveal-delay:120ms">
+          <div class="card-head">
+            <div class="eyebrow">Activity timeline</div>
+            <span class="caption muted small" id="activity-readout">this session</span>
+          </div>
+          <div class="chart-body">
+            <svg id="svg-activity" viewBox="0 0 300 120" preserveAspectRatio="xMidYMid meet" role="img" aria-label="Busy-ratio over the session"></svg>
+          </div>
+        </article>
+
+        <!-- Card 4 — LOG THROUGHPUT (lines/tick bars) -->
+        <article class="card chart-card reveal shimmer-on" id="card-throughput" style="--reveal-delay:180ms">
+          <div class="card-head">
+            <div class="eyebrow">Log throughput</div>
+            <span class="caption muted small" id="throughput-readout">this session</span>
+          </div>
+          <div class="chart-body">
+            <svg id="svg-throughput" viewBox="0 0 300 120" preserveAspectRatio="xMidYMid meet" role="img" aria-label="Log lines per tick"></svg>
+          </div>
+        </article>
+      </section>
+
+      <!-- LIVE LOG CONSOLE (docked right, full height) -->
+      <section class="card log-console" id="log-console">
+        <div class="log-head">
+          <div class="log-head-left">
+            <div class="eyebrow">Live log <span class="live-dot xs" id="log-dot" aria-hidden="true"></span></div>
+            <div class="mono muted small log-path-line" id="log-path">—</div>
+          </div>
+          <div class="log-head-actions">
+            <button id="btn-follow-tail" class="btn btn-mini is-on" type="button" aria-pressed="true" title="Follow tail">follow ●</button>
+            <button id="btn-copy-path" class="btn btn-mini" type="button" title="Copy log path">copy</button>
+            <button id="btn-log-expand" class="btn btn-mini" type="button" title="Expand console" aria-pressed="false">⤢</button>
+          </div>
+        </div>
+        <pre id="log-pane" class="log-pane" aria-live="polite">Waiting for the current job's log…</pre>
+      </section>
+    </div>
+
+    <!-- SESSION COUNTERS (full-width strip) -->
+    <section class="session-counters" id="session-counters">
+      <div class="scroll-x counters-scroll">
+        <div class="counter"><span class="eyebrow">Jobs</span><span class="mono" id="ct-jobs">0</span></div>
+        <div class="counter"><span class="eyebrow">Uptime</span><span class="mono" id="ct-uptime">00:00:00</span></div>
+        <div class="counter"><span class="eyebrow">Cur run</span><span class="mono" id="ct-run">—</span></div>
+        <div class="counter"><span class="eyebrow">Restarts</span><span class="mono" id="ct-restarts">0</span></div>
+        <div class="counter"><span class="eyebrow">Last poll</span><span class="mono" id="ct-poll">—</span></div>
+        <div class="counter counter-strip">
+          <span class="eyebrow">Connectivity <span class="muted" id="uptime-readout">monitoring…</span></span>
+          <svg id="svg-uptime" viewBox="0 0 300 22" preserveAspectRatio="none" role="img" aria-label="Connectivity heat-strip"></svg>
+        </div>
+      </div>
+    </section>
+  </div>
+</div>
+
+<!-- Window-edge condition SPINE lives in body::before (see style.css); JS sets --rail. -->
+
+<!-- Hidden DEV MENU — revealed by tapping the brand 7× within 3s. Switches dispatch
+     between local and cloud at runtime (writes config + restarts the app). -->
+<div id="dev-overlay" class="overlay hidden">
+  <div class="dev-menu" role="dialog" aria-modal="true" aria-label="Developer settings">
+    <div class="dev-head">
+      <div class="eyebrow">Developer · environment</div>
+      <button id="dev-close" class="btn btn-mini btn-ghost" type="button" aria-label="Close">✕</button>
+    </div>
+
+    <div class="dev-presets">
+      <button id="preset-local" class="btn btn-small" type="button">Local</button>
+      <button id="preset-cloud" class="btn btn-small" type="button">Cloud</button>
+    </div>
+
+    <div class="dev-cloud-note hidden" id="dev-cloud-note">Pointed at a remote environment.</div>
+
+    <label class="dev-field">
+      <span class="eyebrow">Dispatch base URL</span>
+      <input id="dev-dispatch" class="mono" type="text" placeholder="https://cloud.example.com" spellcheck="false" autocapitalize="off" />
+    </label>
+
+    <label class="dev-field">
+      <span class="eyebrow">Control port</span>
+      <input id="dev-port" type="number" min="1" max="65535" step="1" value="8788" />
+    </label>
+
+    <label class="dev-field">
+      <span class="eyebrow">Worker bootstrap token <span id="dev-token-state" class="muted small"></span></span>
+      <input id="dev-token" type="password" placeholder="leave blank to keep current" spellcheck="false" autocapitalize="off" />
+    </label>
+
+    <div class="dev-actions">
+      <span id="dev-msg" class="muted small"></span>
+      <button id="dev-save" class="btn btn-brand" type="button">Save &amp; Restart</button>
+    </div>
+    <div class="muted small">Saving rewrites config and relaunches the app.</div>
+  </div>
+</div>
+
+<!-- Hidden helper for clipboard-free copy (execCommand fallback). -->
+<textarea id="copy-buffer" aria-hidden="true" tabindex="-1" style="position:fixed;left:-9999px;top:0;opacity:0;"></textarea>
+
+<!-- Tauri injects the API global at runtime; main.js resolves invoke/event from it. -->
+<script src="main.js"></script>
+  </body>
+</html>

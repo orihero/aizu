@@ -1,0 +1,100 @@
+# =============================================================================
+# Secrets & environment
+# =============================================================================
+.env
+.env.*
+!.env.example
+
+# Encryption keys / credentials
+*.pem
+*.key
+
+# =============================================================================
+# Python (engine/)
+# =============================================================================
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+*.egg
+.eggs/
+build/
+dist/
+.Python
+pip-wheel-metadata/
+
+# Virtual environments
+.venv/
+venv/
+env/
+ENV/
+
+# Testing / coverage
+.pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
+coverage.xml
+.tox/
+.mypy_cache/
+.ruff_cache/
+
+# =============================================================================
+# Rust / Tauri (desktop/)
+# =============================================================================
+target/
+desktop/src-tauri/target/
+
+# =============================================================================
+# Node / frontend (admin-panel/)
+# =============================================================================
+node_modules/
+admin-panel/dist/
+admin-panel/build/
+.vite/
+*.tsbuildinfo
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# =============================================================================
+# Runtime / app data
+# =============================================================================
+# SQLite databases (see REELRADAR_DB)
+*.db
+*.db.bak*
+*.db-journal
+*.db-wal
+*.db-shm
+*.sqlite
+*.sqlite3
+
+# Worker state (see REELRADAR_WORKER_STATE)
+.worker-state/
+
+# Logs
+*.log
+logs/
+
+# Chrome profiles / browser data
+chrome-profile/
+profiles/
+
+# =============================================================================
+# Backup / pre-edit artifacts
+# =============================================================================
+*.bak
+*.orig
+*.pre-motion.bak.*
+
+# =============================================================================
+# OS / editor cruft
+# =============================================================================
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+*~
+.idea/
+.vscode/

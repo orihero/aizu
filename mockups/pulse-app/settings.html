@@ -1,0 +1,1484 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>LeadFlow — Pulse · Settings</title>
+<script>
+(function(){var l="dock";try{l=localStorage.getItem("pulse.layout")||"dock"}catch(e){}
+document.documentElement.setAttribute("data-layout",/^(dock|sidebar)$/.test(l)?l:"dock");})();
+</script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Sora:wght@500;600;700;800&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="assets/pulse.css">
+<style>
+  /* ============ SETTINGS-ONLY STYLES ============ */
+
+  /* ---- LAYOUT: rail + panels ---- */
+  .settings-grid {
+    display: grid;
+    grid-template-columns: 232px minmax(0, 1fr);
+    gap: 16px;
+    align-items: start;
+  }
+
+  .rail.tile {
+    position: sticky;
+    top: var(--shell-top);
+    padding: 10px;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+  }
+  .rail-ind {
+    position: absolute;
+    left: 10px;
+    right: 10px;
+    top: 0;
+    height: 44px;
+    border-radius: 14px;
+    background: var(--ink);
+    z-index: 0;
+    transition: transform .3s cubic-bezier(.3,.85,.3,1), height .3s ease;
+  }
+  .rail-ind::before {
+    content: "";
+    position: absolute;
+    left: 6px;
+    top: 50%;
+    transform: translateY(-50%);
+    width: 4px;
+    height: 18px;
+    border-radius: 99px;
+    background: var(--lime);
+  }
+  .rail-tab {
+    position: relative;
+    z-index: 1;
+    display: flex;
+    align-items: center;
+    gap: 11px;
+    width: 100%;
+    border: none;
+    background: transparent;
+    padding: 0 14px;
+    height: 44px;
+    border-radius: 14px;
+    font-family: var(--font-body);
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--ink-soft);
+    text-align: left;
+    cursor: pointer;
+    white-space: nowrap;
+    transition: color .2s ease, background .18s ease;
+  }
+  .rail-tab svg { width: 16px; height: 16px; flex: none; }
+  .rail-tab:hover { background: #f2f3f7; color: var(--ink); }
+  .rail-tab.active, .rail-tab.active:hover { background: transparent; color: #fff; }
+  .rail-tab.active svg { color: var(--lime); }
+
+  .panels { min-width: 0; }
+  .panel { display: none; flex-direction: column; gap: 16px; min-width: 0; }
+  .panel.active { display: flex; }
+  .panel.enter { animation: panelIn .24s cubic-bezier(.2,.8,.3,1) both; }
+  .panel.leave { animation: panelOut .14s ease both; }
+  @keyframes panelIn  { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
+  @keyframes panelOut { from { opacity: 1; transform: translateY(0); } to { opacity: 0; transform: translateY(-8px); } }
+
+  .panel .tile { padding-bottom: 24px; }
+  .tile-head-note { text-transform: none; letter-spacing: 0; font-weight: 600; font-size: 12px; color: var(--ink-faint); }
+
+  /* ---- shared rows ---- */
+  .set-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 16px;
+    padding: 14px 0;
+    border-bottom: 1px solid #f1f2f6;
+  }
+  .set-row:last-child { border-bottom: none; padding-bottom: 2px; }
+  .set-row-name { font-size: 13.5px; font-weight: 600; }
+  .set-row-sub  { font-size: 12px; color: var(--ink-faint); margin-top: 2px; font-weight: 500; }
+
+  /* ---- selects + fields ---- */
+  .field { display: flex; flex-direction: column; gap: 6px; flex: 1; min-width: 0; }
+  .field > span {
+    font-size: 10.5px;
+    font-weight: 700;
+    letter-spacing: .07em;
+    text-transform: uppercase;
+    color: var(--ink-faint);
+  }
+  .field-row { display: flex; gap: 12px; }
+  select.input {
+    appearance: none;
+    -webkit-appearance: none;
+    padding-right: 34px;
+    background-image: url("data:image/svg+xml;charset=utf-8,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='10' viewBox='0 0 24 24' fill='none' stroke='%235b5e6b' stroke-width='3' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M6 9l6 6 6-6'/%3E%3C/svg%3E");
+    background-repeat: no-repeat;
+    background-position: right 13px center;
+    cursor: pointer;
+  }
+
+  /* ---- buttons (page variants) ---- */
+  .btn-red { background: var(--red); color: #fff; }
+  .btn-ghost-red {
+    background: #fff;
+    color: var(--red);
+    border: 1px solid rgba(239,68,68,.4);
+    box-shadow: var(--shadow-tile);
+  }
+  .btn-ghost-red:hover { background: rgba(239,68,68,.06); }
+  .btn.saved { background: var(--lime) !important; color: var(--ink) !important; }
+
+  .spin {
+    width: 13px;
+    height: 13px;
+    border-radius: 50%;
+    border: 2px solid rgba(22,22,26,.25);
+    border-top-color: var(--ink);
+    animation: spin .7s linear infinite;
+    flex: none;
+  }
+  .spin.light { border-color: rgba(255,255,255,.35); border-top-color: #fff; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+
+  /* ============ TAB 1 — WORKSPACE ============ */
+  .ws-profile { display: flex; gap: 24px; margin-top: 18px; }
+  .ws-logo {
+    width: 88px;
+    height: 88px;
+    border-radius: 24px;
+    background: var(--lime);
+    color: var(--ink);
+    display: grid;
+    place-items: center;
+    font-family: var(--font-head);
+    font-size: 38px;
+    font-weight: 800;
+    flex: none;
+    box-shadow: inset 0 0 0 1.5px rgba(22,22,26,.08), var(--shadow-tile);
+    transition: transform .25s cubic-bezier(.2,.9,.3,1.4);
+  }
+  .ws-logo.pop { animation: glyphPop .4s cubic-bezier(.2,.9,.3,1.4); }
+  @keyframes glyphPop { 0% { transform: scale(1); } 40% { transform: scale(1.12) rotate(-3deg); } 100% { transform: scale(1); } }
+  .ws-fields { flex: 1; display: flex; flex-direction: column; gap: 14px; min-width: 0; }
+  .ws-save-row { display: flex; align-items: center; gap: 12px; margin-top: 2px; }
+  #saveWs { min-width: 138px; }
+
+  .t-danger { border: 1.5px solid rgba(239,68,68,.35); }
+  .t-danger .tile-label { color: var(--red); }
+
+  /* ============ TAB 2 — TEAM ============ */
+  .t-invite, .t-members { overflow: visible; } /* dropdowns escape the tile */
+  .invite-form { display: flex; gap: 10px; margin-top: 16px; flex-wrap: wrap; }
+  .invite-form .input { flex: 2 1 220px; }
+  .invite-form select.input { flex: 1 1 130px; }
+  .input.error { border-color: var(--red); box-shadow: 0 0 0 3px rgba(239,68,68,.13); }
+
+  .member-row {
+    display: grid;
+    grid-template-columns: 38px minmax(0, 1fr) auto 34px;
+    align-items: center;
+    gap: 13px;
+    padding: 11px 0;
+    border-bottom: 1px solid #f1f2f6;
+  }
+  .member-row:last-child { border-bottom: none; }
+  .member-row.row-in { animation: rowIn .38s cubic-bezier(.2,.8,.3,1.1); }
+  @keyframes rowIn { from { opacity: 0; transform: translateX(-16px); } to { opacity: 1; transform: translateX(0); } }
+  .member-row.removing {
+    overflow: hidden;
+    opacity: 0;
+    transform: translateX(22px);
+    padding-top: 0;
+    padding-bottom: 0;
+    border-bottom-width: 0;
+    transition: opacity .22s ease, transform .22s ease, height .28s ease .06s,
+                padding .28s ease .06s, border-bottom-width .28s ease .06s;
+  }
+  .avatar {
+    width: 38px;
+    height: 38px;
+    border-radius: 50%;
+    display: grid;
+    place-items: center;
+    font-family: var(--font-head);
+    font-size: 12.5px;
+    font-weight: 800;
+    flex: none;
+  }
+  .avatar.pending { background: #f0f1f5; color: var(--ink-soft); border: 1.5px dashed #d3d6df; }
+  .m-id { min-width: 0; }
+  .m-name { font-size: 13.5px; font-weight: 600; display: flex; align-items: center; gap: 7px; white-space: nowrap; overflow: hidden; }
+  .m-email { font-size: 12px; color: var(--ink-faint); font-weight: 500; margin-top: 1px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .you-chip {
+    font-size: 9.5px;
+    font-weight: 800;
+    letter-spacing: .05em;
+    text-transform: uppercase;
+    background: var(--lime);
+    color: var(--ink);
+    padding: 2px 7px;
+    border-radius: 999px;
+    flex: none;
+  }
+  .pend-chip {
+    font-size: 9.5px;
+    font-weight: 800;
+    letter-spacing: .05em;
+    text-transform: uppercase;
+    background: rgba(245,158,11,.14);
+    color: #b45309;
+    padding: 2px 7px;
+    border-radius: 999px;
+    flex: none;
+  }
+
+  .role-dd, .kebab-dd { position: relative; }
+  .role-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 7px;
+    border: 1px solid var(--line);
+    background: #fff;
+    border-radius: 999px;
+    padding: 7px 12px;
+    font-family: var(--font-body);
+    font-size: 12px;
+    font-weight: 700;
+    color: var(--ink);
+    cursor: pointer;
+    min-width: 96px;
+    justify-content: space-between;
+    transition: border-color .15s ease, background .15s ease;
+  }
+  .role-btn:hover { border-color: #cfd3dd; }
+  .role-btn svg { width: 10px; height: 10px; color: var(--ink-faint); transition: transform .18s ease; flex: none; }
+  .role-dd.open .role-btn svg { transform: rotate(180deg); }
+  .role-btn.pop { animation: rolePop .4s cubic-bezier(.2,.9,.3,1.4); }
+  @keyframes rolePop {
+    0%   { transform: scale(1); }
+    40%  { transform: scale(1.1); background: var(--lime); border-color: var(--lime); }
+    100% { transform: scale(1); }
+  }
+  .role-locked {
+    display: inline-flex;
+    align-items: center;
+    gap: 7px;
+    font-size: 12px;
+    font-weight: 700;
+    color: var(--ink-soft);
+    padding: 7px 12px;
+  }
+  .role-locked svg { width: 12px; height: 12px; color: var(--ink-faint); }
+
+  .dd-menu {
+    position: absolute;
+    top: calc(100% + 6px);
+    right: 0;
+    min-width: 132px;
+    background: #fff;
+    border-radius: 13px;
+    padding: 5px;
+    box-shadow: 0 4px 12px rgba(22,22,26,.08), 0 22px 50px -14px rgba(22,22,26,.3);
+    opacity: 0;
+    transform: translateY(-5px) scale(.96);
+    transform-origin: top right;
+    pointer-events: none;
+    transition: opacity .16s ease, transform .16s ease;
+    z-index: 40;
+  }
+  .role-dd.open .dd-menu, .kebab-dd.open .dd-menu { opacity: 1; transform: translateY(0) scale(1); pointer-events: auto; }
+  .dd-item {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    width: 100%;
+    border: none;
+    background: transparent;
+    padding: 8px 11px;
+    border-radius: 9px;
+    font-family: var(--font-body);
+    font-size: 12.5px;
+    font-weight: 600;
+    color: var(--ink);
+    text-align: left;
+    cursor: pointer;
+    transition: background .14s ease;
+  }
+  .dd-item:hover { background: #f2f3f7; }
+  .dd-item.cur { background: var(--ink); color: #fff; }
+  .dd-item.danger { color: var(--red); }
+  .dd-item.danger:hover { background: rgba(239,68,68,.08); }
+  .dd-item svg { width: 12px; height: 12px; flex: none; }
+
+  .kebab-btn {
+    width: 32px;
+    height: 32px;
+    border-radius: 50%;
+    border: 1px solid var(--line);
+    background: #fff;
+    color: var(--ink-soft);
+    display: grid;
+    place-items: center;
+    cursor: pointer;
+    transition: background .15s ease, color .15s ease, transform .15s ease;
+  }
+  .kebab-btn:hover { background: var(--ink); color: #fff; border-color: var(--ink); }
+  .kebab-btn svg { width: 14px; height: 14px; }
+
+  .seats-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 14px;
+    margin-top: 6px;
+    padding-top: 15px;
+    border-top: 1px solid #eef0f4;
+    font-size: 12.5px;
+    font-weight: 600;
+    color: var(--ink-soft);
+    font-variant-numeric: tabular-nums;
+  }
+  .seats-row b { color: var(--ink); font-weight: 800; }
+  .seats-bar { width: 130px; height: 7px; border-radius: 999px; background: #f0f1f5; overflow: hidden; flex: none; }
+  .seats-bar i { display: block; height: 100%; border-radius: 999px; background: var(--ink); transition: width .5s cubic-bezier(.25,.8,.3,1); }
+
+  /* ============ TAB 3 — CHANNELS ============ */
+  .conn-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; margin-top: 16px; }
+  .conn-card {
+    border: 1px solid var(--line);
+    border-radius: 17px;
+    padding: 17px 18px;
+    display: flex;
+    flex-direction: column;
+    gap: 11px;
+    min-height: 138px;
+    transition: box-shadow .2s ease, transform .2s ease;
+  }
+  .conn-card:hover { box-shadow: var(--shadow-tile); }
+  .conn-card.pop-success { animation: connPop .5s cubic-bezier(.2,.9,.3,1.4); }
+  @keyframes connPop {
+    0%   { transform: scale(1); box-shadow: 0 0 0 0 rgba(217,242,79,0); }
+    40%  { transform: scale(1.025); box-shadow: 0 0 0 5px rgba(217,242,79,.65); }
+    100% { transform: scale(1); box-shadow: 0 0 0 0 rgba(217,242,79,0); }
+  }
+  .conn-head { display: flex; align-items: center; gap: 10px; }
+  .conn-dot {
+    width: 32px;
+    height: 32px;
+    border-radius: 50%;
+    display: grid;
+    place-items: center;
+    color: #fff;
+    font-family: var(--font-head);
+    font-size: 10.5px;
+    font-weight: 800;
+    flex: none;
+  }
+  .conn-card.off .conn-dot { filter: grayscale(1); opacity: .5; }
+  .conn-name { font-size: 14px; font-weight: 700; font-family: var(--font-head); }
+  .conn-head .status { margin-left: auto; }
+  .conn-meta { font-size: 12.5px; color: var(--ink-soft); font-weight: 500; }
+  .conn-meta b { color: var(--ink); font-weight: 700; }
+  .conn-card.off .conn-meta { color: var(--ink-faint); }
+  .conn-foot { margin-top: auto; }
+  .conn-foot .btn { padding: 8px 15px; font-size: 12.5px; }
+
+  /* ============ TAB 4 — BILLING ============ */
+  .plan-now { display: flex; align-items: baseline; gap: 14px; margin-top: 14px; flex-wrap: wrap; }
+  .plan-now .big-num { font-size: 46px; }
+  .plan-now .plan-price-now { font-size: 15px; font-weight: 700; color: var(--ink-soft); }
+  .meters { display: flex; flex-direction: column; gap: 15px; margin-top: 20px; }
+  .meter-head {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    font-size: 12.5px;
+    font-weight: 600;
+    color: var(--ink-soft);
+    margin-bottom: 6px;
+    font-variant-numeric: tabular-nums;
+  }
+  .meter-head b { color: var(--ink); font-weight: 800; font-family: var(--font-head); font-size: 13px; }
+  .meter-bar { height: 9px; border-radius: 999px; background: #f0f1f5; overflow: hidden; }
+  .meter-fill {
+    display: block;
+    height: 100%;
+    width: 0%;
+    border-radius: 999px;
+    background: var(--lime);
+    box-shadow: inset 0 0 0 1px rgba(22,22,26,.08);
+    transition: width .85s cubic-bezier(.25,.8,.3,1);
+  }
+  .meter-fill.hot { background: var(--amber); }
+
+  .plan-cards { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 14px; margin-top: 16px; }
+  .plan-card {
+    border: 1px solid var(--line);
+    border-radius: 17px;
+    padding: 18px;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    transition: box-shadow .2s ease;
+  }
+  .plan-card:hover { box-shadow: var(--shadow-tile); }
+  .plan-card.current { background: var(--ink); color: #fff; border-color: var(--ink); }
+  .plan-top { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+  .plan-name { font-family: var(--font-head); font-size: 15px; font-weight: 800; }
+  .plan-price { font-family: var(--font-head); font-size: 24px; font-weight: 800; letter-spacing: -.02em; }
+  .plan-feats { list-style: none; display: flex; flex-direction: column; gap: 6px; font-size: 12.5px; font-weight: 500; color: var(--ink-soft); }
+  .plan-card.current .plan-feats { color: rgba(255,255,255,.72); }
+  .plan-feats li { display: flex; align-items: center; gap: 8px; }
+  .plan-feats li::before { content: "✓"; font-weight: 800; color: var(--indigo); }
+  .plan-card.current .plan-feats li::before { color: var(--lime); }
+  .plan-switch { margin-top: auto; align-self: flex-start; padding: 8px 16px; font-size: 12.5px; }
+
+  .bill-row { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; }
+  .pay-row { display: flex; align-items: center; gap: 14px; margin-top: 16px; }
+  .pay-glyph {
+    width: 46px;
+    height: 32px;
+    border-radius: 8px;
+    background: var(--ink);
+    position: relative;
+    flex: none;
+  }
+  .pay-glyph::before {
+    content: "";
+    position: absolute;
+    right: 7px;
+    bottom: 6px;
+    width: 9px;
+    height: 9px;
+    border-radius: 50%;
+    background: var(--lime);
+  }
+  .pay-id { flex: 1; min-width: 0; }
+  .pay-num { font-size: 13.5px; font-weight: 700; font-variant-numeric: tabular-nums; }
+  .pay-sub { font-size: 12px; color: var(--ink-faint); font-weight: 500; margin-top: 2px; }
+  .pay-row .btn { padding: 8px 15px; font-size: 12.5px; flex: none; }
+
+  .inv-list { margin-top: 12px; }
+  .inv-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 10px 0;
+    border-bottom: 1px solid #f1f2f6;
+    font-size: 12.5px;
+    font-weight: 600;
+    font-variant-numeric: tabular-nums;
+  }
+  .inv-row:last-child { border-bottom: none; }
+  .inv-amt { color: var(--ink-soft); margin-left: auto; }
+  .icon-btn {
+    width: 30px;
+    height: 30px;
+    border-radius: 50%;
+    border: 1px solid var(--line);
+    background: #fff;
+    color: var(--ink);
+    display: grid;
+    place-items: center;
+    cursor: pointer;
+    flex: none;
+    transition: background .15s ease, color .15s ease, transform .15s ease;
+  }
+  .icon-btn:hover { background: var(--ink); color: #fff; border-color: var(--ink); transform: scale(1.08); }
+  .icon-btn svg { width: 12px; height: 12px; }
+
+  /* ============ TAB 5 — APPEARANCE ============ */
+  .lay-cards { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; margin-top: 16px; }
+  .lay-card {
+    position: relative;
+    border: 1px solid var(--line);
+    border-radius: 17px;
+    background: #fff;
+    padding: 12px 13px 14px;
+    font-family: var(--font-body);
+    text-align: left;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    cursor: pointer;
+    transition: transform .2s ease, box-shadow .2s ease, border-color .2s ease;
+  }
+  .lay-card:hover { transform: translateY(-2px); box-shadow: var(--shadow-lift); }
+  .lay-card.sel {
+    border-color: transparent;
+    box-shadow: 0 0 0 3px var(--lime), var(--shadow-tile);
+  }
+  .lay-check {
+    position: absolute;
+    top: 19px;
+    right: 20px;
+    width: 22px;
+    height: 22px;
+    border-radius: 50%;
+    background: var(--lime);
+    color: var(--ink);
+    display: grid;
+    place-items: center;
+    box-shadow: 0 2px 8px -2px rgba(22,22,26,.35);
+    opacity: 0;
+    transform: scale(.4);
+    transition: opacity .22s ease, transform .22s cubic-bezier(.2,.9,.3,1.5);
+    z-index: 2;
+  }
+  .lay-card.sel .lay-check { opacity: 1; transform: scale(1); }
+  .lay-check svg { width: 11px; height: 11px; }
+
+  .mini {
+    width: 100%;
+    aspect-ratio: 16 / 10;
+    background: var(--canvas);
+    border: 1px solid var(--line);
+    border-radius: 11px;
+    position: relative;
+    overflow: hidden;
+    margin-bottom: 8px;
+  }
+  .mini i { position: absolute; display: block; }
+  .mini .blk { background: #fff; border: 1px solid var(--line); border-radius: 4px; }
+  .mini .pill, .mini .bar { background: var(--ink); }
+  .mini .pill::before, .mini .bar::before {
+    content: "";
+    position: absolute;
+    width: 5px;
+    height: 5px;
+    border-radius: 50%;
+    background: var(--lime);
+    left: 7px;
+    top: 50%;
+    transform: translateY(-50%);
+  }
+  /* dock mini */
+  .mini-dock .pill { top: 7%; left: 50%; transform: translateX(-50%); width: 56%; height: 14%; border-radius: 999px; }
+  .mini-dock .blk.a { left: 7%; top: 31%; width: 41%; height: 28%; }
+  .mini-dock .blk.b { right: 7%; top: 31%; width: 41%; height: 28%; }
+  .mini-dock .blk.c { left: 7%; top: 65%; width: 86%; height: 25%; }
+  /* sidebar mini — floating left rail */
+  .mini-side .bar { top: 8%; left: 6%; bottom: 8%; width: 22%; border-radius: 7px; }
+  .mini-side .bar::before { left: 50%; top: 12%; transform: translateX(-50%); }
+  .mini-side .blk.a { left: 35%; top: 10%; width: 27%; height: 36%; }
+  .mini-side .blk.b { right: 7%; top: 10%; width: 27%; height: 36%; }
+  .mini-side .blk.c { left: 35%; top: 54%; width: 58%; height: 36%; }
+
+  .lay-name { font-size: 13.5px; font-weight: 700; font-family: var(--font-head); }
+  .lay-desc { font-size: 12px; color: var(--ink-faint); font-weight: 500; }
+  .lay-cap {
+    margin-top: 14px;
+    font-size: 12px;
+    color: var(--ink-faint);
+    font-weight: 500;
+    display: flex;
+    align-items: center;
+    gap: 7px;
+  }
+  .lay-cap svg { width: 12px; height: 12px; flex: none; color: var(--green); }
+
+  .motion-row { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-top: 16px; }
+  .motion-name { font-size: 13.5px; font-weight: 600; }
+  .motion-sub { font-size: 12px; color: var(--ink-faint); font-weight: 500; margin-top: 2px; }
+  .m-toggle {
+    width: 46px;
+    height: 26px;
+    border-radius: 999px;
+    background: #e2e4ea;
+    position: relative;
+    flex: none;
+    cursor: not-allowed;
+    transition: background .2s ease;
+  }
+  .m-toggle i {
+    position: absolute;
+    top: 3px;
+    left: 3px;
+    width: 20px;
+    height: 20px;
+    border-radius: 50%;
+    background: #fff;
+    box-shadow: 0 1px 3px rgba(22,22,26,.25);
+    transition: transform .22s cubic-bezier(.2,.8,.3,1.2);
+  }
+  .m-toggle.on { background: var(--ink); }
+  .m-toggle.on i { transform: translateX(20px); }
+
+  /* ============ OVERLAYS ============ */
+  .scrim {
+    position: fixed;
+    inset: 0;
+    z-index: 300;
+    background: rgba(22,22,26,.45);
+    display: grid;
+    place-items: center;
+    padding: 24px;
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity .2s ease;
+  }
+  .scrim.show { opacity: 1; pointer-events: auto; }
+  .modal {
+    position: relative;
+    z-index: 320;
+    width: min(420px, 100%);
+    background: #fff;
+    border-radius: 20px;
+    padding: 24px 26px 22px;
+    box-shadow: 0 6px 16px rgba(22,22,26,.12), 0 40px 90px -20px rgba(22,22,26,.5);
+    transform: translateY(10px) scale(.96);
+    transition: transform .22s cubic-bezier(.2,.8,.3,1.2);
+  }
+  .scrim.show .modal { transform: translateY(0) scale(1); }
+  .modal h3 { font-family: var(--font-head); font-size: 17px; font-weight: 800; letter-spacing: -.01em; }
+  .modal p { font-size: 13px; color: var(--ink-soft); line-height: 1.6; margin-top: 9px; font-weight: 500; }
+  .modal p b { color: var(--ink); font-weight: 700; }
+  .modal-actions { display: flex; justify-content: flex-end; gap: 10px; margin-top: 20px; }
+
+  .toast {
+    position: fixed;
+    bottom: 26px;
+    left: 50%;
+    z-index: 340;
+    transform: translateX(-50%) translateY(18px);
+    background: var(--ink);
+    color: #fff;
+    font-size: 13px;
+    font-weight: 600;
+    padding: 12px 18px;
+    border-radius: 999px;
+    box-shadow: 0 4px 10px rgba(22,22,26,.2), 0 24px 60px -16px rgba(22,22,26,.55);
+    display: flex;
+    align-items: center;
+    gap: 9px;
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity .22s ease, transform .22s cubic-bezier(.2,.8,.3,1.2);
+    max-width: calc(100vw - 48px);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
+  .toast .t-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--lime); flex: none; }
+
+  /* ============ RESPONSIVE ============ */
+  @media (max-width: 1180px) {
+    .settings-grid { grid-template-columns: 1fr; }
+    .rail.tile { position: static; flex-direction: row; gap: 6px; padding: 8px; overflow-x: auto; }
+    .rail-ind { display: none; }
+    .rail-tab { width: auto; height: 40px; padding: 0 15px; flex: none; }
+    .rail-tab.active, .rail-tab.active:hover { background: var(--ink); }
+    .lay-cards { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  }
+  /* sidebar steals 248px — flip the grid earlier in sidebar mode */
+  @media (max-width: 1428px) {
+    html[data-layout="sidebar"] .settings-grid { grid-template-columns: 1fr; }
+    html[data-layout="sidebar"] .rail.tile { position: static; flex-direction: row; gap: 6px; padding: 8px; overflow-x: auto; }
+    html[data-layout="sidebar"] .rail-ind { display: none; }
+    html[data-layout="sidebar"] .rail-tab { width: auto; height: 40px; padding: 0 15px; flex: none; }
+    html[data-layout="sidebar"] .rail-tab.active,
+    html[data-layout="sidebar"] .rail-tab.active:hover { background: var(--ink); }
+  }
+  @media (max-width: 900px) {
+    .conn-grid, .plan-cards, .bill-row, .lay-cards { grid-template-columns: 1fr; }
+    .field-row { flex-direction: column; }
+    .ws-profile { flex-direction: column; }
+    .set-row { flex-wrap: wrap; }
+    .seats-bar { width: 90px; }
+  }
+
+  /* ============ REDUCED MOTION (page-local) ============ */
+  @media (prefers-reduced-motion: reduce) {
+    .panel.enter, .panel.leave, .member-row.row-in,
+    .conn-card.pop-success, .role-btn.pop, .ws-logo.pop { animation: none !important; }
+    .meter-fill, .seats-bar i { transition: none !important; }
+    .lay-check { transition: none !important; }
+    .scrim, .modal, .toast { transition: none !important; }
+    .tile { opacity: 1; }
+  }
+</style>
+</head>
+<body data-page="settings">
+
+<div class="page">
+
+  <header class="greeting">
+    <div>
+      <h1>Settings</h1>
+      <p class="sub">Manage <strong data-ws-name>Acme</strong> workspace</p>
+    </div>
+  </header>
+
+  <div class="settings-grid" id="settingsGrid">
+
+    <!-- ================= LEFT TAB RAIL ================= -->
+    <aside class="tile rail" id="rail" style="--i:0" role="tablist" aria-label="Settings sections" aria-orientation="vertical">
+      <div class="rail-ind" id="railInd" aria-hidden="true"></div>
+      <button type="button" class="rail-tab" data-tab="workspace" role="tab" aria-selected="false">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="7" width="18" height="13" rx="2"/><path d="M8 7V5a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
+        Workspace
+      </button>
+      <button type="button" class="rail-tab" data-tab="team" role="tab" aria-selected="false">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="9" cy="8" r="3.5"/><path d="M2.5 20c.8-3.4 3.4-5.5 6.5-5.5s5.7 2.1 6.5 5.5"/><circle cx="17.5" cy="9.5" r="2.5"/><path d="M16.5 14.6c2.5.3 4.4 2 5 4.9"/></svg>
+        Team
+      </button>
+      <button type="button" class="rail-tab" data-tab="channels" role="tab" aria-selected="false">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg>
+        Channels
+      </button>
+      <button type="button" class="rail-tab" data-tab="billing" role="tab" aria-selected="false">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="5" width="20" height="14" rx="2.5"/><path d="M2 10h20"/><path d="M6 15h4"/></svg>
+        Billing
+      </button>
+      <button type="button" class="rail-tab" data-tab="appearance" role="tab" aria-selected="false">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2.5"/><path d="M3 9h18"/><path d="M9 21V9"/></svg>
+        Appearance
+      </button>
+    </aside>
+
+    <!-- ================= RIGHT PANELS ================= -->
+    <div class="panels" id="panels">
+
+      <!-- TAB 1 — WORKSPACE -->
+      <section class="panel" data-panel="workspace" role="tabpanel" aria-label="Workspace">
+        <div class="tile" style="--i:0">
+          <div class="tile-label"><span>Workspace profile</span></div>
+          <div class="ws-profile">
+            <div class="ws-logo" id="wsLogo" aria-hidden="true">A</div>
+            <div class="ws-fields">
+              <label class="field">
+                <span>Workspace name</span>
+                <input class="input" id="wsNameInput" type="text" value="Acme" autocomplete="off" spellcheck="false">
+              </label>
+              <div class="field-row">
+                <label class="field">
+                  <span>Timezone</span>
+                  <select class="input" id="wsTz">
+                    <option>(GMT−08:00) Pacific Time</option>
+                    <option selected>(GMT−05:00) Eastern Time</option>
+                    <option>(GMT+00:00) UTC</option>
+                    <option>(GMT+01:00) Berlin</option>
+                    <option>(GMT+09:00) Tokyo</option>
+                  </select>
+                </label>
+                <label class="field">
+                  <span>Industry</span>
+                  <select class="input" id="wsInd">
+                    <option selected>SaaS &amp; Software</option>
+                    <option>E-commerce</option>
+                    <option>Agency</option>
+                    <option>Media &amp; Publishing</option>
+                    <option>Other</option>
+                  </select>
+                </label>
+              </div>
+              <div class="ws-save-row">
+                <button type="button" class="btn btn-ink" id="saveWs">Save changes</button>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="tile t-danger" style="--i:1">
+          <div class="tile-label"><span>Danger zone</span></div>
+          <div class="set-row">
+            <div>
+              <div class="set-row-name">Transfer ownership</div>
+              <div class="set-row-sub">Hand this workspace to another team member.</div>
+            </div>
+            <button type="button" class="btn btn-ghost-red" id="btnTransfer">Transfer ownership</button>
+          </div>
+          <div class="set-row">
+            <div>
+              <div class="set-row-name">Delete workspace</div>
+              <div class="set-row-sub">Permanently remove this workspace and all of its data.</div>
+            </div>
+            <button type="button" class="btn btn-ghost-red" id="btnDelete">Delete workspace</button>
+          </div>
+        </div>
+      </section>
+
+      <!-- TAB 2 — TEAM -->
+      <section class="panel" data-panel="team" role="tabpanel" aria-label="Team">
+        <div class="tile t-invite" style="--i:0">
+          <div class="tile-label"><span>Invite</span><span class="tile-head-note">New members get email access instantly</span></div>
+          <form class="invite-form" id="inviteForm" novalidate>
+            <input class="input" id="inviteEmail" type="email" placeholder="teammate@acme.co" autocomplete="off" spellcheck="false">
+            <select class="input" id="inviteRole" aria-label="Role">
+              <option selected>Member</option>
+              <option>Admin</option>
+            </select>
+            <button type="submit" class="btn btn-primary" id="inviteBtn">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M22 2L11 13"/><path d="M22 2l-7 20-4-9-9-4 20-7z"/></svg>
+              Send invite
+            </button>
+          </form>
+        </div>
+
+        <div class="tile t-members" style="--i:1">
+          <div class="tile-label"><span>Members</span></div>
+          <div id="memberRows"></div>
+          <div class="seats-row">
+            <span id="seatsText"><b>5</b> of 10 seats used</span>
+            <span class="seats-bar"><i id="seatsBar"></i></span>
+          </div>
+        </div>
+      </section>
+
+      <!-- TAB 3 — CHANNELS -->
+      <section class="panel" data-panel="channels" role="tabpanel" aria-label="Channels">
+        <div class="tile" style="--i:0">
+          <div class="tile-label"><span>Channel connections</span><span class="chip lime" id="connCount">4 of 5 connected</span></div>
+          <div class="conn-grid" id="connGrid"></div>
+        </div>
+      </section>
+
+      <!-- TAB 4 — BILLING -->
+      <section class="panel" data-panel="billing" role="tabpanel" aria-label="Billing">
+        <div class="tile" style="--i:0">
+          <div class="tile-label"><span>Current plan</span><span class="chip lime" id="renewChip">Renews Jul 4, 2026</span></div>
+          <div class="plan-now">
+            <span class="big-num" id="planNow">Pro</span>
+            <span class="plan-price-now" id="planPriceNow">$149/mo</span>
+          </div>
+          <div class="meters" id="usageBox"></div>
+        </div>
+
+        <div class="tile" style="--i:1">
+          <div class="tile-label"><span>Plans</span><span class="tile-head-note">Switch anytime · prorated</span></div>
+          <div class="plan-cards" id="planCards"></div>
+        </div>
+
+        <div class="bill-row">
+          <div class="tile" style="--i:2">
+            <div class="tile-label"><span>Payment method</span></div>
+            <div class="pay-row">
+              <span class="pay-glyph" aria-hidden="true"></span>
+              <span class="pay-id">
+                <span class="pay-num">Visa •••• 4242</span>
+                <span class="pay-sub" style="display:block">Expires 08/27 · billing@acme.co</span>
+              </span>
+              <button type="button" class="btn btn-ghost" id="payUpdate">Update</button>
+            </div>
+          </div>
+          <div class="tile" style="--i:3">
+            <div class="tile-label"><span>Invoices</span></div>
+            <div class="inv-list" id="invList">
+              <div class="inv-row"><span>Jun 4, 2026</span><span class="inv-amt">$149.00</span>
+                <button type="button" class="icon-btn inv-dl" aria-label="Download invoice"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12"/><path d="M7 10l5 5 5-5"/><path d="M5 21h14"/></svg></button>
+              </div>
+              <div class="inv-row"><span>May 4, 2026</span><span class="inv-amt">$149.00</span>
+                <button type="button" class="icon-btn inv-dl" aria-label="Download invoice"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12"/><path d="M7 10l5 5 5-5"/><path d="M5 21h14"/></svg></button>
+              </div>
+              <div class="inv-row"><span>Apr 4, 2026</span><span class="inv-amt">$149.00</span>
+                <button type="button" class="icon-btn inv-dl" aria-label="Download invoice"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12"/><path d="M7 10l5 5 5-5"/><path d="M5 21h14"/></svg></button>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- TAB 5 — APPEARANCE -->
+      <section class="panel" data-panel="appearance" role="tabpanel" aria-label="Appearance">
+        <div class="tile" style="--i:0">
+          <div class="tile-label"><span>Navigation layout</span></div>
+          <div class="lay-cards" id="layCards">
+            <button type="button" class="lay-card" data-mode="dock" aria-pressed="false">
+              <span class="lay-check"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6L9 17l-5-5"/></svg></span>
+              <span class="mini mini-dock" aria-hidden="true"><i class="pill"></i><i class="blk a"></i><i class="blk b"></i><i class="blk c"></i></span>
+              <span class="lay-name">Dock</span>
+              <span class="lay-desc">Floating pill, centered</span>
+            </button>
+            <button type="button" class="lay-card" data-mode="sidebar" aria-pressed="false">
+              <span class="lay-check"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6L9 17l-5-5"/></svg></span>
+              <span class="mini mini-side" aria-hidden="true"><i class="bar"></i><i class="blk a"></i><i class="blk b"></i><i class="blk c"></i></span>
+              <span class="lay-name">Sidebar</span>
+              <span class="lay-desc">Floating left rail</span>
+            </button>
+          </div>
+          <p class="lay-cap">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6L9 17l-5-5"/></svg>
+            Saved automatically · applies to every page
+          </p>
+        </div>
+
+        <div class="tile" style="--i:1">
+          <div class="tile-label"><span>Motion</span></div>
+          <div class="motion-row">
+            <div>
+              <div class="motion-name">Reduce motion</div>
+              <div class="motion-sub" id="motionSub">Following your system preference</div>
+            </div>
+            <div class="m-toggle" id="motionToggle" role="switch" aria-disabled="true" aria-checked="false" title="Following your system preference"><i></i></div>
+          </div>
+        </div>
+      </section>
+
+    </div>
+  </div>
+</div>
+
+<!-- ================= OVERLAYS ================= -->
+<div class="scrim" id="scrim">
+  <div class="modal" id="modal" role="dialog" aria-modal="true" aria-labelledby="modalTitle">
+    <h3 id="modalTitle">Are you sure?</h3>
+    <p id="modalBody"></p>
+    <div class="modal-actions">
+      <button type="button" class="btn btn-ghost" id="modalCancel">Cancel</button>
+      <button type="button" class="btn btn-ink" id="modalConfirm">Confirm</button>
+    </div>
+  </div>
+</div>
+<div class="toast" id="toast" role="status" aria-live="polite"></div>
+
+<script src="assets/data.js"></script>
+<script src="assets/shell.js"></script>
+<script>
+(function () {
+  "use strict";
+
+  var S = window.Shell, D = window.PulseData;
+  var $ = S.$, fmt = S.fmt, countUp = S.countUp;
+  var REDUCED = S.REDUCED;
+  var CHANNELS = D.CHANNELS;
+  var BILLING = D.BILLING;
+
+  var ICON_CARET = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"/></svg>';
+  var ICON_LOCK  = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/></svg>';
+  var ICON_KEBAB = '<svg viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="5" r="1.9"/><circle cx="12" cy="12" r="1.9"/><circle cx="12" cy="19" r="1.9"/></svg>';
+  var ICON_CHECK = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6L9 17l-5-5"/></svg>';
+  var ICON_TRASH = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18"/><path d="M8 6V4a1 1 0 0 1 1-1h6a1 1 0 0 1 1 1v2"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/></svg>';
+
+  /* ============================================================
+     TOAST + MODAL
+     ============================================================ */
+  var toastEl = $("toast"), toastTimer = 0;
+  function toast(msg) {
+    toastEl.innerHTML = '<span class="t-dot"></span>' + msg;
+    toastEl.classList.add("show");
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(function () { toastEl.classList.remove("show"); }, 2600);
+  }
+
+  var scrim = $("scrim"), modalConfirmCb = null;
+  function openModal(opts) {
+    $("modalTitle").textContent = opts.title;
+    $("modalBody").innerHTML = opts.body;
+    var confirm = $("modalConfirm");
+    confirm.textContent = opts.confirmText || "Confirm";
+    confirm.className = "btn " + (opts.danger ? "btn-red" : "btn-ink");
+    modalConfirmCb = opts.onConfirm || null;
+    scrim.classList.add("show");
+  }
+  function closeModal() {
+    scrim.classList.remove("show");
+    modalConfirmCb = null;
+  }
+  $("modalCancel").addEventListener("click", closeModal);
+  $("modalConfirm").addEventListener("click", function () {
+    var cb = modalConfirmCb;
+    closeModal();
+    if (cb) cb();
+  });
+  scrim.addEventListener("click", function (e) { if (e.target === scrim) closeModal(); });
+  document.addEventListener("keydown", function (e) {
+    if (e.key === "Escape") {
+      if (scrim.classList.contains("show")) closeModal();
+      closeMenus();
+    }
+  });
+
+  /* ============================================================
+     TAB RAIL + PANEL SWITCHING (deep-linkable)
+     ============================================================ */
+  var TABS = ["workspace", "team", "channels", "billing", "appearance"];
+  var rail = $("rail"), railInd = $("railInd");
+  var tabBtns = Array.prototype.slice.call(rail.querySelectorAll(".rail-tab"));
+  var panelEls = {};
+  Array.prototype.forEach.call(document.querySelectorAll(".panel"), function (p) {
+    panelEls[p.getAttribute("data-panel")] = p;
+  });
+
+  var current = null, swapTimer = 0;
+
+  function moveInd() {
+    var t = rail.querySelector(".rail-tab.active");
+    if (!t || !railInd.offsetParent) return;
+    railInd.style.transform = "translateY(" + t.offsetTop + "px)";
+    railInd.style.height = t.offsetHeight + "px";
+  }
+
+  function setHash(id) {
+    try { history.replaceState(null, "", "#" + id); }
+    catch (e) { location.hash = id; }
+  }
+
+  function panelShown(id) {
+    var p = panelEls[id];
+    S.popTiles(p);
+    if (id === "billing") renderUsage();
+    if (id === "appearance") syncLayCards(S.getLayout());
+  }
+
+  function switchTab(id, animate) {
+    if (TABS.indexOf(id) < 0 || id === current) return;
+    var prev = current;
+    current = id;
+
+    tabBtns.forEach(function (b) {
+      var on = b.getAttribute("data-tab") === id;
+      b.classList.toggle("active", on);
+      b.setAttribute("aria-selected", on ? "true" : "false");
+    });
+    moveInd();
+    setHash(id);
+
+    clearTimeout(swapTimer);
+    var next = panelEls[id];
+    function show() {
+      TABS.forEach(function (t) { panelEls[t].classList.remove("active", "enter", "leave"); });
+      next.classList.add("active");
+      if (animate && !REDUCED) {
+        void next.offsetWidth;
+        next.classList.add("enter");
+      }
+      panelShown(id);
+    }
+    if (prev && animate && !REDUCED) {
+      panelEls[prev].classList.add("leave");
+      swapTimer = setTimeout(show, 130);
+    } else {
+      show();
+    }
+  }
+
+  tabBtns.forEach(function (b) {
+    b.addEventListener("click", function () { switchTab(b.getAttribute("data-tab"), true); });
+  });
+  window.addEventListener("hashchange", function () {
+    var h = location.hash.slice(1);
+    if (TABS.indexOf(h) >= 0) switchTab(h, true);
+  });
+  window.addEventListener("resize", moveInd);
+
+  /* ============================================================
+     SHARED DROPDOWN MANAGEMENT (one open at a time)
+     ============================================================ */
+  function closeMenus() {
+    document.querySelectorAll(".role-dd.open, .kebab-dd.open").forEach(function (d) {
+      d.classList.remove("open");
+    });
+  }
+  document.addEventListener("click", closeMenus);
+  function toggleMenu(dd) {
+    var was = dd.classList.contains("open");
+    closeMenus();
+    if (!was) dd.classList.add("open");
+  }
+
+  /* ============================================================
+     TAB 1 — WORKSPACE
+     ============================================================ */
+  var wsLogo = $("wsLogo"), wsNameInput = $("wsNameInput");
+
+  function paintWorkspace(ws) {
+    wsLogo.textContent = ws.glyph;
+    wsNameInput.value = ws.name;
+    if (!REDUCED) {
+      wsLogo.classList.remove("pop");
+      void wsLogo.offsetWidth;
+      wsLogo.classList.add("pop");
+    }
+  }
+  paintWorkspace(S.workspace());
+
+  document.addEventListener("pulse:workspace", function (e) {
+    paintWorkspace(e.detail.workspace);
+  });
+
+  wsNameInput.addEventListener("input", function () {
+    var c = wsNameInput.value.trim().charAt(0);
+    wsLogo.textContent = (c || S.workspace().glyph).toUpperCase();
+  });
+
+  var saveBtn = $("saveWs"), saving = false;
+  saveBtn.addEventListener("click", function () {
+    if (saving) return;
+    saving = true;
+    saveBtn.disabled = true;
+    saveBtn.innerHTML = '<span class="spin light"></span>Saving…';
+    S.later(function () {
+      saveBtn.classList.add("saved");
+      saveBtn.innerHTML = ICON_CHECK + "Saved";
+      S.later(function () {
+        saveBtn.classList.remove("saved");
+        saveBtn.textContent = "Save changes";
+        saveBtn.disabled = false;
+        saving = false;
+      }, 1300);
+    }, 900);
+  });
+
+  $("btnTransfer").addEventListener("click", function () {
+    openModal({
+      title: "Transfer ownership?",
+      body: "Ownership of <b>" + S.workspace().name + "</b> will move to another member. You will become an Admin and lose billing control.",
+      confirmText: "Transfer ownership",
+      onConfirm: function () { toast("Demo only — ownership unchanged"); }
+    });
+  });
+  $("btnDelete").addEventListener("click", function () {
+    openModal({
+      title: "Delete workspace?",
+      body: "This permanently removes <b>" + S.workspace().name + "</b> with all campaigns, leads and reports. This action cannot be undone.",
+      confirmText: "Delete workspace",
+      danger: true,
+      onConfirm: function () { toast("Demo only — nothing was deleted"); }
+    });
+  });
+
+  /* ============================================================
+     TAB 2 — TEAM
+     ============================================================ */
+  var AV_COLORS = [
+    ["var(--indigo)", "#fff"],
+    ["var(--lime)", "var(--ink)"],
+    ["var(--ink)", "var(--lime)"],
+    ["var(--li)", "#fff"],
+    ["var(--ig)", "#fff"]
+  ];
+  var memberRows = $("memberRows");
+  var SEAT_CAP = (function () {
+    for (var i = 0; i < BILLING.usage.length; i++) {
+      if (BILLING.usage[i].label === "Team seats") return BILLING.usage[i].cap;
+    }
+    return 10;
+  })();
+
+  function seatCount() { return memberRows.querySelectorAll(".member-row:not(.removing)").length; }
+
+  function updateSeats() {
+    var n = seatCount();
+    $("seatsText").innerHTML = "<b>" + n + "</b> of " + SEAT_CAP + " seats used";
+    $("seatsBar").style.width = Math.min(100, Math.round((n / SEAT_CAP) * 100)) + "%";
+  }
+
+  function wireRoleDd(dd) {
+    var btn = dd.querySelector(".role-btn");
+    var txt = dd.querySelector(".role-txt");
+    btn.addEventListener("click", function (e) {
+      e.stopPropagation();
+      dd.querySelectorAll(".dd-item").forEach(function (it) {
+        it.classList.toggle("cur", it.getAttribute("data-role") === txt.textContent);
+      });
+      toggleMenu(dd);
+    });
+    dd.querySelectorAll(".dd-item").forEach(function (it) {
+      it.addEventListener("click", function (e) {
+        e.stopPropagation();
+        closeMenus();
+        if (it.getAttribute("data-role") === txt.textContent) return;
+        txt.textContent = it.getAttribute("data-role");
+        if (!REDUCED) {
+          btn.classList.remove("pop");
+          void btn.offsetWidth;
+          btn.classList.add("pop");
+        }
+      });
+    });
+  }
+
+  function removeRow(row) {
+    closeMenus();
+    row.style.height = row.offsetHeight + "px";
+    void row.offsetWidth;
+    row.classList.add("removing");
+    row.style.height = "0px";
+    updateSeats();
+    setTimeout(function () {
+      if (row.parentNode) row.parentNode.removeChild(row);
+    }, REDUCED ? 0 : 340);
+  }
+
+  function wireKebab(dd, row) {
+    var btn = dd.querySelector(".kebab-btn");
+    btn.addEventListener("click", function (e) {
+      e.stopPropagation();
+      toggleMenu(dd);
+    });
+    dd.querySelector(".dd-item.danger").addEventListener("click", function (e) {
+      e.stopPropagation();
+      removeRow(row);
+    });
+  }
+
+  function roleCellHTML(role, locked) {
+    if (locked) return '<span class="role-locked">' + ICON_LOCK + "Owner</span>";
+    return '<div class="role-dd"><button type="button" class="role-btn" aria-haspopup="true"><span class="role-txt">' + role + "</span>" + ICON_CARET + "</button>" +
+      '<div class="dd-menu" role="menu">' +
+        ["Owner", "Admin", "Member"].map(function (r) {
+          return '<button type="button" class="dd-item" data-role="' + r + '" role="menuitem">' + r + "</button>";
+        }).join("") +
+      "</div></div>";
+  }
+
+  function kebabCellHTML() {
+    return '<div class="kebab-dd"><button type="button" class="kebab-btn" aria-haspopup="true" aria-label="Member actions">' + ICON_KEBAB + "</button>" +
+      '<div class="dd-menu" role="menu"><button type="button" class="dd-item danger" role="menuitem">' + ICON_TRASH + "Remove</button></div></div>";
+  }
+
+  function buildMemberRow(opts) {
+    var row = document.createElement("div");
+    row.className = "member-row";
+    row.innerHTML =
+      '<span class="avatar' + (opts.pending ? " pending" : "") + '"' +
+        (opts.pending ? "" : ' style="background:' + opts.colors[0] + ";color:" + opts.colors[1] + '"') + ">" +
+        opts.initials + "</span>" +
+      '<span class="m-id"><span class="m-name">' + opts.name +
+        (opts.you ? '<span class="you-chip">You</span>' : "") +
+        (opts.pending ? '<span class="pend-chip">Pending</span>' : "") +
+      '</span><span class="m-email">' + opts.sub + "</span></span>" +
+      roleCellHTML(opts.role, opts.locked) +
+      (opts.locked ? "<span></span>" : kebabCellHTML());
+    if (!opts.locked) {
+      wireRoleDd(row.querySelector(".role-dd"));
+      wireKebab(row.querySelector(".kebab-dd"), row);
+    }
+    return row;
+  }
+
+  D.TEAM.forEach(function (m, i) {
+    memberRows.appendChild(buildMemberRow({
+      initials: m.initials,
+      colors: AV_COLORS[i % AV_COLORS.length],
+      name: m.name,
+      sub: m.email,
+      role: m.role,
+      you: m.you,
+      locked: m.role === "Owner",
+      pending: false
+    }));
+  });
+  updateSeats();
+
+  var inviteEmail = $("inviteEmail");
+  $("inviteForm").addEventListener("submit", function (e) {
+    e.preventDefault();
+    var email = inviteEmail.value.trim();
+    if (!/^\S+@\S+\.\S+$/.test(email)) {
+      inviteEmail.classList.add("error");
+      inviteEmail.focus();
+      setTimeout(function () { inviteEmail.classList.remove("error"); }, 1400);
+      return;
+    }
+    if (seatCount() >= SEAT_CAP) {
+      toast("All " + SEAT_CAP + " seats are in use — upgrade to invite more");
+      return;
+    }
+    var row = buildMemberRow({
+      initials: email.slice(0, 2).toUpperCase(),
+      colors: null,
+      name: email.split("@")[0],
+      sub: "Invited just now · " + $("inviteRole").value,
+      role: $("inviteRole").value,
+      you: false,
+      locked: false,
+      pending: true
+    });
+    if (!REDUCED) row.classList.add("row-in");
+    memberRows.insertBefore(row, memberRows.firstChild);
+    updateSeats();
+    inviteEmail.value = "";
+    toast("Invite sent to " + email);
+  });
+
+  /* ============================================================
+     TAB 3 — CHANNELS
+     ============================================================ */
+  var DOT_LABEL = { fb: "f", ig: "ig", li: "in", tt: "tt", x: "x" };
+  var connGrid = $("connGrid");
+  var conns = D.CONNECTIONS.map(function (c) {
+    return { channel: c.channel, connected: c.connected, account: c.account, lastSync: c.lastSync };
+  });
+
+  function updateConnCount() {
+    var n = conns.filter(function (c) { return c.connected; }).length;
+    $("connCount").textContent = n + " of " + conns.length + " connected";
+  }
+
+  function paintConnCard(card, c) {
+    var ch = CHANNELS[c.channel];
+    card.classList.toggle("off", !c.connected);
+    var dot = '<span class="conn-dot" style="background:' + ch.color + '">' + DOT_LABEL[ch.key] + "</span>";
+    if (c.connected) {
+      card.innerHTML =
+        '<div class="conn-head">' + dot + '<span class="conn-name">' + ch.name + "</span>" +
+          '<span class="status live"><span class="dot"></span>Connected</span></div>' +
+        '<div class="conn-meta"><b>' + c.account + "</b> · Last sync " + c.lastSync + "</div>" +
+        '<div class="conn-foot"><button type="button" class="btn btn-ghost">Disconnect</button></div>';
+      card.querySelector(".btn").addEventListener("click", function () {
+        openModal({
+          title: "Disconnect " + ch.name + "?",
+          body: "Lead syncing from <b>" + c.account + "</b> will stop immediately. Captured leads stay in LeadFlow and you can reconnect anytime.",
+          confirmText: "Disconnect",
+          danger: true,
+          onConfirm: function () {
+            c.connected = false;
+            c.account = "";
+            c.lastSync = "";
+            paintConnCard(card, c);
+            updateConnCount();
+          }
+        });
+      });
+    } else {
+      card.innerHTML =
+        '<div class="conn-head">' + dot + '<span class="conn-name">' + ch.name + "</span>" +
+          '<span class="status paused"><span class="dot"></span>Not connected</span></div>' +
+        '<div class="conn-meta">No account linked yet</div>' +
+        '<div class="conn-foot"><button type="button" class="btn btn-primary">Connect</button></div>';
+      var btn = card.querySelector(".btn");
+      btn.addEventListener("click", function () {
+        btn.disabled = true;
+        btn.innerHTML = '<span class="spin"></span>Connecting…';
+        S.later(function () {
+          c.connected = true;
+          c.account = "@acme_" + ch.key;
+          c.lastSync = "just now";
+          paintConnCard(card, c);
+          updateConnCount();
+          if (!REDUCED) {
+            card.classList.remove("pop-success");
+            void card.offsetWidth;
+            card.classList.add("pop-success");
+          }
+          toast(ch.name + " connected as @acme_" + ch.key);
+        }, 800);
+      });
+    }
+  }
+
+  conns.forEach(function (c) {
+    var card = document.createElement("div");
+    card.className = "conn-card";
+    connGrid.appendChild(card);
+    paintConnCard(card, c);
+  });
+  updateConnCount();
+
+  /* ============================================================
+     TAB 4 — BILLING
+     ============================================================ */
+  $("planNow").textContent = BILLING.plan;
+  $("planPriceNow").textContent = BILLING.price;
+  $("renewChip").textContent = "Renews " + BILLING.renews;
+
+  function renderUsage() {
+    var box = $("usageBox");
+    box.innerHTML = "";
+    var fills = [], nums = [];
+    BILLING.usage.forEach(function (u) {
+      var used = u.label === "Team seats" ? seatCount() : u.used;
+      var cap = u.cap;
+      var pct = Math.min(100, Math.round((used / cap) * 100));
+      var hot = pct > 80;
+      var m = document.createElement("div");
+      m.className = "meter";
+      m.innerHTML =
+        '<div class="meter-head"><span>' + u.label + "</span><span><b>0</b>&nbsp;/ " + fmt(cap) + "</span></div>" +
+        '<div class="meter-bar"><i class="meter-fill' + (hot ? " hot" : "") + '" data-w="' + pct + '"></i></div>';
+      box.appendChild(m);
+      fills.push(m.querySelector(".meter-fill"));
+      nums.push([m.querySelector("b"), used]);
+    });
+    void box.getBoundingClientRect();
+    fills.forEach(function (f, i) {
+      f.style.transitionDelay = (i * 90) + "ms";
+      f.style.width = f.getAttribute("data-w") + "%";
+    });
+    nums.forEach(function (n) { countUp(n[0], n[1], { dur: 1000 }); });
+  }
+
+  (function buildPlans() {
+    var box = $("planCards");
+    BILLING.plans.forEach(function (p) {
+      var card = document.createElement("div");
+      card.className = "plan-card" + (p.current ? " current" : "");
+      card.innerHTML =
+        '<div class="plan-top"><span class="plan-name">' + p.name + "</span>" +
+          (p.current ? '<span class="chip lime">Current plan</span>' : "") + "</div>" +
+        '<div class="plan-price">' + p.price + "</div>" +
+        '<ul class="plan-feats"><li>' + p.leads + "</li><li>" + p.campaigns + "</li><li>" + p.seats + "</li></ul>" +
+        (p.current ? "" : '<button type="button" class="btn btn-ghost plan-switch">Switch</button>');
+      var btn = card.querySelector(".plan-switch");
+      if (btn) {
+        btn.addEventListener("click", function () {
+          toast("Switch to " + p.name + " requested — billing is simulated in this demo");
+        });
+      }
+      box.appendChild(card);
+    });
+  })();
+
+  $("payUpdate").addEventListener("click", function () {
+    toast("Payment methods are simulated in this demo");
+  });
+  document.querySelectorAll(".inv-dl").forEach(function (b) {
+    b.addEventListener("click", function () { toast("Invoice downloaded — demo only"); });
+  });
+
+  /* ============================================================
+     TAB 5 — APPEARANCE
+     ============================================================ */
+  var layCards = Array.prototype.slice.call(document.querySelectorAll(".lay-card"));
+
+  function syncLayCards(mode) {
+    layCards.forEach(function (c) {
+      var on = c.getAttribute("data-mode") === mode;
+      c.classList.toggle("sel", on);
+      c.setAttribute("aria-pressed", on ? "true" : "false");
+    });
+  }
+  layCards.forEach(function (c) {
+    c.addEventListener("click", function () {
+      var mode = c.getAttribute("data-mode");
+      if (mode === S.getLayout()) return;
+      S.setLayout(mode, true);
+    });
+  });
+  document.addEventListener("pulse:layout", function (e) {
+    syncLayCards(e.detail.mode);
+    setTimeout(moveInd, 420);
+  });
+  syncLayCards(S.getLayout());
+
+  /* motion toggle — read-only mirror of the system preference */
+  var mt = $("motionToggle");
+  mt.classList.toggle("on", REDUCED);
+  mt.setAttribute("aria-checked", REDUCED ? "true" : "false");
+  $("motionSub").textContent = (REDUCED ? "On" : "Off") + " — following your system preference";
+
+  /* ============================================================
+     BOOT
+     ============================================================ */
+  var initial = location.hash.slice(1);
+  if (TABS.indexOf(initial) < 0) initial = "workspace";
+  switchTab(initial, false);
+  S.popTiles(document);
+
+  /* position the rail indicator without a slide-from-top on load */
+  railInd.style.transition = "none";
+  moveInd();
+  requestAnimationFrame(function () { railInd.style.transition = ""; });
+})();
+</script>
+</body>
+</html>

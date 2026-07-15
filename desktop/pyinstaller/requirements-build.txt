@@ -1,0 +1,13 @@
+# AIZU Worker sidecar — PyInstaller BUILD-TIME requirements (Phase 6 SCAFFOLD).
+#
+# These are needed ONLY to freeze the `reelradar-worker` binary from sidecar.spec. They are
+# DELIBERATELY NOT runtime dependencies of the `reelradar` package (not in engine/pyproject
+# .toml) — PyInstaller has no place in the engine's install closure. Install into the
+# engine's venv alongside the runtime deps before building:
+#
+#   cd engine && pip install -e ".[telegram]" && pip install -r ../desktop/pyinstaller/requirements-build.txt
+#   pyinstaller --clean ../desktop/pyinstaller/sidecar.spec
+#
+# NOTE: versions are a best guess; pin exact versions in CI once a clean build succeeds.
+
+pyinstaller>=6.0

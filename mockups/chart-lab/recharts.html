@@ -1,0 +1,256 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Chart Lab · Recharts</title>
+<script>
+(function(){var t="light";try{t=localStorage.getItem("lab.theme")||"light"}catch(e){}
+document.documentElement.setAttribute("data-theme",/^(light|dark)$/.test(t)?t:"light");})();
+</script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Sora:wght@500;600;700;800&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="assets/lab.css">
+
+<!-- React + Recharts (UMD) + Babel for JSX — local demo only.
+     No crossorigin attr: file:// origin is "null", and crossorigin would
+     force a CORS check that unpkg fails. Versions pinned to avoid redirects. -->
+<script src="https://unpkg.com/react@18.3.1/umd/react.production.min.js"></script>
+<script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.production.min.js"></script>
+<script src="https://unpkg.com/prop-types@15.8.1/prop-types.min.js"></script>
+<script src="https://unpkg.com/recharts@2.15.4/umd/Recharts.js"></script>
+<script src="https://unpkg.com/@babel/standalone@7.26.4/babel.min.js"></script>
+</head>
+<body>
+<div id="root" class="page"></div>
+
+<script src="assets/dataset.js"></script>
+<script type="text/babel" data-presets="react">
+const { useState, useMemo } = React;
+const {
+  ResponsiveContainer, LineChart, Line, AreaChart, Area, BarChart, Bar,
+  PieChart, Pie, Cell, CartesianGrid, XAxis, YAxis, Tooltip
+} = Recharts;
+
+const D = window.LabData, CH = D.CHANNELS;
+const fmt = (n) => Math.round(n).toLocaleString("en-US");
+
+/* Resolve Pulse CSS tokens to concrete hex so Recharts (which writes SVG
+   attributes, not style) picks up the active light/dark theme. */
+function palette() {
+  const s = getComputedStyle(document.documentElement);
+  const v = (k) => s.getPropertyValue(k).trim();
+  return {
+    grid: v("--grid"), axis: v("--axis"), tick: v("--ink-faint"),
+    ink: v("--ink"), surface: v("--surface"), indigo: v("--indigo"), line: v("--line")
+  };
+}
+
+/* Pulse-styled tooltip (tokens via CSS vars resolve fine in inline style). */
+function PulseTip({ active, payload, label, money }) {
+  if (!active || !payload || !payload.length) return null;
+  const rows = payload.slice().sort((a, b) => b.value - a.value);
+  return (
+    <div className="chart-tip show" style={{ position: "static", transform: "none", opacity: 1 }}>
+      {label != null && <div className="t-name">{label}</div>}
+      {rows.map((r, i) => (
+        <div className="t-row" key={i}>
+          <i style={{ background: r.color || r.fill || r.stroke }} />
+          {r.name}: <b>{money ? "$" + fmt(r.value) : fmt(r.value)}</b>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+const axisProps = (p) => ({ tick: { fill: p.tick, fontSize: 11, fontFamily: "Inter" }, tickLine: false, axisLine: false });
+
+function LineTile({ p }) {
+  const [hidden, setHidden] = useState({});
+  const data = useMemo(() => D.TICKS.map((t, i) => {
+    const row = { name: t }; CH.forEach((c, ci) => { row[c.name] = D.SERIES[ci][i]; }); return row;
+  }), []);
+  const visible = CH.filter((_, i) => !hidden[i]).length;
+  const toggle = (i) => setHidden((h) => (!h[i] && visible <= 1) ? h : ({ ...h, [i]: !h[i] }));
+  return (
+    <section className="tile t-lines">
+      <div className="tile-label"><span>Leads over time by channel</span><span className="lbl-note">Last 12 weeks</span></div>
+      <div className="legend" role="group">
+        {CH.map((c, i) => (
+          <button key={i} type="button" onClick={() => toggle(i)}
+            style={{ border: "none", background: "none", cursor: "pointer", font: "inherit", color: "inherit", display: "inline-flex", alignItems: "center", opacity: hidden[i] ? 0.4 : 1 }}>
+            <i style={{ background: c.color }} />{c.name}
+          </button>
+        ))}
+      </div>
+      <div className="chart-wrap">
+        <ResponsiveContainer width="100%" height="100%">
+          <LineChart data={data} margin={{ top: 10, right: 12, bottom: 4, left: -10 }}>
+            <CartesianGrid stroke={p.grid} vertical={false} />
+            <XAxis dataKey="name" {...axisProps(p)} interval={1} />
+            <YAxis {...axisProps(p)} width={44} />
+            <Tooltip content={<PulseTip />} cursor={{ stroke: p.axis, strokeDasharray: "4 4" }} />
+            {CH.map((c, i) => !hidden[i] && (
+              <Line key={i} type="monotone" dataKey={c.name} stroke={c.color} strokeWidth={2.6}
+                dot={{ r: 2.6, fill: p.surface, stroke: c.color, strokeWidth: 2 }} activeDot={{ r: 4 }} isAnimationActive={true} animationDuration={900} />
+            ))}
+          </LineChart>
+        </ResponsiveContainer>
+      </div>
+    </section>
+  );
+}
+
+function AreaTile({ p }) {
+  const data = useMemo(() => D.CPL_TREND.map((v, i) => ({ name: D.TICKS[i], CPL: v })), []);
+  return (
+    <section className="tile t-area">
+      <div className="tile-label"><span>Cost per lead trend</span><span className="chip up">−12%</span></div>
+      <div style={{ display: "flex", alignItems: "baseline", gap: 10, marginTop: 14 }}>
+        <span className="big-num" style={{ fontSize: 38 }}><span style={{ fontSize: 19, color: "var(--ink-faint)", verticalAlign: 11 }}>$</span>6.40</span>
+        <span className="lbl-note">current CPL · end of period</span>
+      </div>
+      <div className="chart-wrap">
+        <ResponsiveContainer width="100%" height="100%">
+          <AreaChart data={data} margin={{ top: 10, right: 12, bottom: 4, left: -18 }}>
+            <defs>
+              <linearGradient id="rcArea" x1="0" y1="0" x2="0" y2="1">
+                <stop offset="0%" stopColor={p.indigo} stopOpacity={0.28} />
+                <stop offset="100%" stopColor={p.indigo} stopOpacity={0} />
+              </linearGradient>
+            </defs>
+            <CartesianGrid stroke={p.grid} vertical={false} />
+            <XAxis dataKey="name" {...axisProps(p)} interval={2} />
+            <YAxis {...axisProps(p)} width={40} domain={["dataMin - 1", "dataMax + 1"]} />
+            <Tooltip content={<PulseTip money />} cursor={{ stroke: p.axis, strokeDasharray: "4 4" }} />
+            <Area type="monotone" dataKey="CPL" stroke={p.indigo} strokeWidth={2.6} fill="url(#rcArea)"
+              dot={false} activeDot={{ r: 4.5, fill: p.indigo, stroke: p.surface, strokeWidth: 2 }} animationDuration={1000} />
+          </AreaChart>
+        </ResponsiveContainer>
+      </div>
+    </section>
+  );
+}
+
+function DonutTile({ p }) {
+  const total = D.SPEND.reduce((t, v) => t + v, 0);
+  const data = D.SPEND.map((v, i) => ({ name: CH[i].name, value: v, color: CH[i].color }));
+  return (
+    <section className="tile t-donut">
+      <div className="tile-label"><span>Spend by channel</span><span className="lbl-note">this period</span></div>
+      <div className="donut-flex">
+        <div className="donut-box" style={{ height: 200 }}>
+          <ResponsiveContainer width="100%" height="100%">
+            <PieChart>
+              <Pie data={data} dataKey="value" nameKey="name" cx="50%" cy="50%" innerRadius={62} outerRadius={90}
+                paddingAngle={2} stroke="none" startAngle={90} endAngle={-270} animationDuration={900}>
+                {data.map((d, i) => <Cell key={i} fill={d.color} />)}
+              </Pie>
+              <Tooltip content={<PulseTip money />} />
+            </PieChart>
+          </ResponsiveContainer>
+          <div className="donut-center"><span className="big-num"><span className="cur">$</span>{fmt(total)}</span><small>total spend</small></div>
+        </div>
+        <div className="donut-legend">
+          {data.map((d, i) => (
+            <div className="dl-row" key={i}>
+              <i style={{ background: d.color }} /><span className="dl-name">{d.name}</span>
+              <span className="dl-amt">${fmt(d.value)}</span><span className="dl-share">{Math.round(d.value / total * 100)}%</span>
+            </div>
+          ))}
+        </div>
+      </div>
+    </section>
+  );
+}
+
+function BarsTile({ p }) {
+  return (
+    <section className="tile t-bars">
+      <div className="tile-label"><span>Leads by channel · this vs previous</span>
+        <span className="legend"><span><i style={{ background: p.indigo }} />This period</span><span><i style={{ background: p.tick }} />Previous</span></span>
+      </div>
+      <div className="chart-wrap">
+        <ResponsiveContainer width="100%" height="100%">
+          <BarChart data={D.BARS} margin={{ top: 14, right: 12, bottom: 4, left: -10 }} barGap={6}>
+            <CartesianGrid stroke={p.grid} vertical={false} />
+            <XAxis dataKey="channel" {...axisProps(p)} />
+            <YAxis {...axisProps(p)} width={44} />
+            <Tooltip content={<PulseTip />} cursor={{ fill: p.grid, opacity: 0.4 }} />
+            <Bar name="Previous" dataKey="previous" fill={p.tick} radius={[6, 6, 0, 0]} maxBarSize={34} animationDuration={800} />
+            <Bar name="This period" dataKey="current" fill={p.indigo} radius={[6, 6, 0, 0]} maxBarSize={34} animationDuration={800} />
+          </BarChart>
+        </ResponsiveContainer>
+      </div>
+    </section>
+  );
+}
+
+function Kpi({ k, p }) {
+  const s = k.spark, min = Math.min(...s), max = Math.max(...s), span = (max - min) || 1;
+  const coords = s.map((v, i) => [(i / (s.length - 1)) * 200, 4 + (1 - (v - min) / span) * 32]);
+  const d = coords.map((c, i) => (i ? "L" : "M") + c[0].toFixed(1) + " " + c[1].toFixed(1)).join(" ");
+  const color = k.up ? "var(--green)" : "var(--red)";
+  const val = (k.prefix || "") + (k.dec ? k.value.toFixed(k.dec) : fmt(k.value)) + (k.suffix || "");
+  return (
+    <section className="tile t-kpi">
+      <div className="kpi-head"><span className="tile-label" style={{ display: "block" }}>{k.label}</span>
+        <span className={"chip " + (k.up ? "up" : "down")}>{k.delta}</span></div>
+      <div className="big-num kpi-val">{val}</div>
+      <svg className="kpi-spark" viewBox="0 0 200 40" preserveAspectRatio="none">
+        <path d={d} fill="none" stroke={color} strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" />
+        <circle cx={coords[coords.length - 1][0]} cy={coords[coords.length - 1][1]} r="3" fill="var(--surface)" stroke={color} strokeWidth="2" />
+      </svg>
+    </section>
+  );
+}
+
+function App() {
+  const [theme, setTheme] = useState(document.documentElement.getAttribute("data-theme") === "dark" ? "dark" : "light");
+  const p = useMemo(() => palette(), [theme]);
+  const toggle = () => {
+    const next = theme === "dark" ? "light" : "dark";
+    document.documentElement.setAttribute("data-theme", next);
+    try { localStorage.setItem("lab.theme", next); } catch (e) {}
+    setTheme(next);
+  };
+  return (
+    <React.Fragment>
+      <div className="labbar">
+        <div className="lab-brand"><span className="dot" />Chart Lab</div>
+        <div className="lab-spacer" />
+        <nav className="variant" aria-label="Chart approach">
+          <a href="custom-svg.html">Custom SVG</a>
+          <a href="recharts.html" className="active">Recharts</a>
+        </nav>
+        <button className="theme-toggle" type="button" aria-label="Toggle theme" onClick={toggle}>
+          {theme === "dark"
+            ? <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z" /></svg>
+            : <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="4.5" /><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4" /></svg>}
+        </button>
+      </div>
+
+      <header className="greeting">
+        <div>
+          <h1>Recharts charts</h1>
+          <p className="sub">Recharts, restyled with Pulse tokens — same data as the custom page. <strong>Library-driven.</strong></p>
+        </div>
+        <span className="badge-approach">Approach B · Recharts</span>
+      </header>
+
+      <main className="bento">
+        {D.KPIS.map((k, i) => <Kpi key={i} k={k} p={p} />)}
+        <LineTile p={p} />
+        <AreaTile p={p} />
+        <DonutTile p={p} />
+        <BarsTile p={p} />
+      </main>
+    </React.Fragment>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById("root")).render(<App />);
+</script>
+</body>
+</html>

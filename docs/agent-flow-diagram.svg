@@ -1,0 +1,145 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg viewBox="0 0 1180 2440" xmlns="http://www.w3.org/2000/svg" font-family="system-ui, -apple-system, Segoe UI, Roboto, sans-serif">
+  <defs>
+    <marker id="arw" markerWidth="9" markerHeight="9" refX="7" refY="4" orient="auto"><path d="M0,0 L8,4 L0,8 Z" fill="#475569"/></marker>
+    <marker id="arwR" markerWidth="9" markerHeight="9" refX="7" refY="4" orient="auto"><path d="M0,0 L8,4 L0,8 Z" fill="#dc2626"/></marker>
+    <marker id="arwP" markerWidth="9" markerHeight="9" refX="7" refY="4" orient="auto"><path d="M0,0 L8,4 L0,8 Z" fill="#9333ea"/></marker>
+    <style>
+      .lbl{font-size:13px;fill:#1f2937;} .sm{font-size:11px;fill:#334155;}
+      .band{font-size:13px;font-weight:700;fill:#0f172a;}
+      .ln{stroke:#64748b;stroke-width:1.6;fill:none;} .lnR{stroke:#dc2626;stroke-width:1.6;fill:none;} .lnP{stroke:#9333ea;stroke-width:1.6;fill:none;}
+    </style>
+  </defs>
+  <rect x="0" y="0" width="1180" height="2440" fill="#ffffff"/>
+
+  <rect x="40" y="12" width="1100" height="48" rx="8" fill="#f8fafc" stroke="#e2e8f0"/>
+  <text x="54" y="31" class="band">Reel-Comment Discovery Agent — session flow + edge cases</text>
+  <g class="sm">
+    <rect x="54" y="40" width="14" height="12" rx="3" fill="#fef9c3" stroke="#ca8a04"/><text x="72" y="50">setup/manual</text>
+    <rect x="158" y="40" width="14" height="12" rx="3" fill="#dbeafe" stroke="#2563eb"/><text x="176" y="50">process</text>
+    <rect x="238" y="40" width="14" height="12" rx="3" fill="#e0e7ff" stroke="#4f46e5"/><text x="256" y="50">decision</text>
+    <rect x="320" y="40" width="14" height="12" rx="3" fill="#dcfce7" stroke="#16a34a"/><text x="338" y="50">local model</text>
+    <rect x="418" y="40" width="14" height="12" rx="3" fill="#cffafe" stroke="#0891b2"/><text x="436" y="50">cloud (OpenRouter)</text>
+    <rect x="560" y="40" width="14" height="12" rx="3" fill="#fee2e2" stroke="#dc2626"/><text x="578" y="50">HALT + alert</text>
+    <rect x="668" y="40" width="14" height="12" rx="3" fill="#f3e8ff" stroke="#9333ea"/><text x="686" y="50">human-in-loop</text>
+    <rect x="772" y="40" width="14" height="12" rx="3" fill="#f1f5f9" stroke="#475569"/><text x="790" y="50">SQLite store</text>
+  </g>
+
+  <rect x="40" y="74" width="600" height="26" rx="6" fill="#e2e8f0"/><text x="52" y="92" class="band">0 · SETUP (manual, one-time)</text>
+  <rect x="130" y="108" width="340" height="52" rx="10" fill="#fef9c3" stroke="#ca8a04"/><text x="300" y="139" text-anchor="middle" class="lbl">Create IG account</text>
+  <rect x="130" y="184" width="340" height="52" rx="10" fill="#fef9c3" stroke="#ca8a04"/><text x="300" y="208" text-anchor="middle" class="lbl">Warm 1–2 wks: follow / watch seed targets</text><text x="300" y="225" text-anchor="middle" class="sm">seeds the feed algorithm — no automation yet</text>
+
+  <rect x="40" y="260" width="600" height="26" rx="6" fill="#e2e8f0"/><text x="52" y="278" class="band">1 · SESSION START</text>
+  <rect x="130" y="292" width="340" height="52" rx="10" fill="#dbeafe" stroke="#2563eb"/><text x="300" y="323" text-anchor="middle" class="lbl">Trigger session (v1 manual · v2 scheduled)</text>
+  <rect x="130" y="368" width="340" height="52" rx="10" fill="#e0e7ff" stroke="#4f46e5"/><text x="300" y="399" text-anchor="middle" class="lbl">Daytime + within cap window?</text>
+  <rect x="500" y="375" width="150" height="38" rx="9" fill="#f1f5f9" stroke="#94a3b8"/><text x="575" y="399" text-anchor="middle" class="sm">no → wait / skip</text>
+  <rect x="130" y="444" width="340" height="52" rx="10" fill="#dbeafe" stroke="#2563eb"/><text x="300" y="475" text-anchor="middle" class="lbl">Read soul.md + campaign.md (start only)</text>
+  <rect x="130" y="520" width="340" height="52" rx="10" fill="#dbeafe" stroke="#2563eb"/><text x="300" y="551" text-anchor="middle" class="lbl">Attach to warmed Chrome via CDP</text>
+  <rect x="130" y="596" width="340" height="52" rx="10" fill="#e0e7ff" stroke="#4f46e5"/><text x="300" y="627" text-anchor="middle" class="lbl">Logged in &amp; healthy?</text>
+  <rect x="130" y="672" width="340" height="52" rx="10" fill="#dbeafe" stroke="#2563eb"/><text x="300" y="703" text-anchor="middle" class="lbl">Open Reels feed</text>
+
+  <rect x="40" y="748" width="600" height="26" rx="6" fill="#e2e8f0"/><text x="52" y="766" class="band">2 · DISCOVERY LOOP (per reel)</text>
+  <rect x="130" y="780" width="340" height="46" rx="10" fill="#dbeafe" stroke="#2563eb"/><text x="300" y="808" text-anchor="middle" class="lbl">▶ Next reel</text>
+  <rect x="130" y="856" width="340" height="52" rx="10" fill="#dbeafe" stroke="#2563eb"/><text x="300" y="880" text-anchor="middle" class="lbl">Intercept reel JSON</text><text x="300" y="897" text-anchor="middle" class="sm">caption · cover · video URL  (transient fail → auto-skip)</text>
+  <rect x="130" y="932" width="340" height="46" rx="10" fill="#e0e7ff" stroke="#4f46e5"/><text x="300" y="960" text-anchor="middle" class="lbl">Interception empty for N reels?</text>
+  <rect x="130" y="1004" width="340" height="46" rx="10" fill="#e0e7ff" stroke="#4f46e5"/><text x="300" y="1032" text-anchor="middle" class="lbl">Reel already seen? (dedupe)</text>
+  <rect x="500" y="1010" width="150" height="34" rx="9" fill="#f1f5f9" stroke="#94a3b8"/><text x="575" y="1032" text-anchor="middle" class="sm">yes → skip</text>
+  <rect x="130" y="1076" width="340" height="46" rx="10" fill="#dcfce7" stroke="#16a34a"/><text x="300" y="1104" text-anchor="middle" class="lbl">Relevant to brief? (local gate)</text>
+  <rect x="500" y="1082" width="150" height="34" rx="9" fill="#f1f5f9" stroke="#94a3b8"/><text x="575" y="1104" text-anchor="middle" class="sm">no → scroll past</text>
+  <rect x="130" y="1148" width="340" height="52" rx="10" fill="#dbeafe" stroke="#2563eb"/><text x="300" y="1172" text-anchor="middle" class="lbl">Dwell (positive signal) + open comments</text><text x="300" y="1189" text-anchor="middle" class="sm">scroll/paginate · intercept · skip seen (cursor)</text>
+
+  <rect x="40" y="1224" width="600" height="26" rx="6" fill="#e2e8f0"/><text x="52" y="1242" class="band">3 · PER-COMMENT CASCADE</text>
+  <rect x="86" y="1262" width="468" height="430" rx="12" fill="#fafafa" stroke="#cbd5e1" stroke-dasharray="5 4"/>
+  <text x="98" y="1281" class="sm">cheap → expensive; escalate only the hard minority</text>
+  <rect x="130" y="1292" width="340" height="46" rx="10" fill="#dcfce7" stroke="#16a34a"/><text x="300" y="1320" text-anchor="middle" class="lbl">Local pre-filter (keyword / pattern)</text>
+  <rect x="500" y="1298" width="140" height="34" rx="9" fill="#f1f5f9" stroke="#94a3b8"/><text x="570" y="1320" text-anchor="middle" class="sm">fail → drop</text>
+  <rect x="130" y="1364" width="340" height="46" rx="10" fill="#dcfce7" stroke="#16a34a"/><text x="300" y="1392" text-anchor="middle" class="lbl">Local match scoring (Qwen)</text>
+  <rect x="130" y="1436" width="340" height="46" rx="10" fill="#e0e7ff" stroke="#4f46e5"/><text x="300" y="1464" text-anchor="middle" class="lbl">Confident? (else Uzbek/ambiguous)</text>
+  <rect x="130" y="1508" width="340" height="46" rx="10" fill="#cffafe" stroke="#0891b2"/><text x="300" y="1536" text-anchor="middle" class="lbl">Escalate → OpenRouter (cloud)</text>
+  <rect x="130" y="1580" width="340" height="46" rx="10" fill="#e0e7ff" stroke="#4f46e5"/><text x="300" y="1608" text-anchor="middle" class="lbl">Match? (score ≥ threshold)</text>
+  <rect x="500" y="1586" width="140" height="34" rx="9" fill="#f1f5f9" stroke="#94a3b8"/><text x="570" y="1608" text-anchor="middle" class="sm">no → discard</text>
+  <rect x="130" y="1628" width="340" height="56" rx="10" fill="#f1f5f9" stroke="#475569"/><text x="300" y="1651" text-anchor="middle" class="lbl">Write match → SQLite (idempotent / comment_id)</text><text x="300" y="1671" text-anchor="middle" class="sm">expand replies on match · add reel → watchlist</text>
+
+  <rect x="40" y="1716" width="600" height="26" rx="6" fill="#e2e8f0"/><text x="52" y="1734" class="band">4 · RE-POLL + LOOP CONTROL</text>
+  <rect x="130" y="1748" width="340" height="52" rx="10" fill="#dbeafe" stroke="#2563eb"/><text x="300" y="1772" text-anchor="middle" class="lbl">Re-poll watchlist reels (&lt;14d)</text><text x="300" y="1789" text-anchor="middle" class="sm">new comments → cascade · drop aged-out</text>
+  <rect x="130" y="1824" width="340" height="46" rx="10" fill="#e0e7ff" stroke="#4f46e5"/><text x="300" y="1852" text-anchor="middle" class="lbl">Resistance? (checkpoint / action-block)</text>
+  <rect x="130" y="1896" width="340" height="46" rx="10" fill="#e0e7ff" stroke="#4f46e5"/><text x="300" y="1924" text-anchor="middle" class="lbl">Session cap / time reached?</text>
+  <rect x="500" y="1902" width="150" height="34" rx="9" fill="#f1f5f9" stroke="#94a3b8"/><text x="575" y="1924" text-anchor="middle" class="sm">no → delay, loop ↑</text>
+  <rect x="130" y="1968" width="340" height="56" rx="10" fill="#f1f5f9" stroke="#475569"/><text x="300" y="1991" text-anchor="middle" class="lbl">Persist state → end session</text><text x="300" y="2011" text-anchor="middle" class="sm">seen reels · cursors · watchlist · health · spend</text>
+
+  <rect x="700" y="596" width="380" height="52" rx="10" fill="#fee2e2" stroke="#dc2626"/><text x="890" y="620" text-anchor="middle" class="lbl">HALT + ALERT: login expired</text><text x="890" y="637" text-anchor="middle" class="sm">never auto-relogin</text>
+  <rect x="700" y="700" width="380" height="46" rx="10" fill="#f3e8ff" stroke="#9333ea"/><text x="890" y="722" text-anchor="middle" class="lbl">Crash / killed mid-run</text><text x="890" y="738" text-anchor="middle" class="sm">→ resume from state on restart</text>
+  <rect x="700" y="932" width="380" height="52" rx="10" fill="#fee2e2" stroke="#dc2626"/><text x="890" y="956" text-anchor="middle" class="lbl">HALT + ALERT: endpoint drift</text><text x="890" y="973" text-anchor="middle" class="sm">empty interception → fix selector</text>
+  <rect x="700" y="1436" width="380" height="56" rx="10" fill="#fee2e2" stroke="#dc2626"/><text x="890" y="1459" text-anchor="middle" class="lbl">Cloud down / rate-limited</text><text x="890" y="1479" text-anchor="middle" class="sm">→ retry queue OR degrade-to-local + flag</text>
+  <rect x="700" y="1508" width="380" height="46" rx="10" fill="#fee2e2" stroke="#dc2626"/><text x="890" y="1530" text-anchor="middle" class="lbl">Spend cap hit</text><text x="890" y="1546" text-anchor="middle" class="sm">→ stop escalating + flag</text>
+  <rect x="700" y="1824" width="380" height="52" rx="10" fill="#fee2e2" stroke="#dc2626"/><text x="890" y="1848" text-anchor="middle" class="lbl">HALT + ALERT: checkpoint / captcha</text><text x="890" y="1865" text-anchor="middle" class="sm">bot NEVER solves it</text>
+  <rect x="700" y="1968" width="380" height="46" rx="10" fill="#f3e8ff" stroke="#9333ea"/><text x="890" y="1990" text-anchor="middle" class="lbl">Human resolves</text><text x="890" y="2006" text-anchor="middle" class="sm">re-login / solve manually / fix selector</text>
+  <rect x="700" y="2052" width="380" height="46" rx="10" fill="#f3e8ff" stroke="#9333ea"/><text x="890" y="2080" text-anchor="middle" class="lbl">Resume from persisted state</text>
+
+  <rect x="40" y="2118" width="1040" height="26" rx="6" fill="#e2e8f0"/><text x="52" y="2136" class="band">5 · ADMIN PANEL + FEEDBACK (reads SQLite — separate process)</text>
+  <rect x="130" y="2156" width="220" height="56" rx="10" fill="#f1f5f9" stroke="#475569"/><text x="240" y="2180" text-anchor="middle" class="lbl">SQLite</text><text x="240" y="2198" text-anchor="middle" class="sm">matches · state · spend</text>
+  <rect x="384" y="2156" width="300" height="56" rx="10" fill="#dbeafe" stroke="#2563eb"/><text x="534" y="2180" text-anchor="middle" class="lbl">Panel: matches · canary · spend</text><text x="534" y="2198" text-anchor="middle" class="sm">human marks status (keyed comment_id)</text>
+  <rect x="718" y="2156" width="362" height="56" rx="10" fill="#f3e8ff" stroke="#9333ea"/><text x="899" y="2180" text-anchor="middle" class="lbl">v2: review queue → labeled data</text><text x="899" y="2198" text-anchor="middle" class="sm">tunes threshold/escalation · human follow-up</text>
+
+  <g class="ln">
+    <path d="M300,160 L300,184" marker-end="url(#arw)"/>
+    <path d="M300,236 L300,292" marker-end="url(#arw)"/>
+    <path d="M300,344 L300,368" marker-end="url(#arw)"/>
+    <path d="M300,420 L300,444" marker-end="url(#arw)"/>
+    <path d="M300,496 L300,520" marker-end="url(#arw)"/>
+    <path d="M300,572 L300,596" marker-end="url(#arw)"/>
+    <path d="M300,648 L300,672" marker-end="url(#arw)"/>
+    <path d="M300,724 L300,780" marker-end="url(#arw)"/>
+    <path d="M300,826 L300,856" marker-end="url(#arw)"/>
+    <path d="M300,908 L300,932" marker-end="url(#arw)"/>
+    <path d="M300,978 L300,1004" marker-end="url(#arw)"/>
+    <path d="M300,1050 L300,1076" marker-end="url(#arw)"/>
+    <path d="M300,1122 L300,1148" marker-end="url(#arw)"/>
+    <path d="M300,1200 L300,1292" marker-end="url(#arw)"/>
+    <path d="M300,1338 L300,1364" marker-end="url(#arw)"/>
+    <path d="M300,1410 L300,1436" marker-end="url(#arw)"/>
+    <path d="M300,1482 L300,1508" marker-end="url(#arw)"/>
+    <path d="M300,1554 L300,1580" marker-end="url(#arw)"/>
+    <path d="M300,1626 L300,1628" marker-end="url(#arw)"/>
+    <path d="M300,1684 L300,1748" marker-end="url(#arw)"/>
+    <path d="M300,1800 L300,1824" marker-end="url(#arw)"/>
+    <path d="M300,1870 L300,1896" marker-end="url(#arw)"/>
+    <path d="M300,1942 L300,1968" marker-end="url(#arw)"/>
+    <path d="M470,1459 C640,1459 640,1603 478,1603" stroke-dasharray="4 4" marker-end="url(#arw)"/>
+    <path d="M470,394 L500,394" marker-end="url(#arw)"/>
+    <path d="M470,1027 L500,1027" marker-end="url(#arw)"/>
+    <path d="M470,1099 L500,1099" marker-end="url(#arw)"/>
+    <path d="M470,1315 L500,1315" marker-end="url(#arw)"/>
+    <path d="M470,1603 L500,1603" marker-end="url(#arw)"/>
+  </g>
+
+  <g class="ln">
+    <path d="M575,1936 C620,1958 96,1958 96,803 L130,803" marker-end="url(#arw)"/>
+    <path d="M575,1116 C540,1132 104,1132 100,812" stroke-dasharray="4 4"/>
+    <path d="M575,1044 C540,1060 106,1060 100,812" stroke-dasharray="4 4"/>
+  </g>
+
+  <g class="lnR">
+    <path d="M470,622 L700,622" marker-end="url(#arwR)"/>
+    <path d="M470,955 L700,958" marker-end="url(#arwR)"/>
+    <path d="M470,1531 L700,1531" marker-end="url(#arwR)"/>
+    <path d="M470,1462 L700,1462" marker-end="url(#arwR)"/>
+    <path d="M470,1847 L700,1850" marker-end="url(#arwR)"/>
+  </g>
+
+  <g class="lnP">
+    <path d="M890,648 L890,700" marker-end="url(#arwP)"/>
+    <path d="M1080,622 L1110,622 L1110,1991 L1082,1991" marker-end="url(#arwP)"/>
+    <path d="M1080,958 L1110,958" />
+    <path d="M1080,1850 L1110,1850" />
+    <path d="M890,1876 L890,1968" marker-end="url(#arwP)"/>
+    <path d="M890,2014 L890,2052" marker-end="url(#arwP)"/>
+    <path d="M700,2075 C360,2075 88,2075 88,698 L130,698" stroke-dasharray="5 4" marker-end="url(#arwP)"/>
+  </g>
+
+  <g class="ln">
+    <path d="M300,2024 C300,2118 240,2120 240,2156" marker-end="url(#arw)"/>
+    <path d="M350,2184 L384,2184" marker-end="url(#arw)"/>
+    <path d="M684,2184 L718,2184" marker-end="url(#arw)"/>
+  </g>
+</svg>

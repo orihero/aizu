@@ -1,0 +1,188 @@
+[
+ {
+  "text": "How much is the Pro plan? Need it for a team of 5",
+  "lang": "en",
+  "match": true,
+  "note": "direct price ask + team size"
+ },
+ {
+  "text": "Is there a free trial? How long does it last?",
+  "lang": "en",
+  "match": true,
+  "note": "trial intent"
+ },
+ {
+  "text": "Does it integrate with Slack and Jira? Thinking of switching",
+  "lang": "en",
+  "match": true,
+  "note": "integration question + migration intent"
+ },
+ {
+  "text": "Can you email me the pricing? We're evaluating tools this quarter",
+  "lang": "en",
+  "match": true,
+  "note": "wants contact / pricing"
+ },
+ {
+  "text": "Send the plans to jane@example.com please",
+  "lang": "en",
+  "match": true,
+  "note": "left email, wants plans"
+ },
+ {
+  "text": "How do I book a demo for my company?",
+  "lang": "en",
+  "match": true,
+  "note": "demo request"
+ },
+ {
+  "text": "We need this for a 30-person team, budget around $300/mo",
+  "lang": "en",
+  "match": true,
+  "note": "team size + budget"
+ },
+ {
+  "text": "Is there a monthly option or only annual billing?",
+  "lang": "en",
+  "match": true,
+  "note": "billing/plan terms"
+ },
+ {
+  "text": "Planning to migrate off our current tool this year — does it import data?",
+  "lang": "en",
+  "match": true,
+  "note": "migration + feature intent"
+ },
+ {
+  "text": "What does onboarding look like? Any setup help included?",
+  "lang": "en",
+  "match": true,
+  "note": "onboarding question"
+ },
+ {
+  "text": "Does it support custom fields?",
+  "lang": "en",
+  "match": true,
+  "note": "feature question — mid intent, still a lead signal"
+ },
+ {
+  "text": "Looking for a tool like this for my startup, is there a startup discount?",
+  "lang": "en",
+  "match": true,
+  "note": "evaluating for company + pricing"
+ },
+ {
+  "text": "lol my boss would never pay for this 😂😂",
+  "lang": "en",
+  "match": false,
+  "note": "JOKE/banter — the false positive we must kill"
+ },
+ {
+  "text": "Amazing tool, congrats on the launch!",
+  "lang": "en",
+  "match": false,
+  "note": "pure praise, no intent"
+ },
+ {
+  "text": "🔥🔥🔥",
+  "lang": "en",
+  "match": false,
+  "note": "emoji only"
+ },
+ {
+  "text": "Want to collab? I'm a tech influencer with 50k followers",
+  "lang": "en",
+  "match": false,
+  "note": "self-promo / collab pitch, not a buyer"
+ },
+ {
+  "text": "@alex check this out, looks like what we talked about",
+  "lang": "en",
+  "match": false,
+  "note": "tagging a friend"
+ },
+ {
+  "text": "We build the same thing for half the price, DM me",
+  "lang": "en",
+  "match": false,
+  "note": "competitor offering-to-sell (supply side)"
+ },
+ {
+  "text": "Way too expensive for what it does tbh",
+  "lang": "en",
+  "match": false,
+  "note": "price complaint, not a buyer"
+ },
+ {
+  "text": "How much do you charge for a shoutout on your page?",
+  "lang": "en",
+  "match": false,
+  "note": "asking AD rate, not the product"
+ },
+ {
+  "text": "haha this transition is so clean 😄",
+  "lang": "en",
+  "match": false,
+  "note": "reacting to the video"
+ },
+ {
+  "text": "Hello everyone 👋",
+  "lang": "en",
+  "match": false,
+  "note": "greeting only"
+ },
+ {
+  "text": "How much is it? Want to buy, reach me +1 415 555 0142",
+  "lang": "en",
+  "match": true,
+  "note": "extraction: phone + buy intent from the comment",
+  "reel": {
+   "author": "acme.io",
+   "caption": "Acme — plan your sprints in one place",
+   "ocr": "ACME · Pro from $12/seat · 14-day free trial"
+  },
+  "expect_extracted": {
+   "phone": [
+    "+14155550142",
+    "+1 415 555 0142"
+   ],
+   "intent": [
+    "buy",
+    "purchase",
+    "inquire"
+   ]
+  }
+ },
+ {
+  "text": "Does it do Gantt charts? Email me jane@example.com",
+  "lang": "en",
+  "match": true,
+  "note": "extraction: email + inquire intent from the comment; no company email leak from OCR",
+  "reel": {
+   "author": "acme.io",
+   "caption": "New: timeline view in Acme. Start your free trial.",
+   "ocr": "Acme · Free 14-day trial · support@acme.io"
+  },
+  "expect_extracted": {
+   "email": [
+    "jane@example.com"
+   ],
+   "intent": [
+    "inquire",
+    "pricing",
+    "demo"
+   ]
+  }
+ },
+ {
+  "text": "Great work, congrats!",
+  "lang": "en",
+  "match": false,
+  "note": "praise stays non-match even with rich reel context",
+  "reel": {
+   "author": "acme.io",
+   "caption": "New: timeline view in Acme. Start your free trial.",
+   "ocr": "Acme · Free 14-day trial"
+  }
+ }
+]

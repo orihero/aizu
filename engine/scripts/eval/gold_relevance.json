@@ -1,0 +1,23 @@
+[
+  {"text": "Acme 2.0 is here — plan sprints, track tasks, and ship faster. Free trial.", "lang": "en", "match": true, "note": "product launch + trial"},
+  {"text": "How our team cut status meetings in half using Acme's timeline view", "lang": "en", "match": true, "note": "use-case / workflow content"},
+  {"text": "Pricing made simple: Free, Pro $12/seat, Business $20/seat. No card to start.", "lang": "en", "match": true, "note": "pricing/plans"},
+  {"text": "Full demo: setting up your first project board in under 3 minutes", "lang": "en", "match": true, "note": "product demo"},
+  {"text": "New integration: Acme now syncs two-way with Slack and Google Calendar", "lang": "en", "match": true, "note": "integration announcement"},
+  {"text": "Case study: how Northwind onboarded 200 users to Acme in a week", "lang": "en", "match": true, "note": "customer results / case study"},
+  {"text": "Migrating from your old PM tool? Acme imports your projects in one click", "lang": "en", "match": true, "note": "migration offer"},
+  {"text": "Acme for teams — assign tasks, set deadlines, automate the busywork", "lang": "en", "match": true, "note": "feature/workflow"},
+  {"text": "Book a live demo with our team and get a free workspace setup", "lang": "en", "match": true, "note": "demo / onboarding offer"},
+  {"text": "Start your 14-day free trial today, cancel anytime, no credit card", "lang": "en", "match": true, "note": "free-trial offer"},
+
+  {"text": "Funny cat compilation, watch till the end 😹", "lang": "en", "match": false, "note": "pets/comedy"},
+  {"text": "Maki cosplay from Jujutsu Kaisen Season 3", "lang": "en", "match": false, "note": "anime cosplay"},
+  {"text": "SpaceX IPO is poised to create around 4000 new millionaires", "lang": "en", "match": false, "note": "finance/markets, not a product"},
+  {"text": "Easy 10-minute pasta recipe 😋 full recipe below", "lang": "en", "match": false, "note": "cooking"},
+  {"text": "Unboxing the new robot dog — it followed me around the house 🥹", "lang": "en", "match": false, "note": "gadget/hardware"},
+  {"text": "Car for sale: 2020 hatchback, great condition, price negotiable", "lang": "en", "match": false, "note": "car sale — commerce but NOT a software product"},
+  {"text": "iPhone 15 Pro for sale, price negotiable, DM me", "lang": "en", "match": false, "note": "phone sale — not a software product"},
+  {"text": "Beginner makeup tutorial, soft glam look", "lang": "en", "match": false, "note": "beauty"},
+  {"text": "Summer deals on Antalya tour packages just dropped", "lang": "en", "match": false, "note": "travel/tourism"},
+  {"text": "Best football goals of 2026, full compilation", "lang": "en", "match": false, "note": "sports"}
+]

@@ -1,0 +1,1091 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>LeadFlow — Pulse · New campaign</title>
+<script>
+(function(){var l="dock";try{l=localStorage.getItem("pulse.layout")||"dock"}catch(e){}
+document.documentElement.setAttribute("data-layout",/^(dock|sidebar)$/.test(l)?l:"dock");})();
+</script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Sora:wght@500;600;700;800&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="assets/pulse.css">
+<style>
+  /* ============ NEW-CAMPAIGN WIZARD STYLES ============ */
+  .wiz { max-width: 860px; margin: 0 auto; }
+  .wiz .tile, .suc { opacity: 1; }
+  .wiz .tile:hover, .suc:hover { transform: none; box-shadow: var(--shadow-tile); }
+
+  @keyframes riseIn { from { opacity: 0; transform: translateY(10px); } }
+
+  /* ---- STEP INDICATOR ---- */
+  .steps {
+    position: relative;
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    margin: 4px 0 22px;
+    animation: riseIn .5s cubic-bezier(.2,.8,.3,1) both;
+  }
+  .steps-track {
+    position: absolute;
+    top: 16px;
+    left: 12.5%;
+    right: 12.5%;
+    height: 3px;
+    border-radius: 999px;
+    background: #e2e4ec;
+  }
+  .steps-fill {
+    height: 100%;
+    width: 0%;
+    border-radius: 999px;
+    background: linear-gradient(90deg, var(--lime), var(--indigo), var(--lime));
+    background-size: 200% 100%;
+    animation: stepSweep 2.4s linear infinite;
+    transition: width .5s cubic-bezier(.3,.8,.3,1);
+  }
+  @keyframes stepSweep { from { background-position: 0 0; } to { background-position: 200% 0; } }
+
+  .step-node {
+    position: relative;
+    z-index: 1;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 8px;
+    border: none;
+    background: transparent;
+    font-family: var(--font-body);
+    cursor: default;
+    padding: 0;
+  }
+  .sn-dot {
+    width: 34px; height: 34px;
+    border-radius: 50%;
+    background: #fff;
+    border: 2px solid var(--line);
+    color: var(--ink-faint);
+    font-family: var(--font-head);
+    font-size: 13.5px;
+    font-weight: 800;
+    display: grid;
+    place-items: center;
+    transition: transform .25s cubic-bezier(.2,.9,.3,1.3), background .2s ease, border-color .2s ease, color .2s ease, box-shadow .2s ease;
+    box-shadow: var(--shadow-tile);
+  }
+  .sn-label {
+    font-size: 11.5px;
+    font-weight: 700;
+    letter-spacing: .02em;
+    color: var(--ink-faint);
+    transition: color .2s ease;
+    white-space: nowrap;
+  }
+  .step-node.current .sn-dot {
+    background: var(--ink);
+    border-color: var(--ink);
+    color: #fff;
+    transform: scale(1.2);
+    box-shadow: 0 0 0 5px rgba(22,22,26,.09);
+  }
+  .step-node.current .sn-label { color: var(--ink); }
+  .step-node.done { cursor: pointer; }
+  .step-node.done .sn-dot { background: var(--lime); border-color: var(--lime); color: var(--ink); }
+  .step-node.done .sn-label { color: var(--ink-soft); }
+  .step-node.done:hover .sn-dot { transform: scale(1.12); }
+
+  /* ---- PANELS ---- */
+  .wiz-panel { display: none; padding: 26px 28px; }
+  .wiz-panel.on { display: block; }
+  .wiz-panel.on.fwd  { animation: panFwd .3s cubic-bezier(.2,.8,.3,1) both; }
+  .wiz-panel.on.back { animation: panBack .3s cubic-bezier(.2,.8,.3,1) both; }
+  @keyframes panFwd  { from { opacity: 0; transform: translateX(30px); } }
+  @keyframes panBack { from { opacity: 0; transform: translateX(-30px); } }
+  .wiz-panel.on.shake { animation: shakeX .42s ease; }
+  @keyframes shakeX {
+    0%, 100% { transform: none; }
+    20% { transform: translateX(-9px); }
+    40% { transform: translateX(7px); }
+    60% { transform: translateX(-5px); }
+    80% { transform: translateX(3px); }
+  }
+
+  .lab-aside { text-transform: none; letter-spacing: 0; font-weight: 600; font-size: 11.5px; }
+
+  .f-row { margin-top: 20px; }
+  .f-row:first-of-type { margin-top: 16px; }
+  .f-label {
+    display: flex;
+    align-items: baseline;
+    gap: 6px;
+    font-size: 11.5px;
+    font-weight: 700;
+    letter-spacing: .07em;
+    text-transform: uppercase;
+    color: var(--ink-faint);
+    margin-bottom: 9px;
+  }
+  .f-label em { font-style: normal; color: var(--red); }
+  .f-label .opt { font-weight: 600; text-transform: none; letter-spacing: 0; color: var(--ink-faint); }
+  .f-wide { width: 100%; }
+  textarea.input { resize: vertical; min-height: 76px; line-height: 1.55; }
+
+  /* shared selectable-card check */
+  .sel-check {
+    position: absolute;
+    top: 10px; right: 10px;
+    width: 22px; height: 22px;
+    border-radius: 50%;
+    background: var(--lime);
+    color: var(--ink);
+    display: grid;
+    place-items: center;
+    transform: scale(0);
+  }
+  .selected .sel-check { animation: checkPop .38s cubic-bezier(.3,1.5,.4,1) forwards; }
+  @keyframes checkPop {
+    0%   { transform: scale(0); }
+    62%  { transform: scale(1.25); }
+    100% { transform: scale(1); }
+  }
+
+  /* ---- STEP 1: objectives ---- */
+  .obj-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; }
+  .obj-card {
+    position: relative;
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 4px;
+    text-align: left;
+    background: #fff;
+    border: 2px solid var(--line);
+    border-radius: 16px;
+    padding: 16px;
+    font-family: var(--font-body);
+    cursor: pointer;
+    transition: border-color .16s ease, transform .16s ease, box-shadow .16s ease;
+  }
+  .obj-card:hover { transform: translateY(-2px); border-color: #d4d7e1; }
+  .obj-card.selected { border-color: var(--lime); box-shadow: 0 0 0 3px rgba(217,242,79,.35); }
+  .obj-ic {
+    width: 36px; height: 36px;
+    border-radius: 12px;
+    background: #f0f1f5;
+    color: var(--ink);
+    display: grid;
+    place-items: center;
+    margin-bottom: 6px;
+    transition: background .2s ease;
+  }
+  .obj-card.selected .obj-ic { background: var(--lime); }
+  .obj-ic svg { width: 18px; height: 18px; }
+  .obj-name { font-size: 13.5px; font-weight: 700; color: var(--ink); }
+  .obj-sub { font-size: 11.5px; font-weight: 500; color: var(--ink-faint); line-height: 1.4; }
+
+  /* ---- STEP 1: tag input ---- */
+  .tag-box {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 7px;
+    background: #fff;
+    border: 1px solid var(--line);
+    border-radius: 12px;
+    padding: 8px 10px;
+    cursor: text;
+    transition: border-color .15s ease, box-shadow .15s ease;
+  }
+  .tag-box:focus-within { border-color: var(--indigo); box-shadow: 0 0 0 3px rgba(79,70,229,.13); }
+  .tag {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    background: #f0f1f5;
+    color: var(--ink);
+    border-radius: 999px;
+    padding: 5px 7px 5px 11px;
+    font-size: 12px;
+    font-weight: 600;
+    animation: checkPop .3s cubic-bezier(.3,1.4,.4,1);
+  }
+  .tag-x {
+    border: none;
+    background: transparent;
+    color: var(--ink-faint);
+    font-size: 14px;
+    line-height: 1;
+    width: 17px; height: 17px;
+    border-radius: 50%;
+    display: grid;
+    place-items: center;
+    cursor: pointer;
+    transition: background .14s ease, color .14s ease;
+  }
+  .tag-x:hover { background: var(--ink); color: #fff; }
+  .tag-box input {
+    flex: 1;
+    min-width: 150px;
+    border: none;
+    outline: none;
+    background: transparent;
+    font-family: var(--font-body);
+    font-size: 13px;
+    font-weight: 500;
+    color: var(--ink);
+    padding: 4px 2px;
+  }
+  .tag-box input::placeholder { color: var(--ink-faint); }
+
+  /* ---- STEP 2: channels ---- */
+  .ch-grid { display: grid; grid-template-columns: repeat(5, 1fr); gap: 12px; margin-top: 16px; }
+  .ch-tile {
+    position: relative;
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 9px;
+    text-align: left;
+    background: #fff;
+    border: 2px solid var(--line);
+    border-radius: 16px;
+    padding: 16px 14px 14px;
+    font-family: var(--font-body);
+    cursor: pointer;
+    transition: border-color .16s ease, transform .16s ease, box-shadow .16s ease;
+  }
+  .ch-tile:hover { transform: translateY(-2px); border-color: #d4d7e1; }
+  .ch-tile.selected { border-color: var(--lime); box-shadow: 0 0 0 3px rgba(217,242,79,.35); }
+  .ch-ic {
+    width: 32px; height: 32px;
+    border-radius: 50%;
+    color: #fff;
+    font-family: var(--font-head);
+    font-size: 11.5px;
+    font-weight: 800;
+    display: grid;
+    place-items: center;
+  }
+  .ch-name { font-size: 13px; font-weight: 700; color: var(--ink); }
+  .ch-reach { font-size: 11px; font-weight: 600; color: var(--ink-faint); margin-top: -5px; }
+  .ch-foot { margin-top: 18px; font-size: 12.5px; font-weight: 600; color: var(--ink-soft); font-variant-numeric: tabular-nums; }
+  .ch-foot b { font-weight: 800; color: var(--ink); }
+  .ch-foot .warn { color: #b45309; font-weight: 700; }
+
+  /* ---- STEP 3: budget & schedule ---- */
+  .wiz-grid2 { display: grid; grid-template-columns: 1.35fr 1fr; gap: 24px; align-items: start; margin-top: 16px; }
+  .bud-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+  .bud-row .f-label { margin-bottom: 0; }
+  .seg.seg-mini { box-shadow: none; border: 1px solid var(--line); }
+  .seg.seg-mini button { padding: 6px 13px; font-size: 12px; }
+  .bud-num { font-size: 40px; margin: 14px 0 16px; }
+  .bud-num .cur { font-size: 22px; vertical-align: 12px; margin-right: 2px; color: var(--ink-faint); }
+  .range {
+    -webkit-appearance: none;
+    appearance: none;
+    width: 100%;
+    height: 8px;
+    border-radius: 999px;
+    background: #e7e9f0;
+    outline: none;
+    cursor: pointer;
+    display: block;
+  }
+  .range::-webkit-slider-thumb {
+    -webkit-appearance: none;
+    appearance: none;
+    width: 24px; height: 24px;
+    border-radius: 50%;
+    background: var(--ink);
+    border: 3.5px solid #fff;
+    box-shadow: 0 1px 5px rgba(22,22,26,.32);
+    cursor: grab;
+    transition: transform .15s ease;
+  }
+  .range::-webkit-slider-thumb:hover { transform: scale(1.12); }
+  .range::-webkit-slider-thumb:active { cursor: grabbing; }
+  .range::-moz-range-thumb {
+    width: 24px; height: 24px;
+    border-radius: 50%;
+    background: var(--ink);
+    border: 3.5px solid #fff;
+    box-shadow: 0 1px 5px rgba(22,22,26,.32);
+    cursor: grab;
+  }
+  .range:focus-visible { box-shadow: 0 0 0 3px rgba(79,70,229,.18); }
+  .range-scale { display: flex; justify-content: space-between; font-size: 11px; font-weight: 600; color: var(--ink-faint); margin-top: 9px; font-variant-numeric: tabular-nums; }
+  .sched { margin-top: 24px; }
+  .date-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+  .date-lab { display: block; font-size: 10.5px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; color: var(--ink-faint); margin-bottom: 6px; }
+  .date-grid .input { width: 100%; font-variant-numeric: tabular-nums; }
+  .dur-cap { font-size: 12.5px; font-weight: 600; color: var(--ink-soft); margin-top: 11px; font-variant-numeric: tabular-nums; }
+  .dur-cap.bad { color: var(--red); }
+
+  .est-card {
+    background: var(--ink);
+    color: #fff;
+    border-radius: 18px;
+    padding: 22px;
+    display: flex;
+    flex-direction: column;
+  }
+  .est-tag {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    font-size: 10.5px;
+    font-weight: 800;
+    letter-spacing: .09em;
+    color: rgba(255,255,255,.55);
+  }
+  .est-tag .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--lime); animation: estPulse 1.6s ease-out infinite; }
+  @keyframes estPulse {
+    0%        { box-shadow: 0 0 0 0 rgba(217,242,79,.45); }
+    70%, 100% { box-shadow: 0 0 0 7px rgba(217,242,79,0); }
+  }
+  .est-num { font-size: 46px; margin-top: 16px; color: var(--lime); }
+  .est-cap { font-size: 12px; font-weight: 500; color: rgba(255,255,255,.6); margin-top: 7px; }
+  .est-div { height: 1px; background: rgba(255,255,255,.14); margin: 18px 0 14px; }
+  .est-cpl { font-size: 24px; }
+  .est-cpl .cur { font-size: 15px; vertical-align: 6px; margin-right: 1px; color: rgba(255,255,255,.55); }
+  .est-cpl small { font-family: var(--font-body); font-size: 11.5px; font-weight: 600; color: rgba(255,255,255,.6); letter-spacing: .01em; margin-left: 5px; }
+
+  /* ---- STEP 4: review ---- */
+  .rev-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; margin-top: 16px; }
+  .rev-tile {
+    background: #f4f5f8;
+    border-radius: 16px;
+    padding: 16px 18px;
+    min-height: 122px;
+    display: flex;
+    flex-direction: column;
+  }
+  .rev-head {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 8px;
+    font-size: 10.5px;
+    font-weight: 700;
+    letter-spacing: .07em;
+    text-transform: uppercase;
+    color: var(--ink-faint);
+    margin-bottom: 10px;
+  }
+  .rev-edit {
+    border: none;
+    background: transparent;
+    color: var(--indigo);
+    font-family: var(--font-body);
+    font-size: 11.5px;
+    font-weight: 700;
+    letter-spacing: 0;
+    text-transform: none;
+    cursor: pointer;
+    padding: 0;
+  }
+  .rev-edit:hover { text-decoration: underline; }
+  .rev-name { font-family: var(--font-head); font-size: 17px; font-weight: 700; letter-spacing: -.01em; margin-bottom: 9px; overflow-wrap: anywhere; }
+  .rev-tags { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
+  .rv-tag { background: #fff; border: 1px solid var(--line); border-radius: 999px; padding: 3px 9px; font-size: 11px; font-weight: 600; color: var(--ink-soft); }
+  .rev-chips { display: flex; flex-wrap: wrap; gap: 6px; }
+  .rev-big { font-size: 30px; }
+  .rev-sub { font-size: 12px; font-weight: 600; color: var(--ink-soft); margin-top: 9px; font-variant-numeric: tabular-nums; }
+  .rev-tile.dark { background: var(--ink); color: #fff; }
+  .rev-tile.dark .rev-head { color: rgba(255,255,255,.5); }
+  .rev-tile.dark .rev-edit { color: var(--lime); }
+  .rev-tile.dark .rev-big { color: var(--lime); }
+  .rev-tile.dark .rev-sub { color: rgba(255,255,255,.65); }
+  .rev-unit { font-family: var(--font-body); font-size: 13px; font-weight: 600; color: rgba(255,255,255,.6); letter-spacing: 0; margin-left: 4px; }
+  .rev-note { font-size: 12px; font-weight: 500; color: var(--ink-faint); margin-top: 16px; }
+
+  /* ---- WIZARD FOOTER ---- */
+  .wiz-foot {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    margin-top: 18px;
+    animation: riseIn .5s cubic-bezier(.2,.8,.3,1) .08s both;
+  }
+  .wiz-hint {
+    flex: 1;
+    text-align: center;
+    font-size: 12.5px;
+    font-weight: 700;
+    color: #b45309;
+    opacity: 0;
+    transition: opacity .2s ease;
+  }
+  .wiz-hint.show { opacity: 1; }
+  .btn.is-dim { opacity: .45; }
+  .btn.is-dim:hover { transform: none; box-shadow: none; }
+  .btn-ghost.is-dim:hover { box-shadow: var(--shadow-tile); }
+  .wiz-launch { min-width: 320px; padding: 13px 24px; font-size: 14px; }
+  .btn.is-busy { pointer-events: none; opacity: .85; }
+  .spin {
+    width: 15px; height: 15px;
+    border: 2.5px solid rgba(255,255,255,.35);
+    border-top-color: #fff;
+    border-radius: 50%;
+    display: inline-block;
+    flex: none;
+    animation: rot .7s linear infinite;
+  }
+  @keyframes rot { to { transform: rotate(360deg); } }
+
+  /* ---- SUCCESS ---- */
+  .suc {
+    display: none;
+    max-width: 860px;
+    margin: 0 auto;
+    text-align: center;
+    padding: 58px 32px 50px;
+  }
+  .suc.on {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    animation: sucIn .45s cubic-bezier(.2,.9,.3,1.2) both;
+  }
+  @keyframes sucIn { from { opacity: 0; transform: scale(.94) translateY(14px); } }
+  .suc-check { width: 86px; height: 86px; }
+  .suc-check circle {
+    fill: none;
+    stroke: var(--lime);
+    stroke-width: 5;
+    stroke-linecap: round;
+    stroke-dasharray: 189;
+    stroke-dashoffset: 189;
+    transform: rotate(-90deg);
+    transform-origin: 50% 50%;
+  }
+  .suc.on .suc-check circle { animation: drawRing .7s cubic-bezier(.4,0,.2,1) .1s forwards; }
+  @keyframes drawRing { to { stroke-dashoffset: 0; } }
+  .suc-check path {
+    fill: none;
+    stroke: var(--ink);
+    stroke-width: 5;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+    stroke-dasharray: 42;
+    stroke-dashoffset: 42;
+  }
+  .suc.on .suc-check path { animation: drawTick .35s ease-out .72s forwards; }
+  @keyframes drawTick { to { stroke-dashoffset: 0; } }
+  .suc-title { font-family: var(--font-head); font-size: 30px; font-weight: 800; letter-spacing: -.02em; margin-top: 20px; overflow-wrap: anywhere; }
+  .suc-sub { font-size: 13.5px; font-weight: 500; color: var(--ink-soft); margin-top: 9px; }
+  .suc-actions { display: flex; gap: 12px; margin-top: 24px; flex-wrap: wrap; justify-content: center; }
+  .confetti { position: absolute; inset: 0; pointer-events: none; overflow: hidden; z-index: 2; }
+  .confetti i {
+    position: absolute;
+    left: 50%;
+    top: 32%;
+    width: 8px; height: 13px;
+    border-radius: 3px;
+    opacity: 0;
+    animation: burst 1.2s cubic-bezier(.15,.6,.4,1) forwards;
+  }
+  .confetti i.round { width: 8px; height: 8px; border-radius: 50%; }
+  @keyframes burst {
+    0%   { transform: translate(-50%, -50%) rotate(0deg); opacity: 1; }
+    70%  { opacity: 1; }
+    100% { transform: translate(calc(-50% + var(--dx)), calc(-50% + var(--dy))) rotate(var(--rot)); opacity: 0; }
+  }
+
+  /* ---- PAGE RESPONSIVE ---- */
+  @media (max-width: 1180px) {
+    .wiz-grid2 { grid-template-columns: 1fr; }
+    .ch-grid { grid-template-columns: repeat(3, 1fr); }
+    .est-card { margin-top: 2px; }
+  }
+  @media (max-width: 1428px) {
+    html[data-layout="sidebar"] .wiz-grid2 { grid-template-columns: 1fr; }
+    html[data-layout="sidebar"] .ch-grid { grid-template-columns: repeat(3, 1fr); }
+    html[data-layout="sidebar"] .est-card { margin-top: 2px; }
+  }
+  @media (max-width: 760px) {
+    .obj-grid { grid-template-columns: 1fr; }
+    .ch-grid { grid-template-columns: repeat(2, 1fr); }
+    .rev-grid { grid-template-columns: 1fr; }
+    .date-grid { grid-template-columns: 1fr; }
+    .sn-label { display: none; }
+    .steps-track { top: 17px; }
+    .wiz-panel { padding: 22px 20px; }
+    .wiz-foot { flex-wrap: wrap; }
+    .wiz-hint { order: 3; flex-basis: 100%; }
+    .wiz-launch { min-width: 0; flex: 1; }
+    .suc-actions { width: 100%; flex-direction: column; }
+  }
+
+  /* ---- REDUCED MOTION (page-local) ---- */
+  @media (prefers-reduced-motion: reduce) {
+    .steps, .wiz-foot, .wiz-panel.on, .suc.on { animation: none; opacity: 1; transform: none; }
+    .steps-fill { animation: none; background: var(--indigo); }
+    .est-tag .dot { animation: none; }
+    .selected .sel-check { animation: none; transform: scale(1); }
+    .tag { animation: none; }
+    .suc-check circle, .suc-check path { animation: none; stroke-dashoffset: 0; }
+    .confetti { display: none; }
+  }
+</style>
+</head>
+<body data-page="campaigns">
+
+<div class="page">
+
+  <header class="greeting">
+    <div>
+      <h1>New campaign</h1>
+      <p class="sub">Launch in four quick steps</p>
+    </div>
+    <div class="greeting-actions">
+      <a class="btn btn-ghost" href="campaigns.html">← Back to campaigns</a>
+    </div>
+  </header>
+
+  <main class="wiz" id="wizard">
+
+    <!-- STEP INDICATOR -->
+    <div class="steps" aria-label="Wizard progress">
+      <div class="steps-track"><div class="steps-fill" id="stepsFill"></div></div>
+      <button type="button" class="step-node current" data-step="1" aria-current="step"><span class="sn-dot">1</span><span class="sn-label">Details</span></button>
+      <button type="button" class="step-node" data-step="2"><span class="sn-dot">2</span><span class="sn-label">Channels</span></button>
+      <button type="button" class="step-node" data-step="3"><span class="sn-dot">3</span><span class="sn-label">Budget &amp; schedule</span></button>
+      <button type="button" class="step-node" data-step="4"><span class="sn-dot">4</span><span class="sn-label">Review</span></button>
+    </div>
+
+    <!-- STEP 1 · DETAILS -->
+    <section class="tile wiz-panel" id="panel1">
+      <div class="tile-label"><span>Step 1 · Details</span><span class="lab-aside">the basics</span></div>
+
+      <div class="f-row">
+        <label class="f-label" for="fName">Campaign name <em>*</em></label>
+        <input class="input f-wide" id="fName" type="text" placeholder="e.g. Summer Launch Blitz" autocomplete="off">
+      </div>
+
+      <div class="f-row">
+        <span class="f-label" id="objLabel">Objective</span>
+        <div class="obj-grid" role="radiogroup" aria-labelledby="objLabel">
+          <button type="button" class="obj-card selected" data-obj="Lead generation" role="radio" aria-checked="true">
+            <span class="obj-ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="10" cy="8" r="3.5"/><path d="M3.5 20c.8-3.3 3.3-5.3 6.5-5.3s5.7 2 6.5 5.3"/><path d="M19 6v6"/><path d="M16 9h6"/></svg></span>
+            <span class="obj-name">Lead generation</span>
+            <span class="obj-sub">Capture contacts with instant forms</span>
+            <span class="sel-check"><svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="3.4" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6L9 17l-5-5"/></svg></span>
+          </button>
+          <button type="button" class="obj-card" data-obj="Website traffic" role="radio" aria-checked="false">
+            <span class="obj-ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4.5 4.5l15 6.2-6.6 1.9-2.3 6.4z"/><path d="M13.5 13.5l6 6"/></svg></span>
+            <span class="obj-name">Website traffic</span>
+            <span class="obj-sub">Send clicks to your landing pages</span>
+            <span class="sel-check"><svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="3.4" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6L9 17l-5-5"/></svg></span>
+          </button>
+          <button type="button" class="obj-card" data-obj="Brand awareness" role="radio" aria-checked="false">
+            <span class="obj-ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="2.5"/><path d="M7.6 7.6a6.3 6.3 0 0 0 0 8.8"/><path d="M16.4 7.6a6.3 6.3 0 0 1 0 8.8"/><path d="M4.8 4.8a10.3 10.3 0 0 0 0 14.4"/><path d="M19.2 4.8a10.3 10.3 0 0 1 0 14.4"/></svg></span>
+            <span class="obj-name">Brand awareness</span>
+            <span class="obj-sub">Maximize reach and recall</span>
+            <span class="sel-check"><svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="3.4" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6L9 17l-5-5"/></svg></span>
+          </button>
+        </div>
+      </div>
+
+      <div class="f-row">
+        <label class="f-label" for="tagInput">Audience tags</label>
+        <div class="tag-box" id="tagBox">
+          <input id="tagInput" type="text" placeholder="Add a tag, press Enter" autocomplete="off">
+        </div>
+      </div>
+
+      <div class="f-row">
+        <label class="f-label" for="fDesc">Description <span class="opt">· optional</span></label>
+        <textarea class="input f-wide" id="fDesc" rows="3" placeholder="What is this campaign about? Notes for your team…"></textarea>
+      </div>
+    </section>
+
+    <!-- STEP 2 · CHANNELS -->
+    <section class="tile wiz-panel" id="panel2">
+      <div class="tile-label"><span>Step 2 · Channels</span><span class="lab-aside">multi-select · pick at least one</span></div>
+      <div class="ch-grid" id="chGrid"></div>
+      <p class="ch-foot" id="chFoot"></p>
+    </section>
+
+    <!-- STEP 3 · BUDGET & SCHEDULE -->
+    <section class="tile wiz-panel" id="panel3">
+      <div class="tile-label"><span>Step 3 · Budget &amp; schedule</span><span class="lab-aside">drag to set spend</span></div>
+      <div class="wiz-grid2">
+        <div>
+          <div class="bud-row">
+            <span class="f-label">Budget</span>
+            <div class="seg seg-mini" id="budMode" role="group" aria-label="Budget type">
+              <button type="button" data-mode="daily">Daily</button>
+              <button type="button" data-mode="lifetime" class="active">Lifetime</button>
+            </div>
+          </div>
+          <div class="bud-num big-num"><span class="cur">$</span><span id="budgetNum">7,500</span></div>
+          <input class="range" type="range" id="budgetRange" min="500" max="25000" step="100" value="7500" aria-label="Budget amount">
+          <div class="range-scale"><span>$500</span><span>$25,000</span></div>
+
+          <div class="sched">
+            <span class="f-label">Schedule</span>
+            <div class="date-grid">
+              <div><label class="date-lab" for="dateStart">Start</label><input class="input" type="date" id="dateStart"></div>
+              <div><label class="date-lab" for="dateEnd">End</label><input class="input" type="date" id="dateEnd"></div>
+            </div>
+            <p class="dur-cap" id="durCap"></p>
+          </div>
+        </div>
+
+        <aside class="est-card" aria-live="polite">
+          <span class="est-tag"><span class="dot"></span>LIVE ESTIMATE</span>
+          <div class="est-num big-num" id="estLeads">0</div>
+          <p class="est-cap" id="estLeadsCap">estimated leads over the full flight</p>
+          <div class="est-div"></div>
+          <div class="est-cpl big-num"><span class="cur">$</span><span id="estCpl">0.00</span><small>est. CPL</small></div>
+          <p class="est-cap" id="estCplCap">blended CPL · 0 channels</p>
+        </aside>
+      </div>
+    </section>
+
+    <!-- STEP 4 · REVIEW -->
+    <section class="tile wiz-panel" id="panel4">
+      <div class="tile-label"><span>Step 4 · Review &amp; launch</span><span class="lab-aside">one last look</span></div>
+      <div class="rev-grid">
+        <div class="rev-tile">
+          <div class="rev-head"><span>Campaign</span><button type="button" class="rev-edit" data-step="1">Edit</button></div>
+          <div class="rev-name" id="revName"></div>
+          <span class="chip lime" id="revObj"></span>
+          <div class="rev-tags" id="revTags"></div>
+        </div>
+        <div class="rev-tile">
+          <div class="rev-head"><span>Channels</span><button type="button" class="rev-edit" data-step="2">Edit</button></div>
+          <div class="rev-chips" id="revChips"></div>
+          <p class="rev-sub" id="revReach"></p>
+        </div>
+        <div class="rev-tile">
+          <div class="rev-head"><span>Budget &amp; dates</span><button type="button" class="rev-edit" data-step="3">Edit</button></div>
+          <div class="rev-big big-num" id="revBudget"></div>
+          <p class="rev-sub" id="revDates"></p>
+        </div>
+        <div class="rev-tile dark">
+          <div class="rev-head"><span>Estimated results</span><button type="button" class="rev-edit" data-step="3">Edit</button></div>
+          <div class="rev-big big-num"><span id="revLeads">0</span><span class="rev-unit">leads</span></div>
+          <p class="rev-sub" id="revCpl"></p>
+        </div>
+      </div>
+      <p class="rev-note">Everything can still be changed after launch — budgets sync to each channel within a few minutes.</p>
+    </section>
+
+    <!-- FOOTER NAV -->
+    <div class="wiz-foot">
+      <button type="button" class="btn btn-ghost" id="backBtn">← Back</button>
+      <span class="wiz-hint" id="wizHint" role="alert"></span>
+      <button type="button" class="btn btn-primary" id="nextBtn">Continue →</button>
+    </div>
+
+  </main>
+
+  <!-- SUCCESS STATE -->
+  <section class="suc tile" id="successBox" aria-live="polite">
+    <div class="confetti" id="confettiBox" aria-hidden="true"></div>
+    <svg class="suc-check" viewBox="0 0 72 72" aria-hidden="true">
+      <circle cx="36" cy="36" r="30"/>
+      <path d="M23 37.5l9.5 9.5L50 27"/>
+    </svg>
+    <h2 class="suc-title" id="sucTitle"></h2>
+    <p class="suc-sub" id="sucSub"></p>
+    <div class="suc-actions">
+      <a class="btn btn-ink" href="campaigns.html">View campaigns</a>
+      <a class="btn btn-ghost" href="index.html">Go to dashboard</a>
+    </div>
+  </section>
+
+</div>
+
+<script src="assets/data.js"></script>
+<script src="assets/shell.js"></script>
+<script>
+(function () {
+  "use strict";
+
+  var S = window.Shell, D = window.PulseData;
+  var $ = S.$, fmt = S.fmt, countUp = S.countUp, REDUCED = S.REDUCED;
+  var CHANNELS = D.CHANNELS;
+
+  function slice(list) { return Array.prototype.slice.call(list); }
+
+  /* per-channel fake economics (indexed like PulseData.CHANNELS) */
+  var CPLS  = [3.4, 2.9, 6.1, 2.2, 4.4];
+  var REACH = [2400000, 1800000, 920000, 3100000, 740000];
+  var INITIALS = { fb: "f", ig: "ig", li: "in", tt: "tt", x: "x" };
+  var MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+  var CHECK = '<svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="3.4" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6L9 17l-5-5"/></svg>';
+
+  /* ================= WIZARD STATE ================= */
+  var state = {
+    step: 1,
+    name: "",
+    obj: "Lead generation",
+    tags: ["SaaS founders", "25–44"],
+    desc: "",
+    ch: [false, false, false, false, false],
+    budget: 7500,
+    mode: "lifetime"
+  };
+  var launched = false;
+
+  var panels = slice(document.querySelectorAll(".wiz-panel"));
+  var nodes  = slice(document.querySelectorAll(".step-node"));
+  var backBtn = $("backBtn"), nextBtn = $("nextBtn"), hint = $("wizHint");
+
+  function selChannels() {
+    var a = [];
+    state.ch.forEach(function (v, i) { if (v) a.push(i); });
+    return a;
+  }
+  function blended() {
+    var sel = selChannels();
+    if (!sel.length) return CPLS[0];
+    var t = 0;
+    sel.forEach(function (i) { t += CPLS[i]; });
+    return t / sel.length;
+  }
+  function estLeadsVal() { return Math.round(state.budget / blended()); }
+  function fmtReach(n) {
+    return n >= 1e6 ? (Math.round(n / 1e5) / 10) + "M" : Math.round(n / 1e3) + "K";
+  }
+
+  /* ================= STEP INDICATOR ================= */
+  function syncSteps() {
+    $("stepsFill").style.width = ((state.step - 1) / 3 * 100) + "%";
+    nodes.forEach(function (nd) {
+      var s = +nd.dataset.step;
+      nd.classList.toggle("done", s < state.step);
+      nd.classList.toggle("current", s === state.step);
+      if (s === state.step) nd.setAttribute("aria-current", "step");
+      else nd.removeAttribute("aria-current");
+      nd.querySelector(".sn-dot").innerHTML = s < state.step ? CHECK : String(s);
+    });
+  }
+  nodes.forEach(function (nd) {
+    nd.addEventListener("click", function () {
+      var s = +nd.dataset.step;
+      if (s < state.step && !launched) goTo(s, -1);
+    });
+  });
+
+  /* ================= NAVIGATION ================= */
+  function goTo(n, dir) {
+    if (n === state.step || n < 1 || n > 4) return;
+    panels[state.step - 1].classList.remove("on", "fwd", "back", "shake");
+    state.step = n;
+    var p = panels[n - 1];
+    p.classList.remove("fwd", "back", "shake");
+    void p.offsetWidth;
+    p.classList.add("on", dir < 0 ? "back" : "fwd");
+    syncSteps();
+    footerSync();
+    hideHint();
+    if (n === 3) renderEst(true);
+    if (n === 4) renderReview();
+  }
+
+  function valid() {
+    if (state.step === 1) return !!$("fName").value.trim();
+    if (state.step === 2) return selChannels().length > 0;
+    return true;
+  }
+
+  function footerSync() {
+    if (launched) return;
+    backBtn.style.visibility = state.step === 1 ? "hidden" : "visible";
+    if (state.step === 4) {
+      nextBtn.className = "btn btn-ink wiz-launch";
+      nextBtn.innerHTML = "🚀 Launch campaign";
+    } else {
+      nextBtn.className = "btn btn-primary";
+      nextBtn.textContent = "Continue →";
+    }
+    nextBtn.classList.toggle("is-dim", !valid());
+  }
+
+  function showHint(msg) { hint.textContent = msg; hint.classList.add("show"); }
+  function hideHint() { hint.classList.remove("show"); }
+
+  nextBtn.addEventListener("click", function () {
+    if (launched) return;
+    if (!valid()) {
+      var p = panels[state.step - 1];
+      p.classList.remove("shake");
+      void p.offsetWidth;
+      p.classList.add("shake");
+      showHint(state.step === 1 ? "Name your campaign to continue" : "Select at least one channel to continue");
+      return;
+    }
+    if (state.step === 4) { launch(); return; }
+    goTo(state.step + 1, 1);
+  });
+  backBtn.addEventListener("click", function () {
+    if (state.step > 1 && !launched) goTo(state.step - 1, -1);
+  });
+  panels.forEach(function (p) {
+    p.addEventListener("animationend", function (e) {
+      if (e.animationName === "shakeX") p.classList.remove("shake");
+    });
+  });
+
+  /* ================= STEP 1 · DETAILS ================= */
+  $("fName").addEventListener("input", function () {
+    state.name = this.value;
+    footerSync();
+    if (this.value.trim()) hideHint();
+  });
+  $("fName").addEventListener("keydown", function (e) {
+    if (e.key === "Enter") { e.preventDefault(); nextBtn.click(); }
+  });
+  $("fDesc").addEventListener("input", function () { state.desc = this.value; });
+
+  var objCards = slice(document.querySelectorAll(".obj-card"));
+  objCards.forEach(function (card) {
+    card.addEventListener("click", function () {
+      state.obj = card.dataset.obj;
+      objCards.forEach(function (c) {
+        c.classList.toggle("selected", c === card);
+        c.setAttribute("aria-checked", c === card ? "true" : "false");
+      });
+    });
+  });
+
+  /* tags */
+  var tagBox = $("tagBox"), tagInput = $("tagInput");
+  function renderTags() {
+    slice(tagBox.querySelectorAll(".tag")).forEach(function (t) { t.remove(); });
+    state.tags.forEach(function (t, i) {
+      var chip = document.createElement("span");
+      chip.className = "tag";
+      var lbl = document.createElement("span");
+      lbl.textContent = t;
+      var x = document.createElement("button");
+      x.type = "button";
+      x.className = "tag-x";
+      x.setAttribute("aria-label", "Remove " + t);
+      x.textContent = "×";
+      x.addEventListener("click", function (e) {
+        e.stopPropagation();
+        state.tags.splice(i, 1);
+        renderTags();
+      });
+      chip.appendChild(lbl);
+      chip.appendChild(x);
+      tagBox.insertBefore(chip, tagInput);
+    });
+  }
+  function addTag(v) {
+    v = v.replace(/,/g, " ").replace(/\s+/g, " ").trim();
+    if (!v || state.tags.indexOf(v) >= 0) return;
+    state.tags.push(v);
+    renderTags();
+  }
+  tagInput.addEventListener("keydown", function (e) {
+    if (e.key === "Enter" || e.key === ",") {
+      e.preventDefault();
+      addTag(tagInput.value);
+      tagInput.value = "";
+    } else if (e.key === "Backspace" && !tagInput.value && state.tags.length) {
+      state.tags.pop();
+      renderTags();
+    }
+  });
+  tagInput.addEventListener("blur", function () {
+    if (tagInput.value.trim()) { addTag(tagInput.value); tagInput.value = ""; }
+  });
+  tagBox.addEventListener("click", function () { tagInput.focus(); });
+
+  /* ================= STEP 2 · CHANNELS ================= */
+  var chGrid = $("chGrid");
+  CHANNELS.forEach(function (ch, i) {
+    var b = document.createElement("button");
+    b.type = "button";
+    b.className = "ch-tile";
+    b.setAttribute("aria-pressed", "false");
+    b.innerHTML =
+      '<span class="ch-ic" style="background:var(--' + ch.key + ')">' + INITIALS[ch.key] + "</span>" +
+      '<span class="ch-name">' + ch.name + "</span>" +
+      '<span class="ch-reach">est. reach ' + fmtReach(REACH[i]) + "</span>" +
+      '<span class="sel-check">' + CHECK + "</span>";
+    b.addEventListener("click", function () {
+      state.ch[i] = !state.ch[i];
+      b.classList.toggle("selected", state.ch[i]);
+      b.setAttribute("aria-pressed", state.ch[i] ? "true" : "false");
+      chFootSync();
+      footerSync();
+      if (selChannels().length) hideHint();
+    });
+    chGrid.appendChild(b);
+  });
+
+  function chFootSync() {
+    var sel = selChannels(), foot = $("chFoot");
+    if (!sel.length) {
+      foot.innerHTML = '<span class="warn">No channels selected yet — pick at least one to continue.</span>';
+      return;
+    }
+    var sum = 0;
+    sel.forEach(function (i) { sum += REACH[i]; });
+    foot.innerHTML = "<b>" + sel.length + "</b> channel" + (sel.length > 1 ? "s" : "") +
+      " selected · combined reach ~<b>" + fmtReach(sum) + "</b>";
+  }
+
+  /* ================= STEP 3 · BUDGET & SCHEDULE ================= */
+  var range = $("budgetRange");
+  function rangeFill() {
+    var pct = (state.budget - 500) / (25000 - 500) * 100;
+    range.style.background = "linear-gradient(90deg, var(--lime) " + pct + "%, #e7e9f0 " + pct + "%)";
+  }
+  range.addEventListener("input", function () {
+    state.budget = +range.value;
+    $("budgetNum").textContent = fmt(state.budget);
+    rangeFill();
+    renderEst(false);
+  });
+  range.addEventListener("change", function () { renderEst(true); });
+
+  var modeBtns = slice($("budMode").querySelectorAll("button"));
+  modeBtns.forEach(function (b) {
+    b.addEventListener("click", function () {
+      if (state.mode === b.dataset.mode) return;
+      state.mode = b.dataset.mode;
+      modeBtns.forEach(function (o) { o.classList.toggle("active", o === b); });
+      renderEst(true);
+    });
+  });
+
+  function renderEst(animate) {
+    var sel = selChannels(), cpl = blended(), leads = estLeadsVal();
+    $("estLeadsCap").textContent = state.mode === "daily"
+      ? "estimated leads per day"
+      : "estimated leads over the full flight";
+    $("estCplCap").textContent = "blended CPL · " + (sel.length || 1) + " channel" + (sel.length === 1 ? "" : "s");
+    if (animate && !REDUCED) {
+      countUp($("estLeads"), leads, { dur: 700 });
+      countUp($("estCpl"), cpl, { dec: 2, dur: 700 });
+    } else {
+      $("estLeads").textContent = fmt(leads);
+      $("estCpl").textContent = cpl.toFixed(2);
+    }
+  }
+
+  /* dates */
+  var ds = $("dateStart"), de = $("dateEnd");
+  function iso(d) {
+    var m = d.getMonth() + 1, day = d.getDate();
+    return d.getFullYear() + "-" + (m < 10 ? "0" : "") + m + "-" + (day < 10 ? "0" : "") + day;
+  }
+  function parseD(v) { return v ? new Date(v + "T00:00:00") : null; }
+  function fmtD(d) { return MONTHS[d.getMonth()] + " " + d.getDate(); }
+  var now = new Date();
+  ds.value = iso(now);
+  de.value = iso(new Date(now.getTime() + 30 * 864e5));
+
+  function durSync() {
+    var s = parseD(ds.value), e = parseD(de.value), cap = $("durCap");
+    cap.classList.remove("bad");
+    if (!s || !e) { cap.textContent = "Pick start and end dates to set the flight."; return; }
+    var days = Math.round((e - s) / 864e5);
+    if (days <= 0) { cap.textContent = "End date must be after the start date."; cap.classList.add("bad"); return; }
+    cap.textContent = fmtD(s) + " → " + fmtD(e) + " · " + days + "-day flight";
+  }
+  ds.addEventListener("change", durSync);
+  de.addEventListener("change", durSync);
+
+  /* ================= STEP 4 · REVIEW ================= */
+  function renderReview() {
+    $("revName").textContent = state.name.trim();
+    $("revObj").textContent = state.obj;
+
+    var rt = $("revTags");
+    rt.innerHTML = "";
+    state.tags.forEach(function (t) {
+      var s = document.createElement("span");
+      s.className = "rv-tag";
+      s.textContent = t;
+      rt.appendChild(s);
+    });
+
+    var sel = selChannels();
+    var rc = $("revChips");
+    rc.innerHTML = "";
+    sel.forEach(function (i) {
+      var c = document.createElement("span");
+      c.className = "camp-chip";
+      c.style.background = "var(--" + CHANNELS[i].key + ")";
+      c.textContent = CHANNELS[i].name;
+      rc.appendChild(c);
+    });
+    var sum = 0;
+    sel.forEach(function (i) { sum += REACH[i]; });
+    $("revReach").textContent = "combined reach ~" + fmtReach(sum);
+
+    $("revBudget").textContent = "$" + fmt(state.budget);
+    var s = parseD(ds.value), e = parseD(de.value);
+    var dateTxt = (s && e)
+      ? fmtD(s) + " → " + fmtD(e) + " · " + Math.max(0, Math.round((e - s) / 864e5)) + " days"
+      : "dates not set";
+    $("revDates").textContent = (state.mode === "daily" ? "Daily" : "Lifetime") + " budget · " + dateTxt;
+
+    countUp($("revLeads"), estLeadsVal(), { dur: 800 });
+    $("revCpl").textContent = "≈ $" + blended().toFixed(2) + " blended CPL · " + sel.length + " channel" + (sel.length === 1 ? "" : "s");
+  }
+
+  slice(document.querySelectorAll(".rev-edit")).forEach(function (b) {
+    b.addEventListener("click", function () { goTo(+b.dataset.step, -1); });
+  });
+
+  /* ================= LAUNCH & SUCCESS ================= */
+  function launch() {
+    launched = true;
+    nextBtn.classList.add("is-busy");
+    nextBtn.innerHTML = '<span class="spin" aria-hidden="true"></span>Launching…';
+    S.later(showSuccess, 900);
+  }
+
+  function showSuccess() {
+    $("wizard").style.display = "none";
+    var n = selChannels().length;
+    $("sucTitle").textContent = (state.name.trim() || "Your campaign") + " is live!";
+    $("sucSub").textContent = "Syncing to " + n + " channel" + (n === 1 ? "" : "s") + "… first leads usually land within the hour.";
+    $("successBox").classList.add("on");
+    confetti($("confettiBox"));
+  }
+
+  function confetti(box) {
+    if (REDUCED) return;
+    var colors = ["var(--lime)", "var(--indigo)", "var(--ig)"];
+    var N = 22;
+    for (var i = 0; i < N; i++) {
+      var p = document.createElement("i");
+      if (i % 4 === 3) p.className = "round";
+      var ang = (Math.PI * 2 * i) / N + Math.random() * 0.6;
+      var dist = 80 + Math.random() * 160;
+      p.style.setProperty("--dx", Math.round(Math.cos(ang) * dist) + "px");
+      p.style.setProperty("--dy", Math.round(Math.sin(ang) * dist * 0.75 + 130) + "px");
+      p.style.setProperty("--rot", Math.round(Math.random() * 560 - 280) + "deg");
+      p.style.background = colors[i % colors.length];
+      p.style.animationDelay = Math.round(Math.random() * 140) + "ms";
+      box.appendChild(p);
+    }
+    setTimeout(function () { box.innerHTML = ""; }, 1700);
+  }
+
+  /* ================= BOOT ================= */
+  renderTags();
+  chFootSync();
+  rangeFill();
+  renderEst(false);
+  durSync();
+  syncSteps();
+  footerSync();
+  panels[0].classList.add("on", "fwd");
+})();
+</script>
+</body>
+</html>

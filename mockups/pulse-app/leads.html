@@ -1,0 +1,1078 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>LeadFlow — Pulse · Leads</title>
+<script>
+(function(){var l="dock";try{l=localStorage.getItem("pulse.layout")||"dock"}catch(e){}
+document.documentElement.setAttribute("data-layout",/^(dock|sidebar)$/.test(l)?l:"dock");})();
+</script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Sora:wght@500;600;700;800&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="assets/pulse.css">
+<style>
+  /* ============ LEADS-ONLY STYLES ============ */
+  .lead-grid {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 16px;
+  }
+  .t-toolbar, .t-table { grid-column: 1 / -1; }
+
+  /* ---- STAT ROW ---- */
+  .t-stat {
+    display: flex;
+    flex-direction: column;
+    min-height: 128px;
+    padding: 20px 22px;
+  }
+  .stat-num { font-size: 36px; margin-top: auto; }
+  .stat-num .unit { font-size: 19px; font-weight: 700; color: var(--ink-faint); margin-left: 2px; }
+  .stat-foot { font-size: 11.5px; color: var(--ink-faint); margin-top: 7px; font-weight: 500; }
+
+  /* ---- TOOLBAR ---- */
+  .t-toolbar {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    flex-wrap: wrap;
+    padding: 16px 18px;
+  }
+  .tb-search { flex: 1; min-width: 200px; }
+  .sel {
+    appearance: none;
+    -webkit-appearance: none;
+    padding-right: 34px;
+    background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6'><path d='M1 1l4 4 4-4' fill='none' stroke='%239b9eab' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'/></svg>");
+    background-repeat: no-repeat;
+    background-position: right 13px center;
+    cursor: pointer;
+  }
+  .tb-count {
+    font-size: 12.5px;
+    font-weight: 600;
+    color: var(--ink-soft);
+    white-space: nowrap;
+    font-variant-numeric: tabular-nums;
+    padding: 0 4px;
+  }
+  .tb-spacer { flex: 1 1 0; min-width: 0; }
+
+  /* ---- TABLE ---- */
+  .t-table { padding: 18px 20px 16px; display: flex; flex-direction: column; }
+  .lead-table { --tcols: 36px minmax(0,1.9fr) minmax(0,1.05fr) minmax(0,1.45fr) 138px 108px 64px; }
+  .lead-head, .lead-row {
+    display: grid;
+    grid-template-columns: var(--tcols);
+    gap: 12px;
+    align-items: center;
+    padding: 10px 10px;
+  }
+  .lead-head {
+    font-size: 10.5px;
+    font-weight: 700;
+    letter-spacing: .07em;
+    text-transform: uppercase;
+    color: var(--ink-faint);
+    border-bottom: 1px solid #eef0f4;
+    padding-top: 2px;
+    padding-bottom: 9px;
+  }
+  .lead-row {
+    border-bottom: 1px solid #f1f2f6;
+    border-radius: 12px;
+    cursor: pointer;
+    opacity: 0;
+    animation: rowIn .42s ease forwards;
+    transition: background .14s ease;
+  }
+  .lead-row:last-child { border-bottom-color: transparent; }
+  .lead-row:hover { background: #f6f7fa; }
+  @keyframes rowIn {
+    from { opacity: 0; transform: translateY(6px); }
+    to   { opacity: 1; transform: none; }
+  }
+  .cell { min-width: 0; }
+  .lcheck {
+    width: 16px; height: 16px;
+    accent-color: var(--indigo);
+    cursor: pointer;
+    display: block;
+  }
+  .c-lead { display: flex; align-items: center; gap: 11px; }
+  .avatar {
+    width: 34px; height: 34px;
+    border-radius: 50%;
+    display: grid;
+    place-items: center;
+    font-family: var(--font-head);
+    font-size: 11.5px;
+    font-weight: 800;
+    flex: none;
+  }
+  .l-id { min-width: 0; display: flex; flex-direction: column; gap: 1px; }
+  .l-name { font-size: 13px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .l-email { font-size: 11.5px; color: var(--ink-faint); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .c-company { font-size: 12.5px; font-weight: 500; color: var(--ink-soft); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .c-camp { display: flex; flex-direction: column; gap: 4px; align-items: flex-start; }
+  .c-camp-name { font-size: 12.5px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%; }
+  .c-date { font-size: 12.5px; font-weight: 500; color: var(--ink-soft); font-variant-numeric: tabular-nums; }
+
+  /* score mini meter */
+  .scorebox { display: flex; align-items: center; gap: 8px; }
+  .scorebox b { font-family: var(--font-head); font-size: 13.5px; font-weight: 700; font-variant-numeric: tabular-nums; }
+  .meter { display: inline-flex; gap: 3px; }
+  .meter i { width: 11px; height: 5px; border-radius: 3px; background: #e8eaf0; }
+  .meter i.on.g { background: var(--green); }
+  .meter i.on.a { background: var(--amber); }
+  .meter i.on.x { background: #c3c7d1; }
+
+  /* lead-status pill (same shape as .status) + dropdown */
+  .st-pill {
+    border: none;
+    cursor: pointer;
+    font-family: var(--font-body);
+    padding: 5px 11px;
+    transition: transform .15s ease, box-shadow .15s ease;
+  }
+  .st-pill:hover { transform: translateY(-1px); box-shadow: 0 4px 10px -4px rgba(22,22,26,.25); }
+  .st-pill:active { transform: scale(.96); }
+  .st-pill svg { opacity: .5; margin-left: 1px; }
+  .st-pill.pill-pop { animation: pillPop .42s cubic-bezier(.2,.9,.3,1.4); }
+  @keyframes pillPop {
+    0%   { transform: scale(1); }
+    40%  { transform: scale(1.16); }
+    100% { transform: scale(1); }
+  }
+  .status.s-new          { background: rgba(79,70,229,.12); color: var(--indigo-deep); }
+  .status.s-new .dot     { background: var(--indigo); }
+  .status.s-contacted    { background: rgba(245,158,11,.13); color: #b45309; }
+  .status.s-contacted .dot { background: var(--amber); }
+  .status.s-qualified    { background: rgba(34,197,94,.12); color: #15803d; }
+  .status.s-qualified .dot { background: var(--green); }
+  .status.s-disqualified { background: #f0f1f5; color: var(--ink-faint); }
+  .status.s-disqualified .dot { background: #c9ccd6; }
+
+  .st-menu {
+    position: fixed;
+    z-index: 360;
+    min-width: 176px;
+    background: #fff;
+    border-radius: 14px;
+    padding: 5px;
+    box-shadow: 0 4px 12px rgba(22,22,26,.10), 0 24px 50px -12px rgba(22,22,26,.35);
+    opacity: 0;
+    transform: translateY(-4px) scale(.96);
+    transform-origin: top left;
+    pointer-events: none;
+    transition: opacity .16s ease, transform .16s ease;
+  }
+  .st-menu.open { opacity: 1; transform: none; pointer-events: auto; }
+  .st-menu button {
+    display: flex;
+    align-items: center;
+    gap: 9px;
+    width: 100%;
+    border: none;
+    background: transparent;
+    border-radius: 9px;
+    padding: 8px 10px;
+    font-family: var(--font-body);
+    font-size: 12.5px;
+    font-weight: 600;
+    color: var(--ink);
+    cursor: pointer;
+    text-align: left;
+    transition: background .13s ease;
+  }
+  .st-menu button:hover { background: #f2f3f7; }
+  .st-menu button.on { background: #f2f3f7; }
+  .st-menu .sdot { width: 8px; height: 8px; border-radius: 50%; flex: none; }
+  .st-menu .mk { margin-left: auto; opacity: 0; color: var(--indigo); flex: none; }
+  .st-menu button.on .mk { opacity: 1; }
+
+  /* empty state */
+  .empty { padding: 44px 20px; text-align: center; }
+  .empty-t { font-family: var(--font-head); font-size: 16px; font-weight: 700; }
+  .empty-s { font-size: 12.5px; color: var(--ink-faint); margin-top: 6px; font-weight: 500; }
+
+  /* pagination footer */
+  .tfoot {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    flex-wrap: wrap;
+    gap: 10px;
+    padding: 14px 10px 2px;
+  }
+  .pg-info { font-size: 12px; font-weight: 600; color: var(--ink-faint); font-variant-numeric: tabular-nums; }
+  .pg { display: flex; gap: 6px; }
+  .pg-btn {
+    min-width: 32px; height: 32px;
+    padding: 0 6px;
+    border-radius: 999px;
+    border: 1px solid var(--line);
+    background: #fff;
+    font-family: var(--font-body);
+    font-size: 12.5px;
+    font-weight: 700;
+    color: var(--ink-soft);
+    cursor: pointer;
+    transition: border-color .15s ease, color .15s ease, background .15s ease, transform .12s ease;
+  }
+  .pg-btn:hover:not(:disabled):not(.on) { border-color: var(--ink); color: var(--ink); transform: translateY(-1px); }
+  .pg-btn:active:not(:disabled) { transform: scale(.94); }
+  .pg-btn.on { background: var(--ink); color: #fff; border-color: var(--ink); }
+  .pg-btn:disabled { opacity: .35; cursor: default; }
+
+  /* ---- BULK BAR ---- */
+  .bulk-bar {
+    position: fixed;
+    bottom: 22px;
+    left: calc(50% + var(--shell-left, 0px) / 2);
+    transform: translate(-50%, 90px);
+    z-index: 320;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    background: var(--ink);
+    color: #fff;
+    border-radius: 999px;
+    padding: 10px 12px 10px 18px;
+    box-shadow: 0 6px 14px rgba(22,22,26,.22), 0 28px 60px -16px rgba(22,22,26,.5);
+    max-width: calc(100vw - 24px);
+    flex-wrap: wrap;
+    opacity: 0;
+    pointer-events: none;
+    transition: transform .35s cubic-bezier(.2,.8,.3,1.1), opacity .25s ease;
+  }
+  .bulk-bar.show { transform: translate(-50%, 0); opacity: 1; pointer-events: auto; }
+  .bulk-count { font-size: 12.5px; font-weight: 700; white-space: nowrap; font-variant-numeric: tabular-nums; }
+  .bulk-div { width: 1px; height: 18px; background: rgba(255,255,255,.18); flex: none; }
+  .bulk-btn {
+    border: 1px solid rgba(255,255,255,.14);
+    background: rgba(255,255,255,.10);
+    color: #fff;
+    border-radius: 999px;
+    padding: 7px 13px;
+    font-family: var(--font-body);
+    font-size: 12px;
+    font-weight: 700;
+    cursor: pointer;
+    white-space: nowrap;
+    transition: background .15s ease, transform .12s ease;
+  }
+  .bulk-btn:hover { background: rgba(255,255,255,.22); }
+  .bulk-btn:active { transform: scale(.95); }
+  .bulk-x {
+    width: 28px; height: 28px;
+    border: none;
+    border-radius: 50%;
+    background: rgba(255,255,255,.10);
+    color: rgba(255,255,255,.75);
+    display: grid;
+    place-items: center;
+    cursor: pointer;
+    transition: background .15s ease, color .15s ease;
+  }
+  .bulk-x:hover { background: rgba(255,255,255,.22); color: #fff; }
+  .bulk-x svg { width: 11px; height: 11px; }
+
+  /* ---- DRAWER ---- */
+  .drawer-scrim {
+    position: fixed;
+    inset: 0;
+    background: rgba(22,22,26,.38);
+    z-index: 300;
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity .3s ease;
+  }
+  .drawer-scrim.show { opacity: 1; pointer-events: auto; }
+  .drawer {
+    position: fixed;
+    top: 12px; right: 12px; bottom: 12px;
+    width: 420px;
+    max-width: calc(100vw - 24px);
+    background: #fff;
+    border-radius: 22px;
+    z-index: 340;
+    display: flex;
+    flex-direction: column;
+    box-shadow: 0 6px 16px rgba(22,22,26,.14), 0 40px 90px -20px rgba(22,22,26,.45);
+    transform: translateX(calc(100% + 36px));
+    transition: transform .38s cubic-bezier(.3,.8,.3,1);
+  }
+  .drawer.open { transform: none; }
+  .drawer-top {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    padding: 22px 22px 0;
+  }
+  .d-avatar {
+    width: 54px; height: 54px;
+    border-radius: 50%;
+    display: grid;
+    place-items: center;
+    font-family: var(--font-head);
+    font-size: 17px;
+    font-weight: 800;
+    flex: none;
+  }
+  .d-id { min-width: 0; flex: 1; }
+  .d-id h2 {
+    font-family: var(--font-head);
+    font-size: 19px;
+    font-weight: 800;
+    letter-spacing: -.02em;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .d-id p { font-size: 12.5px; color: var(--ink-soft); font-weight: 500; margin-top: 2px; }
+  .d-close {
+    width: 32px; height: 32px;
+    border-radius: 50%;
+    border: 1px solid var(--line);
+    background: #fff;
+    color: var(--ink-soft);
+    display: grid;
+    place-items: center;
+    cursor: pointer;
+    flex: none;
+    align-self: flex-start;
+    transition: background .15s ease, color .15s ease, transform .15s ease;
+  }
+  .d-close:hover { background: var(--ink); color: #fff; transform: scale(1.06); }
+  .d-close svg { width: 12px; height: 12px; }
+  .d-statusrow {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 14px 22px 16px;
+    border-bottom: 1px solid var(--line);
+  }
+  .d-lid { font-size: 11.5px; font-weight: 700; color: var(--ink-faint); font-variant-numeric: tabular-nums; margin-left: auto; }
+  .drawer-body { flex: 1; overflow-y: auto; padding: 18px 22px 8px; }
+  .d-sec {
+    font-size: 10.5px;
+    font-weight: 700;
+    letter-spacing: .08em;
+    text-transform: uppercase;
+    color: var(--ink-faint);
+    margin: 18px 0 9px;
+  }
+  .d-sec:first-child { margin-top: 0; }
+  .d-row {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    width: 100%;
+    border: none;
+    background: #f6f7fa;
+    border-radius: 12px;
+    padding: 11px 13px;
+    margin-bottom: 8px;
+    font-family: var(--font-body);
+    cursor: pointer;
+    text-align: left;
+    transition: background .15s ease;
+  }
+  .d-row:hover { background: #eef0f5; }
+  .d-row .d-k { flex: none; }
+  .d-row .d-v { flex: 1; min-width: 0; text-align: right; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .d-row svg { width: 13px; height: 13px; color: var(--ink-faint); flex: none; }
+  .d-k { font-size: 10.5px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; color: var(--ink-faint); display: block; }
+  .d-v { font-size: 13px; font-weight: 600; color: var(--ink); }
+  .d-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 13px 14px; }
+  .d-grid .d-k { margin-bottom: 5px; }
+
+  /* timeline */
+  .tl { position: relative; padding-left: 18px; margin: 2px 0 10px; }
+  .tl::before {
+    content: "";
+    position: absolute;
+    left: 4px; top: 6px; bottom: 10px;
+    width: 2px;
+    background: #eef0f4;
+    border-radius: 2px;
+  }
+  .tl-item {
+    position: relative;
+    padding: 0 0 16px 4px;
+    opacity: 0;
+    animation: rowIn .4s ease forwards;
+  }
+  .tl-item:last-child { padding-bottom: 4px; }
+  .tl-dot {
+    position: absolute;
+    left: -18.5px; top: 4px;
+    width: 9px; height: 9px;
+    border-radius: 50%;
+    background: var(--indigo);
+    box-shadow: 0 0 0 3px #fff;
+  }
+  .tl-item:first-child .tl-dot { background: var(--lime); box-shadow: 0 0 0 3px #fff, 0 0 0 5px rgba(217,242,79,.4); }
+  .tl-t { font-size: 13px; font-weight: 600; }
+  .tl-when { font-size: 11.5px; color: var(--ink-faint); font-weight: 500; margin-top: 2px; }
+
+  .drawer-foot {
+    display: flex;
+    gap: 10px;
+    padding: 16px 22px;
+    border-top: 1px solid var(--line);
+  }
+  .drawer-foot .btn { flex: 1; }
+
+  /* ---- TOAST ---- */
+  .toast {
+    position: fixed;
+    bottom: 96px;
+    left: calc(50% + var(--shell-left, 0px) / 2);
+    transform: translate(-50%, 8px);
+    z-index: 380;
+    background: var(--ink);
+    color: #fff;
+    font-size: 12.5px;
+    font-weight: 700;
+    padding: 9px 16px;
+    border-radius: 999px;
+    box-shadow: 0 14px 30px -8px rgba(22,22,26,.45);
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity .22s ease, transform .22s ease;
+  }
+  .toast.show { opacity: 1; transform: translate(-50%, 0); }
+
+  /* ---- PAGE RESPONSIVE ---- */
+  @media (max-width: 1180px) {
+    .lead-grid { grid-template-columns: repeat(2, 1fr); }
+    .lead-table { --tcols: 36px minmax(0,1.8fr) minmax(0,1.35fr) 124px 100px; }
+    .c-company, .c-date { display: none; }
+    .stat-num { font-size: 32px; }
+  }
+  @media (max-width: 1428px) {
+    html[data-layout="sidebar"] .lead-grid { grid-template-columns: repeat(2, 1fr); }
+    html[data-layout="sidebar"] .lead-table { --tcols: 36px minmax(0,1.8fr) minmax(0,1.35fr) 124px 100px; }
+    html[data-layout="sidebar"] .c-company,
+    html[data-layout="sidebar"] .c-date { display: none; }
+    html[data-layout="sidebar"] .stat-num { font-size: 32px; }
+  }
+  @media (max-width: 760px) {
+    .lead-table { --tcols: 32px minmax(0,1.7fr) 120px 92px; }
+    html[data-layout="sidebar"] .lead-table { --tcols: 32px minmax(0,1.7fr) 120px 92px; }
+    .c-camp, html[data-layout="sidebar"] .c-camp { display: none; }
+    .t-toolbar .tb-search { min-width: 150px; }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .lead-row, .tl-item { opacity: 1; animation: none; }
+    .drawer, .drawer-scrim, .bulk-bar, .toast, .st-menu { transition: none; }
+    .st-pill.pill-pop { animation: none; }
+  }
+</style>
+</head>
+<body data-page="leads">
+
+<div class="page">
+
+  <header class="greeting">
+    <div>
+      <h1>Leads</h1>
+      <p class="sub">Every lead captured across <strong data-ws-name>Acme</strong> — search, qualify, and export.</p>
+    </div>
+  </header>
+
+  <main class="lead-grid">
+
+    <!-- STAT ROW -->
+    <section class="tile t-stat" style="--i:0">
+      <div class="tile-label">
+        <span>Leads today</span>
+        <span class="chip up">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3.2" stroke-linecap="round" stroke-linejoin="round"><path d="M7 17L17 7"/><path d="M9 7h8v8"/></svg>
+          +6.4%
+        </span>
+      </div>
+      <div class="stat-num big-num" id="stToday">0</div>
+      <p class="stat-foot">vs. yesterday, same time</p>
+    </section>
+
+    <section class="tile t-stat" style="--i:1">
+      <div class="tile-label">
+        <span>This week</span>
+        <span class="chip up">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3.2" stroke-linecap="round" stroke-linejoin="round"><path d="M7 17L17 7"/><path d="M9 7h8v8"/></svg>
+          +9.6%
+        </span>
+      </div>
+      <div class="stat-num big-num" id="stWeek">0</div>
+      <p class="stat-foot">vs. previous 7 days</p>
+    </section>
+
+    <section class="tile t-stat" style="--i:2">
+      <div class="tile-label">
+        <span>Qualified rate</span>
+        <span class="chip up">+1.2pt</span>
+      </div>
+      <div class="stat-num big-num"><span id="stQual">0.0</span><span class="unit">%</span></div>
+      <p class="stat-foot">of all captured leads</p>
+    </section>
+
+    <section class="tile t-stat" style="--i:3">
+      <div class="tile-label">
+        <span>Avg. response</span>
+        <span class="chip up">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3.2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 7L7 17"/><path d="M15 17H7V9"/></svg>
+          −0.4h
+        </span>
+      </div>
+      <div class="stat-num big-num"><span id="stResp">0.0</span><span class="unit">h</span></div>
+      <p class="stat-foot">first touch after capture</p>
+    </section>
+
+    <!-- TOOLBAR -->
+    <section class="tile t-toolbar" style="--i:4">
+      <input class="input tb-search" id="searchIn" type="search" placeholder="Search name, email, or company…" aria-label="Search leads">
+      <select class="input sel" id="chSel" aria-label="Filter by channel">
+        <option value="all">All channels</option>
+      </select>
+      <select class="input sel" id="stSel" aria-label="Filter by status">
+        <option value="all">All statuses</option>
+        <option value="new">New</option>
+        <option value="contacted">Contacted</option>
+        <option value="qualified">Qualified</option>
+        <option value="disqualified">Disqualified</option>
+      </select>
+      <span class="tb-count" id="resCount">36 results</span>
+      <span class="tb-spacer"></span>
+      <button class="btn btn-ghost" id="exportBtn" type="button">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12"/><path d="M6 11l6 6 6-6"/><path d="M4 21h16"/></svg>
+        Export CSV
+      </button>
+    </section>
+
+    <!-- TABLE -->
+    <section class="tile t-table" style="--i:5">
+      <div class="lead-table">
+        <div class="lead-head">
+          <span class="cell c-check"><input type="checkbox" class="lcheck" id="selAll" aria-label="Select all filtered leads"></span>
+          <span>Lead</span>
+          <span class="c-company">Company</span>
+          <span class="c-camp">Campaign</span>
+          <span>Status</span>
+          <span>Score</span>
+          <span class="c-date">Captured</span>
+        </div>
+        <div id="leadRows"></div>
+      </div>
+      <div class="tfoot">
+        <span class="pg-info" id="pgInfo">Showing 1–12 of 36</span>
+        <div class="pg" id="pgBtns" role="navigation" aria-label="Pagination"></div>
+      </div>
+    </section>
+
+  </main>
+</div>
+
+<!-- STATUS DROPDOWN (shared, fixed-position) -->
+<div class="st-menu" id="stMenu" role="menu" aria-label="Set lead status">
+  <button type="button" data-st="new" role="menuitemradio"><span class="sdot" style="background:var(--indigo)"></span>New<svg class="mk" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6L9 17l-5-5"/></svg></button>
+  <button type="button" data-st="contacted" role="menuitemradio"><span class="sdot" style="background:var(--amber)"></span>Contacted<svg class="mk" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6L9 17l-5-5"/></svg></button>
+  <button type="button" data-st="qualified" role="menuitemradio"><span class="sdot" style="background:var(--green)"></span>Qualified<svg class="mk" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6L9 17l-5-5"/></svg></button>
+  <button type="button" data-st="disqualified" role="menuitemradio"><span class="sdot" style="background:#c9ccd6"></span>Disqualified<svg class="mk" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6L9 17l-5-5"/></svg></button>
+</div>
+
+<!-- BULK BAR -->
+<div class="bulk-bar" id="bulkBar" role="toolbar" aria-label="Bulk actions">
+  <span class="bulk-count" id="bulkCount">0 selected</span>
+  <span class="bulk-div"></span>
+  <button class="bulk-btn" id="bulkContacted" type="button">Mark contacted</button>
+  <button class="bulk-btn" id="bulkQualified" type="button">Mark qualified</button>
+  <button class="bulk-btn" id="bulkExport" type="button">Export</button>
+  <span class="bulk-div"></span>
+  <button class="bulk-x" id="bulkClear" type="button" aria-label="Clear selection">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round"><path d="M5 5l14 14"/><path d="M19 5L5 19"/></svg>
+  </button>
+</div>
+
+<!-- DRAWER -->
+<div class="drawer-scrim" id="drawerScrim"></div>
+<aside class="drawer" id="drawer" role="dialog" aria-modal="true" aria-label="Lead details" aria-hidden="true">
+  <div class="drawer-top">
+    <span class="d-avatar" id="dAvatar">—</span>
+    <div class="d-id">
+      <h2 id="dName">Lead</h2>
+      <p id="dCompany">Company</p>
+    </div>
+    <button class="d-close" id="drawerClose" type="button" aria-label="Close panel">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round"><path d="M5 5l14 14"/><path d="M19 5L5 19"/></svg>
+    </button>
+  </div>
+  <div class="d-statusrow">
+    <button class="status st-pill s-new" id="dStatus" type="button"><span class="dot"></span>New</button>
+    <span class="d-lid" id="dLid">L-0000</span>
+  </div>
+  <div class="drawer-body">
+    <h3 class="d-sec">Contact</h3>
+    <button class="d-row" id="dEmailRow" type="button" title="Click to copy">
+      <span class="d-k">Email</span>
+      <span class="d-v" id="dEmail">—</span>
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="12" height="12" rx="2.5"/><path d="M5 15H4.5A1.5 1.5 0 0 1 3 13.5v-9A1.5 1.5 0 0 1 4.5 3h9A1.5 1.5 0 0 1 15 4.5V5"/></svg>
+    </button>
+    <button class="d-row" id="dPhoneRow" type="button" title="Click to copy">
+      <span class="d-k">Phone</span>
+      <span class="d-v" id="dPhone">—</span>
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="12" height="12" rx="2.5"/><path d="M5 15H4.5A1.5 1.5 0 0 1 3 13.5v-9A1.5 1.5 0 0 1 4.5 3h9A1.5 1.5 0 0 1 15 4.5V5"/></svg>
+    </button>
+
+    <h3 class="d-sec">Source</h3>
+    <div class="d-grid">
+      <div><span class="d-k">Campaign</span><span class="d-v" id="dCampaign">—</span></div>
+      <div><span class="d-k">Channel</span><span class="camp-chip" id="dChannel">—</span></div>
+      <div><span class="d-k">Captured</span><span class="d-v" id="dDate">—</span></div>
+      <div><span class="d-k">Lead score</span><span class="scorebox" id="dScore"></span></div>
+    </div>
+
+    <h3 class="d-sec">Activity</h3>
+    <div class="tl" id="dTimeline"></div>
+  </div>
+  <div class="drawer-foot">
+    <button class="btn btn-primary" id="dQualify" type="button">Mark qualified</button>
+    <button class="btn btn-ghost" id="dDisqualify" type="button">Disqualify</button>
+  </div>
+</aside>
+
+<div class="toast" id="toast">Copied!</div>
+
+<script src="assets/data.js"></script>
+<script src="assets/shell.js"></script>
+<script>
+(function () {
+  "use strict";
+
+  var S = window.Shell, D = window.PulseData;
+  var $ = S.$, fmt = S.fmt, countUp = S.countUp;
+  var REDUCED = S.REDUCED;
+  var CH = D.CHANNELS;
+  var PER = 12;
+
+  /* local mutable copies — page edits never touch the frozen data shape */
+  var leads = D.LEADS.map(function (l) {
+    return {
+      id: l.id, name: l.name, email: l.email, campaign: l.campaign,
+      campaignId: l.campaignId, channel: l.channel, status: l.status,
+      date: l.date, score: l.score, phone: l.phone, company: l.company,
+      timeline: l.timeline
+    };
+  });
+
+  var ST = {
+    "new":          { label: "New",          cls: "s-new" },
+    "contacted":    { label: "Contacted",    cls: "s-contacted" },
+    "qualified":    { label: "Qualified",    cls: "s-qualified" },
+    "disqualified": { label: "Disqualified", cls: "s-disqualified" }
+  };
+  var CARET = '<svg viewBox="0 0 24 24" width="9" height="9" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"/></svg>';
+
+  var state = { q: "", ch: "all", st: "all", page: 1 };
+  var selected = new Set();
+  var drawerLead = null;
+
+  var rowsBox = $("leadRows"), resCount = $("resCount"),
+      pgInfo = $("pgInfo"), pgBtns = $("pgBtns"),
+      selAll = $("selAll"), stMenu = $("stMenu"),
+      bulkBar = $("bulkBar"), bulkCount = $("bulkCount"),
+      drawer = $("drawer"), scrim = $("drawerScrim"),
+      dStatus = $("dStatus"), toast = $("toast");
+
+  /* ================= HELPERS ================= */
+  function rgba(hex, a) {
+    var n = parseInt(hex.slice(1), 16);
+    return "rgba(" + (n >> 16 & 255) + "," + (n >> 8 & 255) + "," + (n & 255) + "," + a + ")";
+  }
+  function initials(name) {
+    return name.split(" ").map(function (w) { return w.charAt(0); }).slice(0, 2).join("").toUpperCase();
+  }
+  function meterHtml(score) {
+    var n = score >= 76 ? 4 : score >= 51 ? 3 : score >= 26 ? 2 : 1;
+    var c = n >= 3 ? "g" : n === 2 ? "a" : "x";
+    var h = '<span class="meter" aria-hidden="true">';
+    for (var k = 0; k < 4; k++) h += '<i class="' + (k < n ? "on " + c : "") + '"></i>';
+    return h + "</span>";
+  }
+  function scoreHtml(score) { return "<b>" + score + "</b>" + meterHtml(score); }
+  function setPill(btn, st) {
+    var m = ST[st];
+    btn.className = "status st-pill " + m.cls;
+    btn.innerHTML = '<span class="dot"></span>' + m.label + CARET;
+  }
+  function popPill(btn) {
+    if (REDUCED) return;
+    btn.classList.remove("pill-pop");
+    void btn.offsetWidth;
+    btn.classList.add("pill-pop");
+  }
+
+  /* ================= FILTER ================= */
+  function filtered() {
+    var q = state.q.trim().toLowerCase();
+    return leads.filter(function (l) {
+      if (state.ch !== "all" && String(l.channel) !== state.ch) return false;
+      if (state.st !== "all" && l.status !== state.st) return false;
+      if (q && (l.name + " " + l.email + " " + l.company).toLowerCase().indexOf(q) < 0) return false;
+      return true;
+    });
+  }
+
+  /* ================= CSV EXPORT (real download) ================= */
+  function csvEsc(v) {
+    v = String(v);
+    return /[",\n]/.test(v) ? '"' + v.replace(/"/g, '""') + '"' : v;
+  }
+  function downloadCsv(rows) {
+    if (!rows.length) return;
+    var cols = ["ID", "Name", "Email", "Company", "Campaign", "Channel", "Status", "Score", "Phone", "Captured"];
+    var lines = [cols.join(",")];
+    rows.forEach(function (l) {
+      lines.push([l.id, l.name, l.email, l.company, l.campaign, CH[l.channel].name, l.status, l.score, l.phone, l.date].map(csvEsc).join(","));
+    });
+    var blob = new Blob([lines.join("\n")], { type: "text/csv;charset=utf-8" });
+    var url = URL.createObjectURL(blob);
+    var a = document.createElement("a");
+    a.href = url;
+    a.download = "leads.csv";
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(function () { URL.revokeObjectURL(url); }, 500);
+  }
+
+  /* ================= TABLE ================= */
+  function buildRow(l, i) {
+    var ch = CH[l.channel];
+    var row = document.createElement("div");
+    row.className = "lead-row";
+    row.dataset.id = l.id;
+    if (!REDUCED) row.style.animationDelay = (i * 35) + "ms";
+    row.innerHTML =
+      '<span class="cell c-check"><input type="checkbox" class="lcheck" aria-label="Select ' + l.name + '"></span>' +
+      '<span class="cell c-lead">' +
+        '<span class="avatar" style="background:' + rgba(ch.color, 0.13) + ';color:' + ch.color + '">' + initials(l.name) + "</span>" +
+        '<span class="l-id"><span class="l-name">' + l.name + '</span><span class="l-email">' + l.email + "</span></span>" +
+      "</span>" +
+      '<span class="cell c-company">' + l.company + "</span>" +
+      '<span class="cell c-camp"><span class="c-camp-name">' + l.campaign + '</span><span class="camp-chip" style="background:' + ch.color + '">' + ch.name + "</span></span>" +
+      '<span class="cell c-status"><button class="status st-pill" type="button" aria-haspopup="menu"></button></span>' +
+      '<span class="cell c-score"><span class="scorebox">' + scoreHtml(l.score) + "</span></span>" +
+      '<span class="cell c-date">' + l.date + "</span>";
+
+    var cb = row.querySelector(".lcheck");
+    cb.checked = selected.has(l.id);
+    cb.addEventListener("click", function (e) { e.stopPropagation(); });
+    cb.addEventListener("change", function () {
+      if (cb.checked) selected.add(l.id); else selected.delete(l.id);
+      syncSelAll(filtered());
+      updateBulk();
+    });
+
+    var pill = row.querySelector(".st-pill");
+    setPill(pill, l.status);
+    pill.addEventListener("click", function (e) {
+      e.stopPropagation();
+      openMenu(pill, l);
+    });
+
+    row.addEventListener("click", function (e) {
+      if (e.target.closest(".c-check") || e.target.closest(".st-pill")) return;
+      openDrawer(l);
+    });
+    return row;
+  }
+
+  function renderRows() {
+    closeMenu();
+    var list = filtered();
+    var pages = Math.max(1, Math.ceil(list.length / PER));
+    if (state.page > pages) state.page = pages;
+    if (state.page < 1) state.page = 1;
+    var startI = (state.page - 1) * PER;
+    var slice = list.slice(startI, startI + PER);
+
+    rowsBox.innerHTML = "";
+    if (!slice.length) {
+      var em = document.createElement("div");
+      em.className = "empty";
+      em.innerHTML = '<div class="empty-t">No leads found</div><div class="empty-s">Try clearing your search or filters.</div>';
+      rowsBox.appendChild(em);
+    } else {
+      slice.forEach(function (l, i) { rowsBox.appendChild(buildRow(l, i)); });
+    }
+
+    resCount.textContent = fmt(list.length) + (list.length === 1 ? " result" : " results");
+    pgInfo.textContent = list.length
+      ? "Showing " + (startI + 1) + "–" + Math.min(startI + PER, list.length) + " of " + list.length
+      : "Showing 0 of 0";
+    buildPager(pages);
+    syncSelAll(list);
+    updateBulk();
+  }
+
+  /* ================= PAGINATION ================= */
+  function mkPg(txt, enabled, fn) {
+    var b = document.createElement("button");
+    b.type = "button";
+    b.className = "pg-btn";
+    b.textContent = txt;
+    b.disabled = !enabled;
+    if (enabled) b.addEventListener("click", fn);
+    return b;
+  }
+  function buildPager(pages) {
+    pgBtns.innerHTML = "";
+    pgBtns.appendChild(mkPg("‹", state.page > 1, function () { state.page--; renderRows(); }));
+    for (var p = 1; p <= pages; p++) {
+      (function (p) {
+        var b = mkPg(String(p), true, function () {
+          if (p !== state.page) { state.page = p; renderRows(); }
+        });
+        if (p === state.page) b.classList.add("on");
+        pgBtns.appendChild(b);
+      })(p);
+    }
+    pgBtns.appendChild(mkPg("›", state.page < pages, function () { state.page++; renderRows(); }));
+  }
+
+  /* ================= SELECTION / BULK BAR ================= */
+  function syncSelAll(list) {
+    var n = 0;
+    list.forEach(function (l) { if (selected.has(l.id)) n++; });
+    selAll.checked = list.length > 0 && n === list.length;
+    selAll.indeterminate = n > 0 && n < list.length;
+  }
+  function updateBulk() {
+    var n = selected.size;
+    bulkCount.textContent = n + " selected";
+    bulkBar.classList.toggle("show", n > 0);
+  }
+
+  selAll.addEventListener("change", function () {
+    var list = filtered();
+    list.forEach(function (l) {
+      if (selAll.checked) selected.add(l.id); else selected.delete(l.id);
+    });
+    rowsBox.querySelectorAll(".lead-row").forEach(function (row) {
+      row.querySelector(".lcheck").checked = selected.has(row.dataset.id);
+    });
+    syncSelAll(list);
+    updateBulk();
+  });
+
+  function bulkStatus(st) {
+    leads.forEach(function (l) { if (selected.has(l.id)) l.status = st; });
+    if (drawerLead && selected.has(drawerLead.id)) { setPill(dStatus, drawerLead.status); popPill(dStatus); }
+    renderRows();
+  }
+  $("bulkContacted").addEventListener("click", function () { bulkStatus("contacted"); });
+  $("bulkQualified").addEventListener("click", function () { bulkStatus("qualified"); });
+  $("bulkExport").addEventListener("click", function () {
+    downloadCsv(leads.filter(function (l) { return selected.has(l.id); }));
+  });
+  $("bulkClear").addEventListener("click", function () {
+    selected.clear();
+    rowsBox.querySelectorAll(".lcheck").forEach(function (cb) { cb.checked = false; });
+    syncSelAll(filtered());
+    updateBulk();
+  });
+
+  /* ================= STATUS DROPDOWN (one shared menu) ================= */
+  var menuFor = null; /* { anchor, lead } */
+
+  function openMenu(anchor, lead) {
+    if (menuFor && menuFor.anchor === anchor) { closeMenu(); return; }
+    menuFor = { anchor: anchor, lead: lead };
+    stMenu.querySelectorAll("button[data-st]").forEach(function (b) {
+      b.classList.toggle("on", b.dataset.st === lead.status);
+    });
+    var r = anchor.getBoundingClientRect();
+    var mw = stMenu.offsetWidth, mh = stMenu.offsetHeight;
+    var left = Math.max(12, Math.min(r.left, window.innerWidth - mw - 12));
+    var top = r.bottom + 8;
+    if (top + mh > window.innerHeight - 12) top = r.top - mh - 8;
+    stMenu.style.left = left + "px";
+    stMenu.style.top = top + "px";
+    stMenu.classList.add("open");
+  }
+  function closeMenu() {
+    menuFor = null;
+    stMenu.classList.remove("open");
+  }
+
+  stMenu.addEventListener("click", function (e) {
+    e.stopPropagation();
+    var b = e.target.closest("button[data-st]");
+    if (!b || !menuFor) return;
+    var lead = menuFor.lead;
+    lead.status = b.dataset.st;
+    closeMenu();
+    applyStatusChange(lead);
+  });
+
+  function applyStatusChange(lead) {
+    var row = rowsBox.querySelector('.lead-row[data-id="' + lead.id + '"]');
+    if (row) {
+      var p = row.querySelector(".st-pill");
+      setPill(p, lead.status);
+      popPill(p);
+    }
+    if (drawerLead === lead) {
+      setPill(dStatus, lead.status);
+      popPill(dStatus);
+    }
+    /* row no longer matches an active status filter → settle the list */
+    if (state.st !== "all" && lead.status !== state.st) {
+      setTimeout(renderRows, REDUCED ? 0 : 550);
+    }
+  }
+
+  document.addEventListener("click", function (e) {
+    if (menuFor && !stMenu.contains(e.target)) closeMenu();
+  });
+  document.addEventListener("scroll", function () { if (menuFor) closeMenu(); }, true);
+  window.addEventListener("resize", function () { if (menuFor) closeMenu(); });
+
+  /* ================= DRAWER ================= */
+  function openDrawer(l) {
+    drawerLead = l;
+    var ch = CH[l.channel];
+    var av = $("dAvatar");
+    av.textContent = initials(l.name);
+    av.style.background = rgba(ch.color, 0.13);
+    av.style.color = ch.color;
+    $("dName").textContent = l.name;
+    $("dCompany").textContent = l.company;
+    $("dLid").textContent = l.id;
+    setPill(dStatus, l.status);
+    $("dEmail").textContent = l.email;
+    $("dPhone").textContent = l.phone;
+    $("dCampaign").textContent = l.campaign;
+    var chip = $("dChannel");
+    chip.textContent = ch.name;
+    chip.style.background = ch.color;
+    $("dDate").textContent = l.date + ", 2026";
+    $("dScore").innerHTML = scoreHtml(l.score);
+
+    var tl = $("dTimeline");
+    tl.innerHTML = "";
+    l.timeline.forEach(function (t, i) {
+      var item = document.createElement("div");
+      item.className = "tl-item";
+      if (!REDUCED) item.style.animationDelay = (120 + i * 90) + "ms";
+      item.innerHTML = '<span class="tl-dot"></span><div class="tl-t">' + t.t + '</div><div class="tl-when">' + t.when + " · " + l.date + "</div>";
+      tl.appendChild(item);
+    });
+
+    scrim.classList.add("show");
+    drawer.classList.add("open");
+    drawer.setAttribute("aria-hidden", "false");
+  }
+  function closeDrawer() {
+    drawerLead = null;
+    closeMenu();
+    scrim.classList.remove("show");
+    drawer.classList.remove("open");
+    drawer.setAttribute("aria-hidden", "true");
+  }
+
+  scrim.addEventListener("click", closeDrawer);
+  $("drawerClose").addEventListener("click", closeDrawer);
+  dStatus.addEventListener("click", function (e) {
+    e.stopPropagation();
+    if (drawerLead) openMenu(dStatus, drawerLead);
+  });
+  $("dQualify").addEventListener("click", function () {
+    if (!drawerLead) return;
+    drawerLead.status = "qualified";
+    applyStatusChange(drawerLead);
+  });
+  $("dDisqualify").addEventListener("click", function () {
+    if (!drawerLead) return;
+    drawerLead.status = "disqualified";
+    applyStatusChange(drawerLead);
+  });
+
+  document.addEventListener("keydown", function (e) {
+    if (e.key !== "Escape") return;
+    if (menuFor) { closeMenu(); return; }
+    if (drawerLead) closeDrawer();
+  });
+
+  /* ================= COPY + TOAST ================= */
+  var toastTimer = 0;
+  function showToast() {
+    toast.classList.add("show");
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(function () { toast.classList.remove("show"); }, 1400);
+  }
+  function copyFallback(t) {
+    var ta = document.createElement("textarea");
+    ta.value = t;
+    ta.style.position = "fixed";
+    ta.style.opacity = "0";
+    document.body.appendChild(ta);
+    ta.select();
+    try { document.execCommand("copy"); } catch (e) { /* mock — best effort */ }
+    ta.remove();
+    showToast();
+  }
+  function copyText(t) {
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(t).then(showToast, function () { copyFallback(t); });
+    } else {
+      copyFallback(t);
+    }
+  }
+  $("dEmailRow").addEventListener("click", function () { if (drawerLead) copyText(drawerLead.email); });
+  $("dPhoneRow").addEventListener("click", function () { if (drawerLead) copyText(drawerLead.phone); });
+
+  /* ================= TOOLBAR ================= */
+  var chSel = $("chSel"), stSel = $("stSel");
+  CH.forEach(function (c, i) {
+    var o = document.createElement("option");
+    o.value = String(i);
+    o.textContent = c.name;
+    chSel.appendChild(o);
+  });
+  $("searchIn").addEventListener("input", function (e) {
+    state.q = e.target.value;
+    state.page = 1;
+    renderRows();
+  });
+  chSel.addEventListener("change", function () {
+    state.ch = chSel.value;
+    state.page = 1;
+    renderRows();
+  });
+  stSel.addEventListener("change", function () {
+    state.st = stSel.value;
+    state.page = 1;
+    renderRows();
+  });
+  $("exportBtn").addEventListener("click", function () { downloadCsv(filtered()); });
+
+  /* ================= STAT ROW ================= */
+  countUp($("stToday"), 218);
+  countUp($("stWeek"), 3084);
+  countUp($("stQual"), 40.5, { dec: 1, dur: 1100 });
+  countUp($("stResp"), 1.8, { dec: 1, dur: 1100 });
+
+  /* ================= BOOT ================= */
+  S.popTiles();
+  renderRows();
+})();
+</script>
+</body>
+</html>
