@@ -6,7 +6,7 @@ the permalink URL of the page that received it) — never to a guessed "active"
 reel, and never read out of media-bearing payloads (whose caption / preview
 comment nodes are comment-shaped but belong to other reels).
 """
-from reelradar.engines.instagram.cdp import CDPFeed
+from aizu.engines.instagram.cdp import CDPFeed
 
 
 class FakeRequest:

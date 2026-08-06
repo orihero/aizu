@@ -2,12 +2,12 @@ from pathlib import Path
 
 import pytest
 
-from reelradar.core.config import (ChannelSpec, _channel_spec_from_dict,
+from aizu.core.config import (ChannelSpec, _channel_spec_from_dict,
                               _resolve_home_feed, campaign_from_brief,
                               campaign_to_brief, load_campaign, load_soul,
                               parse_extract_fields)
-from reelradar.core.prompts import SYSTEM_GENERIC, VISION_GENERIC
-from reelradar.engines.instagram.prompts import (SYSTEM_MATCH, SYSTEM_RELEVANCE,
+from aizu.core.prompts import SYSTEM_GENERIC, VISION_GENERIC
+from aizu.engines.instagram.prompts import (SYSTEM_MATCH, SYSTEM_RELEVANCE,
                                                  SYSTEM_VISION)
 
 CONFIG = Path(__file__).resolve().parents[1] / "config"
@@ -44,6 +44,79 @@ def test_action_knobs_default_off(tmp_path):
     assert c.enable_actions is False
     assert c.seed_hashtags == [] and c.seed_accounts == []
     assert c.max_likes_per_session == 8 and c.max_follows_per_session == 4
+
+
+def test_enable_stt_defaults_off(tmp_path):
+    # A campaign that omits the knob must default OFF — Uzbek STT is opt-in, and
+    # this default flip would silently start a GPU model load, so a future
+    # accidental flip must fail this test loudly.
+    md = tmp_path / "c.md"
+    md.write_text(
+        "```yaml\ncampaign_id: x\ngoal: lead\nthreshold: 0.7\nescalate_band: [0.4, 0.75]\n```\n"
+        "## Relevance\nr\n## Match\nm\n## Extract\ne\n", encoding="utf-8")
+    c = load_campaign(md)
+    assert c.enable_stt is False
+
+
+def test_enable_stt_parses_from_file_brief(tmp_path):
+    md = tmp_path / "c.md"
+    md.write_text(
+        "```yaml\ncampaign_id: x\ngoal: lead\nthreshold: 0.7\nescalate_band: [0.4, 0.75]\n"
+        "enable_stt: true\nlanguage_mix: [uz]\n```\n"
+        "## Relevance\nr\n## Match\nm\n## Extract\ne\n", encoding="utf-8")
+    c = load_campaign(md)
+    assert c.enable_stt is True
+    assert c.language_mix == ["uz"]
+
+
+def test_enable_stt_round_trips_through_brief_from_to_from():
+    # Mirrors the enable_actions round-trip coverage: load -> brief -> Campaign ->
+    # brief -> Campaign must be lossless for the enable_stt knob (Panel-authored
+    # campaigns must never silently drop the toggle across an edit cycle).
+    c = campaign_from_brief("stt-leadgen", {
+        "platform": "instagram", "threshold": 0.7, "escalate_band": [0.4, 0.75],
+        "relevance_def": "r", "match_def": "m", "extract_def": "e",
+        "language_mix": ["uz"], "enable_stt": True,
+    })
+    assert c.enable_stt is True
+    brief = campaign_to_brief(c)
+    assert brief["enable_stt"] is True
+    c2 = campaign_from_brief(c.campaign_id, brief)
+    assert c2.enable_stt is True
+    brief2 = campaign_to_brief(c2)
+    c3 = campaign_from_brief(c2.campaign_id, brief2)
+    assert c3.enable_stt is True
+
+
+def test_enable_stt_omitted_from_brief_defaults_off():
+    # A brief that never mentions enable_stt (e.g. a pre-STT panel campaign) must
+    # parse as OFF, not crash and not accidentally opt in.
+    c = campaign_from_brief("legacy-leadgen", {
+        "platform": "instagram", "threshold": 0.7,
+        "relevance_def": "r", "match_def": "m", "extract_def": "e",
+    })
+    assert c.enable_stt is False
+
+
+def test_enable_video_analysis_defaults_off_and_round_trips():
+    # Same opt-in + lossless-round-trip contract as enable_stt: the video-analysis
+    # toggle must default OFF and survive brief -> Campaign -> brief unchanged.
+    off = campaign_from_brief("legacy", {
+        "platform": "instagram", "threshold": 0.7,
+        "relevance_def": "r", "match_def": "m", "extract_def": "e",
+    })
+    assert off.enable_video_analysis is False
+
+    c = campaign_from_brief("va-leadgen", {
+        "platform": "instagram", "threshold": 0.7, "escalate_band": [0.4, 0.75],
+        "relevance_def": "r", "match_def": "m", "extract_def": "e",
+        "enable_video_analysis": True,
+    })
+    assert c.enable_video_analysis is True
+    brief = campaign_to_brief(c)
+    assert brief["enable_video_analysis"] is True
+    c2 = campaign_from_brief(c.campaign_id, brief)
+    assert c2.enable_video_analysis is True
 
 
 def test_campaign_prompts_match_reference_verbatim():

@@ -1,6 +1,6 @@
 """HTTP-level per-org connection flows (Phase 2 YouTube + Phase 3 Telegram).
 
-A real bridge server with REELRADAR_SECRET_KEY set, an authed owner, and a stubbed
+A real bridge server with AIZU_SECRET_KEY set, an authed owner, and a stubbed
 live-validation surface (no network). Asserts the secret is captured encrypted and
 the integration row flips connected — and that a bad key is rejected with a 400.
 """
@@ -17,11 +17,11 @@ import pytest
 
 import types
 
-from reelradar import connections
-from reelradar.secrets import SecretCipher
-from reelradar.server import PanelHandler, serve
-from reelradar.core.store import Store
-from reelradar.engines.telegram.login import TelegramLoginManager
+from aizu import connections
+from aizu.secrets import SecretCipher
+from aizu.server import PanelHandler, serve
+from aizu.core.store import Store
+from aizu.engines.telegram.login import TelegramLoginManager
 
 ROOT = Path(__file__).resolve().parents[1]
 CONFIG = ROOT / "config"
@@ -52,7 +52,7 @@ def _cookie(set_cookie):
 
 @pytest.fixture()
 def server(monkeypatch):
-    monkeypatch.setenv("REELRADAR_SECRET_KEY", SecretCipher.generate_key())
+    monkeypatch.setenv("AIZU_SECRET_KEY", SecretCipher.generate_key())
     fd, db_path = tempfile.mkstemp(suffix=".db")
     os.close(fd)
     panel_dir = tempfile.mkdtemp(suffix="-spa")

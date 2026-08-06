@@ -20,10 +20,10 @@ from pathlib import Path
 
 import pytest
 
-from reelradar.secrets import SecretCipher
-from reelradar.server import (InviteThrottle, MAX_INVITE_CREATES, PanelHandler,
+from aizu.secrets import SecretCipher
+from aizu.server import (InviteThrottle, MAX_INVITE_CREATES, PanelHandler,
                               serve)
-from reelradar.core.store import Store
+from aizu.core.store import Store
 
 
 class _StubTelegramLogin:
@@ -312,8 +312,8 @@ def test_integration_disconnect_writes_one_audit_row(srv):
 def test_youtube_connect_writes_one_audit_row(srv, monkeypatch):
     # Arrange — a configured cipher (connect stores an encrypted secret) and a stubbed
     # live key-check so no network call is made. Closes the connect-audit coverage gap.
-    monkeypatch.setenv("REELRADAR_SECRET_KEY", SecretCipher.generate_key())
-    monkeypatch.setattr("reelradar.connections.validate_youtube_api_key", lambda key: None)
+    monkeypatch.setenv("AIZU_SECRET_KEY", SecretCipher.generate_key())
+    monkeypatch.setattr("aizu.connections.validate_youtube_api_key", lambda key: None)
     # Act
     code, resp, _ = _post(srv["base"], "/api/integration",
                           {"platform": "youtube", "apiKey": "AIza-test-key"}, srv["owner"])
@@ -328,7 +328,7 @@ def test_youtube_connect_writes_one_audit_row(srv, monkeypatch):
 def test_telegram_connect_writes_one_audit_row(srv, monkeypatch):
     # Arrange — a stub Telegram login + a configured cipher so the verified session can
     # be persisted. Regression for the audit gap on the Telegram connect path.
-    monkeypatch.setenv("REELRADAR_SECRET_KEY", SecretCipher.generate_key())
+    monkeypatch.setenv("AIZU_SECRET_KEY", SecretCipher.generate_key())
     prev = PanelHandler.telegram_login
     PanelHandler.telegram_login = _StubTelegramLogin()
     try:

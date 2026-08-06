@@ -32,6 +32,10 @@ seed_accounts: [acme.io]
 enable_actions: false
 max_likes_per_session: 8       # (warming-only caps; ignored while harvesting)
 max_follows_per_session: 4
+
+# Local Uzbek STT ("KotibAI") third relevance-gate tier, Instagram-only.
+# requires language_mix to include "uz" AND AIZU_STT_ENABLED=true
+enable_stt: false
 ```
 
 ## Seed / feed direction (manual warming + mobile re-steer)

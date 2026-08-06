@@ -8,8 +8,8 @@ These exercise the *logic* with no live Chrome:
   - the share choreography aborts cleanly when a step's element is missing;
   - the DM-share structural hook lives in detect_action_block (O-dm-regex TODO).
 """
-from reelradar.core.feed import FeedSource, Reel
-from reelradar.engines.instagram.cdp import CDPFeed, CDPConfig
+from aizu.core.feed import FeedSource, Reel
+from aizu.engines.instagram.cdp import CDPFeed, CDPConfig
 
 
 # ---- base no-ops: harvest/read-only feeds must not write ----

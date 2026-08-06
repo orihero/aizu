@@ -4,7 +4,7 @@ interface, paged by the composite cursor (no browser).
 Drives _classify directly in each mode (as the live interception would) and stubs
 the page-loading so the merge + composite-cursor watermark are tested in isolation.
 """
-from reelradar.engines.x.cdp import XFeed
+from aizu.engines.x.cdp import XFeed
 
 
 def _tweet(rest_id, text, handle):

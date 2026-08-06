@@ -3,7 +3,7 @@ log, and the aggregate stats the "Model Performance" page reads."""
 import os
 import tempfile
 
-from reelradar.core.store import MODEL_COMPARISON_ENABLED_KEY, Store
+from aizu.core.store import MODEL_COMPARISON_ENABLED_KEY, Store
 
 
 def fresh_store():
@@ -56,6 +56,59 @@ def test_upsert_match_defaults_found_by_models_to_none():
                        text="hi", lang="en", score=0.8, reason="x", extracted=None,
                        tier="cloud")
     assert store.matches("c")[0]["found_by_models"] in (None, [])
+
+
+# ----- initial_status / needs_review (gap #4 corroboration gate) -----
+
+def test_upsert_match_defaults_initial_status_to_new():
+    store = fresh_store()
+    store.upsert_match(campaign_id="c", reel_id="r", comment_id="cm1", username="u",
+                       text="hi", lang="en", score=0.8, reason="x", extracted=None,
+                       tier="cloud")
+    assert store.matches("c")[0]["status"] == "new"
+
+
+def test_upsert_match_first_insert_can_land_in_needs_review():
+    store = fresh_store()
+    store.upsert_match(campaign_id="c", reel_id="r", comment_id="cm1", username="u",
+                       text="hi", lang="en", score=0.8, reason="x", extracted=None,
+                       tier="cloud", initial_status="needs_review")
+    assert store.matches("c")[0]["status"] == "needs_review"
+
+
+def test_upsert_match_repoll_never_clobbers_needs_review_status():
+    """`initial_status` is first-insert-only, exactly like `status` — a re-poll
+    (even one that would otherwise pass a different initial_status) must not
+    touch an existing row's status."""
+    store = fresh_store()
+    kw = dict(campaign_id="c", reel_id="r", comment_id="cm1", username="u",
+              text="hi", lang="en", score=0.8, reason="x", extracted=None, tier="cloud")
+    store.upsert_match(initial_status="needs_review", **kw)
+    store.upsert_match(initial_status="new", **kw)   # re-poll, feature since toggled off
+    assert store.matches("c")[0]["status"] == "needs_review"
+
+
+def test_upsert_match_repoll_never_reverts_a_human_set_status_to_needs_review():
+    """A human triage decision still wins over a re-poll, regardless of what
+    initial_status the re-poll would have used."""
+    store = fresh_store()
+    kw = dict(campaign_id="c", reel_id="r", comment_id="cm1", username="u",
+              text="hi", lang="en", score=0.8, reason="x", extracted=None, tier="cloud")
+    store.upsert_match(initial_status="needs_review", **kw)
+    store.set_status("c", "cm1", "in_progress")
+    store.upsert_match(initial_status="needs_review", **kw)   # re-poll
+    assert store.matches("c")[0]["status"] == "in_progress"
+
+
+def test_upsert_match_rejects_invalid_initial_status():
+    store = fresh_store()
+    try:
+        store.upsert_match(campaign_id="c", reel_id="r", comment_id="cm1", username="u",
+                           text="hi", lang="en", score=0.8, reason="x", extracted=None,
+                           tier="cloud", initial_status="bogus")
+        assert False, "expected ValueError"
+    except ValueError:
+        pass
 
 
 # ----- log_model_comparison / model_comparison_stats / _recent -----

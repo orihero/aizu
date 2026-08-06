@@ -1,0 +1,319 @@
+<!doctype html>
+<html lang="en" data-resolution="landscape">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=1920, height=1080" />
+    <title>AIZU — Scene 11 · Go to AIZU.UZ</title>
+    <script src="https://cdn.jsdelivr.net/npm/gsap@3.14.2/dist/gsap.min.js"></script>
+    <style>
+      @font-face {
+        font-family: "Sora";
+        font-style: normal;
+        font-weight: 100 900;
+        font-display: block;
+        src: url("assets/fonts/sora-latin.woff2") format("woff2");
+        unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA,
+          U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193,
+          U+2212, U+2215, U+FEFF, U+FFFD;
+      }
+
+      :root {
+        --bg: #0e0f14;
+        --surface: #181a22;
+        --surface-2: #20232d;
+        --border: #282c38;
+        --text: #f1f2f6;
+        --muted: #a2a7b6;
+        --lime: #d9f24f;
+        --on-lime: #16161a;
+        --success: #34d399;
+        --r-tile: 23px;
+        --r-card: 17px;
+      }
+
+      * {
+        margin: 0;
+        padding: 0;
+        box-sizing: border-box;
+      }
+      html,
+      body {
+        width: 1920px;
+        height: 1080px;
+        overflow: hidden;
+      }
+      body {
+        font-family: Inter, system-ui, sans-serif;
+        color: var(--text);
+      }
+      #root {
+        position: relative;
+        width: 1920px;
+        height: 1080px;
+        overflow: hidden;
+      }
+
+      #bg {
+        position: absolute;
+        inset: 0;
+        background: var(--bg);
+      }
+      #bg-glow {
+        position: absolute;
+        left: 410px;
+        top: 90px;
+        width: 1100px;
+        height: 900px;
+        border-radius: 50%;
+        background: radial-gradient(circle, rgba(217, 242, 79, 0.2), rgba(217, 242, 79, 0) 70%);
+        filter: blur(80px);
+        opacity: 0;
+      }
+
+      #scene {
+        position: absolute;
+        inset: 0;
+      }
+
+      /* ---------- the customers arriving ---------- */
+      .cust {
+        position: absolute;
+        display: flex;
+        align-items: center;
+        gap: 14px;
+        padding: 14px 20px;
+        background: var(--surface);
+        border: 1px solid var(--border);
+        border-radius: var(--r-card);
+        box-shadow: 0 16px 36px rgba(0, 0, 0, 0.5);
+        white-space: nowrap;
+        opacity: 0;
+      }
+      .cust-av {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        flex: 0 0 auto;
+        width: 42px;
+        height: 42px;
+        border-radius: 50%;
+        background: var(--surface-2);
+        border: 1px solid var(--border);
+        font-family: Sora, Inter, sans-serif;
+        font-weight: 600;
+        font-size: 17px;
+      }
+      .cust-handle {
+        font-size: 21px;
+        color: var(--muted);
+      }
+      .cust-score {
+        padding: 2px 11px;
+        border-radius: 999px;
+        background: var(--success);
+        color: var(--on-lime);
+        font-family: Sora, Inter, sans-serif;
+        font-weight: 700;
+        font-size: 17px;
+      }
+
+      /* ---------- the close ---------- */
+      #brand {
+        position: absolute;
+        left: 0;
+        right: 0;
+        top: 372px;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+      }
+      #lockup {
+        display: flex;
+        align-items: center;
+        gap: 34px;
+      }
+      #mark-icon {
+        flex: 0 0 auto;
+        width: 152px;
+        height: 152px;
+        opacity: 0;
+      }
+      #mark-icon svg {
+        display: block;
+        width: 100%;
+        height: 100%;
+        overflow: visible;
+      }
+      #mark {
+        height: 236px;
+        overflow: hidden;
+        font-family: Sora, Inter, sans-serif;
+        font-weight: 700;
+        font-size: 200px;
+        line-height: 236px;
+        letter-spacing: 0.05em;
+        color: var(--lime);
+      }
+      #mark span {
+        display: inline-block;
+        opacity: 0;
+      }
+      #cta-label {
+        margin-top: 30px;
+        font-family: Sora, Inter, sans-serif;
+        font-weight: 400;
+        font-size: 40px;
+        color: var(--muted);
+        opacity: 0;
+      }
+      #cta-pill {
+        margin-top: 26px;
+        padding: 24px 62px;
+        border-radius: 999px;
+        background: var(--lime);
+        color: var(--on-lime);
+        font-family: Sora, Inter, sans-serif;
+        font-weight: 700;
+        font-size: 62px;
+        letter-spacing: 0.01em;
+        box-shadow: 0 26px 64px rgba(217, 242, 79, 0.26);
+        opacity: 0;
+      }
+    </style>
+  </head>
+  <body>
+    <div
+      id="root"
+      data-composition-id="main"
+      data-start="0"
+      data-width="1920"
+      data-height="1080"
+      data-duration="6.6"
+    >
+      <div id="bg" class="clip" data-start="0" data-duration="6.6" data-track-index="0">
+        <div id="bg-glow"></div>
+      </div>
+
+      <div id="scene" class="clip" data-start="0" data-duration="6.6" data-track-index="1">
+        <div id="custs"></div>
+
+        <div id="brand">
+          <div id="lockup">
+            <div id="mark-icon">
+              <svg viewBox="0 0 100 100" role="img" aria-label="AIZU">
+                <circle cx="42" cy="60" r="13" fill="#d9f24f" />
+                <path
+                  id="glyph-arc"
+                  d="M48 36 A26 26 0 0 1 68 69"
+                  fill="none"
+                  stroke="#ffffff"
+                  stroke-width="7"
+                  stroke-linecap="round"
+                  pathLength="1"
+                  stroke-dasharray="1"
+                  stroke-dashoffset="1"
+                />
+              </svg>
+            </div>
+            <div id="mark"><span>A</span><span>I</span><span>Z</span><span>U</span></div>
+          </div>
+          <div id="cta-label">Get started at</div>
+          <div id="cta-pill">AIZU.UZ</div>
+        </div>
+      </div>
+    </div>
+
+    <script>
+      window.__timelines = window.__timelines || {};
+      const tl = gsap.timeline({ paused: true });
+
+      /* Deterministic scatter — index-derived, never Math.random. Positions ring the
+         frame so the centre stays clear for the lockup that lands there. */
+      const PEOPLE = [
+        ["DT", "@dana_t", 210, 150],
+        ["MR", "@marcus_ops", 1360, 130],
+        ["SK", "@sarah_kb", 120, 372],
+        ["OP", "@ops_ninja", 1500, 336],
+        ["HH", "@hr_helen", 236, 610],
+        ["DK", "@devops_kate", 1418, 604],
+        ["MT", "@mike.torres", 150, 852],
+        ["TJ", "@teamlead_jen", 1330, 858],
+        ["EV", "@eval_team", 620, 108],
+        ["NO", "@newbie_ops", 1010, 96],
+        ["JG", "@jess_growth", 560, 906],
+        ["CD", "@curious_dev", 1006, 918],
+      ];
+      const SCORES = ["0.91", "0.84", "0.78", "0.86", "0.76", "0.93", "0.71", "0.80", "0.81", "0.74", "0.79", "0.88"];
+
+      const host = document.getElementById("custs");
+      PEOPLE.forEach(([initials, handle, x, y], i) => {
+        const el = document.createElement("div");
+        el.className = "cust";
+        el.id = "cust-" + i;
+        el.style.left = x + "px";
+        el.style.top = y + "px";
+        el.innerHTML =
+          '<span class="cust-av"></span><span class="cust-handle"></span><span class="cust-score"></span>';
+        el.children[0].textContent = initials;
+        el.children[1].textContent = handle;
+        el.children[2].textContent = SCORES[i];
+        host.appendChild(el);
+      });
+
+      const ARRIVE_AT = 0.1;
+      const CLEAR_AT = 2.35;
+      const MARK_AT = 2.85;
+      const CTA_AT = 3.95;
+      const SCENE_END = 6.6;
+
+      /* 1 · new customers keep arriving */
+      PEOPLE.forEach((p, i) => {
+        const at = ARRIVE_AT + ((i * 5) % PEOPLE.length) * 0.13;
+        tl.fromTo(
+          "#cust-" + i,
+          { opacity: 0, scale: 0.8, y: 22 },
+          { opacity: 1, scale: 1, y: 0, duration: 0.5, ease: "power3.out" },
+          at,
+        );
+        /* 2 · then they settle back and make room for the close */
+        tl.to(
+          "#cust-" + i,
+          { opacity: 0, scale: 0.86, duration: 0.55, ease: "power2.in" },
+          CLEAR_AT + (i % 4) * 0.06,
+        );
+      });
+
+      /* 3 · the brand lands */
+      tl.fromTo(
+        "#mark-icon",
+        { opacity: 0, scale: 0.72 },
+        { opacity: 1, scale: 1, duration: 0.55, ease: "power3.out" },
+        MARK_AT - 0.1,
+      );
+      tl.fromTo(
+        "#glyph-arc",
+        { strokeDashoffset: 1 },
+        { strokeDashoffset: 0, duration: 0.8, ease: "power2.inOut" },
+        MARK_AT + 0.15,
+      );
+      gsap.utils.toArray("#mark span").forEach((el, i) => {
+        const at = MARK_AT + i * 0.075;
+        tl.set(el, { opacity: 1 }, at);
+        tl.fromTo(el, { y: 250 }, { y: 0, duration: 0.62, ease: "power3.out" }, at);
+      });
+
+      /* 4 · the ask */
+      tl.fromTo("#cta-label", { opacity: 0, y: 16 }, { opacity: 1, y: 0, duration: 0.5, ease: "power3.out" }, CTA_AT);
+      tl.fromTo(
+        "#cta-pill",
+        { opacity: 0, scale: 0.86, y: 26 },
+        { opacity: 1, scale: 1, y: 0, duration: 0.6, ease: "power3.out" },
+        CTA_AT + 0.2,
+      );
+
+      tl.fromTo("#bg-glow", { opacity: 0 }, { opacity: 1, duration: 1.8, ease: "sine.out" }, MARK_AT);
+
+      window.__timelines["main"] = tl;
+    </script>
+  </body>
+</html>

@@ -10,9 +10,9 @@ from pathlib import Path
 
 import pytest
 
-from reelradar.worker import job_runner
-from reelradar.worker.config import JobSpec, WorkerConfig
-from reelradar.worker.job_runner import CampaignNotFound, SoulMissing
+from aizu.worker import job_runner
+from aizu.worker.config import JobSpec, WorkerConfig
+from aizu.worker.job_runner import CampaignNotFound, SoulMissing
 
 
 class _Campaign:
@@ -35,8 +35,8 @@ def patched(monkeypatch):
 
     def fake_loop(*, campaign, store, soul, args):
         captured["soul"] = soul
-        captured["run_id_env"] = os.environ.get("REELRADAR_RUN_ID")
-        captured["pause_env"] = os.environ.get("REELRADAR_PAUSE_FILE")
+        captured["run_id_env"] = os.environ.get("AIZU_RUN_ID")
+        captured["pause_env"] = os.environ.get("AIZU_PAUSE_FILE")
         captured["args"] = args
         return {"matches": 2, "spend_usd": 0.0, "sessions": 1}
 
@@ -65,9 +65,9 @@ def test_uses_the_cloud_assigned_run_id_when_present(patched, cfg: WorkerConfig)
 
 
 def test_env_is_restored_after_the_run(patched, cfg: WorkerConfig, monkeypatch):
-    monkeypatch.setenv("REELRADAR_RUN_ID", "prior-run")
+    monkeypatch.setenv("AIZU_RUN_ID", "prior-run")
     job_runner._execute_job(object(), _job(), cfg=cfg)
-    assert os.environ["REELRADAR_RUN_ID"] == "prior-run"  # not leaked
+    assert os.environ["AIZU_RUN_ID"] == "prior-run"  # not leaked
 
 
 def test_pause_sentinel_is_cleaned_up(monkeypatch, cfg: WorkerConfig):
@@ -75,7 +75,7 @@ def test_pause_sentinel_is_cleaned_up(monkeypatch, cfg: WorkerConfig):
 
     def fake_loop(*, campaign, store, soul, args):
         # Simulate the engine creating the cooperative-pause sentinel mid-run.
-        p = Path(os.environ["REELRADAR_PAUSE_FILE"])
+        p = Path(os.environ["AIZU_PAUSE_FILE"])
         p.write_text("paused", encoding="utf-8")
         created["path"] = p
         return {"matches": 0, "spend_usd": 0.0}
@@ -115,11 +115,11 @@ def test_local_soul_md_used_when_not_baked(patched, cfg: WorkerConfig):
 def test_pause_and_env_restored_when_loop_raises(monkeypatch, cfg: WorkerConfig):
     """The finally path must unlink the pause sentinel AND restore env even when the
     engine run raises (BUILD-PLAN §2.7; code review env-restore-on-exception gap)."""
-    monkeypatch.setenv("REELRADAR_RUN_ID", "prior-run")
+    monkeypatch.setenv("AIZU_RUN_ID", "prior-run")
     created = {}
 
     def boom(*, campaign, store, soul, args):
-        p = Path(os.environ["REELRADAR_PAUSE_FILE"])
+        p = Path(os.environ["AIZU_PAUSE_FILE"])
         p.write_text("paused", encoding="utf-8")
         created["path"] = p
         raise RuntimeError("engine boom")
@@ -129,7 +129,7 @@ def test_pause_and_env_restored_when_loop_raises(monkeypatch, cfg: WorkerConfig)
     with pytest.raises(RuntimeError, match="engine boom"):
         job_runner._execute_job(object(), _job(), cfg=cfg)
     assert not created["path"].exists()                    # unlinked despite the raise
-    assert os.environ["REELRADAR_RUN_ID"] == "prior-run"   # env restored
+    assert os.environ["AIZU_RUN_ID"] == "prior-run"   # env restored
 
 
 def test_run_env_guard_rejects_reentry(monkeypatch, cfg: WorkerConfig):
@@ -150,7 +150,7 @@ def test_dispatch_seam_signature_is_stable():
     params the worker relies on (BUILD-PLAN §2.7 signature lock)."""
     import inspect
 
-    from reelradar import dispatch
+    from aizu import dispatch
     params = inspect.signature(dispatch.run_engine_session).parameters
     for name in ("campaign", "store", "router", "feed", "soul", "pacer",
                  "run_id", "lead_target", "engine_mode"):
@@ -176,7 +176,7 @@ def test_orphan_pause_sweep_removes_only_stale(cfg: WorkerConfig):
 
 def test_orphan_job_file_sweep_removes_only_stale(cfg: WorkerConfig):
     import time
-    from reelradar.worker import job_runner as jr
+    from aizu.worker import job_runner as jr
     specs = cfg.state_dir / "job-specs"
     results = cfg.state_dir / "job-results"
     logs = cfg.state_dir / "logs"
@@ -200,19 +200,19 @@ def test_orphan_job_file_sweep_removes_only_stale(cfg: WorkerConfig):
 
 
 def test_run_log_path_matches_configure_logging_convention():
-    from reelradar.core.logsetup import run_log_path
-    p = run_log_path("run-xyz", log_file="/var/state/logs/reelradar.log")
+    from aizu.core.logsetup import run_log_path
+    p = run_log_path("run-xyz", log_file="/var/state/logs/aizu.log")
     assert p == Path("/var/state/logs/run-run-xyz.log")
 
 
 def test_run_log_path_none_when_logging_disabled():
-    from reelradar.core.logsetup import run_log_path
+    from aizu.core.logsetup import run_log_path
     assert run_log_path("run-1", log_file="off") is None
 
 
 def test_sweep_removes_orphan_json_tmp_files(cfg: WorkerConfig):
     import time
-    from reelradar.worker import job_runner as jr
+    from aizu.worker import job_runner as jr
     specs = cfg.state_dir / "job-specs"
     specs.mkdir(parents=True, exist_ok=True)
     tmp = specs / "job-x.json.tmp"          # an atomic-write temp a hard kill left behind

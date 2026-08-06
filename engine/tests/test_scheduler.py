@@ -4,9 +4,9 @@ real thread, no real subprocess."""
 import os
 import tempfile
 
-from reelradar.core.schedule import TASHKENT, next_fire
-from reelradar.core.store import Store
-from reelradar.scheduler import ScheduleManager
+from aizu.core.schedule import TASHKENT, next_fire
+from aizu.core.store import Store
+from aizu.scheduler import ScheduleManager
 
 
 def _store():

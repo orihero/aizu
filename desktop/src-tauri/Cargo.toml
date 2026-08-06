@@ -8,7 +8,7 @@
 [package]
 name = "aizu-worker"
 version = "0.1.0"
-description = "AIZU Worker — desktop shell supervising the reelradar-worker sidecar"
+description = "AIZU Worker — desktop shell supervising the aizu-worker sidecar"
 authors = ["AIZU"]
 edition = "2021"
 rust-version = "1.77"
@@ -25,7 +25,7 @@ tauri-build = { version = "2", features = [] }
 [dependencies]
 # --- Tauri core + plugins (2.x line) -----------------------------------------------
 tauri = { version = "2", features = [] }
-tauri-plugin-shell = "2"        # spawn/manage the reelradar-worker child process
+tauri-plugin-shell = "2"        # spawn/manage the aizu-worker child process
 tauri-plugin-fs = "2"           # read the on-disk TOML config + tail the per-run log file
 tauri-plugin-autostart = "2"    # run-at-login (C3 option A)
 # tauri-plugin-updater: re-add for the signed/keyed build — the ad-hoc fleet build ships

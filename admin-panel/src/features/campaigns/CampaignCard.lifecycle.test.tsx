@@ -75,7 +75,7 @@ describe('CampaignCard — archive confirmation', () => {
 
   test('un-archiving a parked campaign skips the confirmation (instant restore)', async () => {
     const user = userEvent.setup();
-    const repository = renderCard(buildCampaign({ status: 'paused', archivedAt: 1_700_000_000 }));
+    const repository = renderCard(buildCampaign({ status: 'paused', archivedAt: '2023-11-14T22:13:20Z' }));
 
     await user.click(await screen.findByRole('button', { name: 'Unarchive campaign' }));
 

@@ -10,7 +10,7 @@ import { z } from 'zod';
  * which come straight off the DB as snake_case — those are normalised to camel
  * here so every consumer downstream sees one convention.
  *
- * Backend contract: engine/reelradar/server.py (admin routes) + admin_auth.py.
+ * Backend contract: engine/aizu/server.py (admin routes) + admin_auth.py.
  */
 
 /** `{ok,data,error}` envelope; `data` is the payload on success, null on error. */

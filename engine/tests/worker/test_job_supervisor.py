@@ -8,14 +8,15 @@ to stand in for what the real child would write.
 from __future__ import annotations
 
 import json
+import os
 import threading
 from pathlib import Path
 
 import pytest
 
-from reelradar.worker import job_runner
-from reelradar.worker.config import JobSpec, WorkerConfig
-from reelradar.worker.job_runner import ChildCrashed, CampaignNotFound, SoulMissing
+from aizu.worker import job_runner
+from aizu.worker.config import JobSpec, WorkerConfig
+from aizu.worker.job_runner import ChildCrashed, CampaignNotFound, SoulMissing
 
 
 def _job(**kw) -> JobSpec:
@@ -95,7 +96,7 @@ def test_clean_completion_returns_summary_and_cleans_up(cfg: WorkerConfig):
                                      monotonic=NEVER_TIMEOUT, cdp_probe=PROBE_OK)
     assert summary["matches"] == 5
     # argv points at the child module; spec + result files cleaned up in finally.
-    assert popen.captured["argv"][1:3] == ["-m", "reelradar.worker.job_child"]
+    assert popen.captured["argv"][1:3] == ["-m", "aizu.worker.job_child"]
     assert not job_runner._spec_path(cfg.state_dir, job.id).exists()
     assert not job_runner._result_path(cfg.state_dir, job.id).exists()
 
@@ -129,7 +130,7 @@ def test_cdp_probe_success_proceeds_to_spawn(cfg: WorkerConfig):
                                      popen=popen, sleep=NOOP_SLEEP,
                                      monotonic=NEVER_TIMEOUT, cdp_probe=PROBE_OK)
     assert summary["matches"] == 3
-    assert popen.captured["argv"][1:3] == ["-m", "reelradar.worker.job_child"]
+    assert popen.captured["argv"][1:3] == ["-m", "aizu.worker.job_child"]
 
 
 def test_halt_hard_stops_child_mid_run(cfg: WorkerConfig):
@@ -308,6 +309,8 @@ def test_child_terminated_when_supervise_raises(cfg: WorkerConfig):
     assert fake.terminated is True  # killed on the way out despite the exception
 
 
+@pytest.mark.skipif(os.name != "posix",
+                    reason="0600 mode bits are POSIX-only; Windows secures files via ACLs")
 def test_spec_file_is_mode_0600(cfg: WorkerConfig):
     import stat
     job = _job()
@@ -327,7 +330,7 @@ def test_spec_file_is_mode_0600(cfg: WorkerConfig):
 def test_reap_orphan_children_kills_live_and_unlinks(cfg: WorkerConfig):
     import subprocess as sp
     import sys as _sys
-    from reelradar.worker import job_runner as jr
+    from aizu.worker import job_runner as jr
     # A real, harmless child we own; record its pid as if it were an orphan.
     proc = sp.Popen([_sys.executable, "-c", "import time; time.sleep(30)"])
     pid_path = jr._pid_path(cfg.state_dir, "job-orphan")
@@ -344,7 +347,7 @@ def test_reap_orphan_children_kills_live_and_unlinks(cfg: WorkerConfig):
 
 
 def test_reap_orphan_children_ignores_dead_pid(cfg: WorkerConfig):
-    from reelradar.worker import job_runner as jr
+    from aizu.worker import job_runner as jr
     pid_path = jr._pid_path(cfg.state_dir, "job-dead")
     pid_path.parent.mkdir(parents=True, exist_ok=True)
     pid_path.write_text("999999", encoding="utf-8")   # almost certainly not alive

@@ -13,14 +13,14 @@ from pathlib import Path
 
 import pytest
 
-from reelradar.core.config import load_campaign, load_soul
-from reelradar.core.feed import Comment, FakeFeed, Reel
-from reelradar.core.mock_router import MockRouter
-from reelradar.core.pacing import PacingConfig, Pacer
-from reelradar.runner import RunManager
-from reelradar.server import serve
-from reelradar.engines.instagram.session import Session, SessionConfig
-from reelradar.core.store import Store
+from aizu.core.config import load_campaign, load_soul
+from aizu.core.feed import Comment, FakeFeed, Reel
+from aizu.core.mock_router import MockRouter
+from aizu.core.pacing import PacingConfig, Pacer
+from aizu.runner import RunManager
+from aizu.server import serve
+from aizu.engines.instagram.session import Session, SessionConfig
+from aizu.core.store import Store
 
 ROOT = Path(__file__).resolve().parents[1]
 CONFIG = ROOT / "config"
@@ -112,7 +112,7 @@ def panel():
     global _SESSION_COOKIE
     # Signup creates the org + owner; THEN register the file campaign to that org
     # and seed its matches (so the owner's org owns the campaign data).
-    _SESSION_COOKIE = _signup_cookie(base, "panel-tester@reelradar.test", "test-password-123")
+    _SESSION_COOKIE = _signup_cookie(base, "panel-tester@aizu.test", "test-password-123")
     _register_and_seed(db_path)
     yield {"base": base, "db": db_path, "spawner": spawner, "cookie": _SESSION_COOKIE}
     _SESSION_COOKIE = None
@@ -312,7 +312,7 @@ def test_auth_me_with_session_returns_user(panel):
     with urllib.request.urlopen(req) as resp:
         data = json.loads(resp.read())
     assert data["ok"] is True
-    assert data["data"]["user"]["email"] == "panel-tester@reelradar.test"
+    assert data["data"]["user"]["email"] == "panel-tester@aizu.test"
 
 
 # ----- v3 write endpoints -----
@@ -398,7 +398,7 @@ def test_status_write_logs_actor(panel):
     store = Store(panel["db"])
     try:
         hist = store.status_history(_campaign_id(), "c1")
-        assert hist and hist[-1]["by"] == "panel-tester@reelradar.test"
+        assert hist and hist[-1]["by"] == "panel-tester@aizu.test"
     finally:
         store.close()
 
@@ -451,11 +451,11 @@ def test_bulk_status_forbidden_for_member(panel):
     """Bulk status changes are owner/admin only (bulk_edit_leads). A member is
     blocked by the route's role gate — proven by the role-gate error message —
     even though single-lead edits (edit_leads) still allow members."""
-    member = _signup_cookie(panel["base"], "bulk-member@reelradar.test", "test-password-123")
+    member = _signup_cookie(panel["base"], "bulk-member@aizu.test", "test-password-123")
     store = Store(panel["db"])
     try:
         store._conn.execute(
-            "UPDATE users SET role='member' WHERE email='bulk-member@reelradar.test'")
+            "UPDATE users SET role='member' WHERE email='bulk-member@aizu.test'")
         store._conn.commit()
     finally:
         store.close()
@@ -475,7 +475,7 @@ def test_lead_note_create_lists_in_state(panel):
     _, raw = _get(panel["base"] + "/api/state")
     lead = [m for m in json.loads(raw)["MATCHES"] if m["commentId"] == "c1"][0]
     assert any(n["body"] == "left a voicemail" for n in lead["notes"])
-    assert lead["notes"][-1]["authorEmail"] == "panel-tester@reelradar.test"
+    assert lead["notes"][-1]["authorEmail"] == "panel-tester@aizu.test"
 
 
 def test_lead_note_owner_only_delete(panel):
@@ -486,7 +486,7 @@ def test_lead_note_owner_only_delete(panel):
     }).encode())
     note_id = resp["data"]["id"]
     # A different user cannot delete it.
-    other = _signup_cookie(panel["base"], "second-user@reelradar.test", "test-password-123")
+    other = _signup_cookie(panel["base"], "second-user@aizu.test", "test-password-123")
     code, resp = _post_as(panel["base"] + "/api/lead/note",
                           json.dumps({"op": "delete", "noteId": note_id}).encode(), other)
     assert code == 403
@@ -537,7 +537,7 @@ def test_campaign_brief_persists_and_surfaces(panel):
 
 
 def test_brief_to_snake_includes_home_feed_as_bool():
-    from reelradar.server import _brief_to_snake
+    from aizu.server import _brief_to_snake
     assert _brief_to_snake({"includeHomeFeed": False})["include_home_feed"] is False
     assert _brief_to_snake({"includeHomeFeed": True})["include_home_feed"] is True
     # Absent → key dropped, so the engine applies its seed-aware default.
@@ -590,12 +590,12 @@ def test_campaign_archive_rejects_non_bool(panel):
 
 def test_campaign_archive_forbidden_for_viewer(panel):
     """A viewer cannot archive — the edit_campaigns route gate rejects them."""
-    viewer = _signup_cookie(panel["base"], "arch-viewer@reelradar.test", "test-password-123")
+    viewer = _signup_cookie(panel["base"], "arch-viewer@aizu.test", "test-password-123")
     # New signups own their own org; downgrade this account to viewer in its own org.
     store = Store(panel["db"])
     try:
         store._conn.execute(
-            "UPDATE users SET role='viewer' WHERE email='arch-viewer@reelradar.test'")
+            "UPDATE users SET role='viewer' WHERE email='arch-viewer@aizu.test'")
         store._conn.commit()
     finally:
         store.close()
@@ -715,7 +715,7 @@ def test_generate_missing_api_key_returns_503(panel, monkeypatch):
 
 
 def test_generate_returns_draft(panel, monkeypatch):
-    from reelradar import campaign_gen
+    from aizu import campaign_gen
     monkeypatch.setenv("OPENROUTER_API_KEY", "test-key")
     draft = {"name": "Acme Shoes", "objective": "lead", "platform": "instagram",
              "relevanceDef": "running shoes", "matchDef": "wants to buy",
@@ -729,7 +729,7 @@ def test_generate_returns_draft(panel, monkeypatch):
 
 
 def test_generate_campaign_error_returns_422(panel, monkeypatch):
-    from reelradar import campaign_gen
+    from aizu import campaign_gen
 
     def _boom(**kw):
         raise campaign_gen.CampaignGenError("could not draft a campaign")
@@ -744,7 +744,7 @@ def test_generate_campaign_error_returns_422(panel, monkeypatch):
 def test_generate_accepts_body_over_default_cap(panel, monkeypatch):
     """A base64 screenshot exceeds the 64 KB default body cap — the generate route
     must use its own larger ceiling (regression: images were silently 400ing)."""
-    from reelradar import campaign_gen
+    from aizu import campaign_gen
     monkeypatch.setenv("OPENROUTER_API_KEY", "test-key")
     monkeypatch.setattr(campaign_gen, "generate_campaign",
                         lambda **kw: {"name": "From Image"})
@@ -770,7 +770,7 @@ def test_interview_missing_api_key_returns_503(panel, monkeypatch):
 
 
 def test_interview_returns_questions(panel, monkeypatch):
-    from reelradar import campaign_gen
+    from aizu import campaign_gen
     monkeypatch.setenv("OPENROUTER_API_KEY", "test-key")
     result = campaign_gen.InterviewResult(
         done=False,
@@ -802,7 +802,7 @@ def test_interview_rejects_malformed_history(panel, monkeypatch):
 
 def test_interview_accepts_product_context_only(panel, monkeypatch):
     """Later rounds carry the echoed productContext (no url/text/image)."""
-    from reelradar import campaign_gen
+    from aizu import campaign_gen
     monkeypatch.setenv("OPENROUTER_API_KEY", "test-key")
     captured = {}
 
@@ -821,7 +821,7 @@ def test_interview_accepts_product_context_only(panel, monkeypatch):
 
 
 def test_generate_forwards_interview_and_platforms(panel, monkeypatch):
-    from reelradar import campaign_gen
+    from aizu import campaign_gen
     monkeypatch.setenv("OPENROUTER_API_KEY", "test-key")
     captured = {}
 
@@ -854,7 +854,7 @@ def test_campaign_brief_include_home_feed_round_trips(panel):
     }).encode())
     assert code == 200 and resp["ok"] is True
 
-    from reelradar.core.store import Store
+    from aizu.core.store import Store
     store = Store(panel["db"])
     try:
         stored = store.get_campaign_brief("homefeed-test")
@@ -871,7 +871,7 @@ def test_campaign_brief_include_home_feed_round_trips(panel):
 
 
 def test_channel_to_snake_valid_entry():
-    from reelradar.server import _channel_to_snake
+    from aizu.server import _channel_to_snake
     out = _channel_to_snake({"platform": "YouTube", "seedHashtags": [" saas ", ""],
                              "seedChannels": ["UC1"], "includeHomeFeed": False})
     assert out == {"platform": "youtube", "seed_hashtags": ["saas"],
@@ -879,20 +879,20 @@ def test_channel_to_snake_valid_entry():
 
 
 def test_channel_to_snake_invalid_platform_returns_none():
-    from reelradar.server import _channel_to_snake
+    from aizu.server import _channel_to_snake
     assert _channel_to_snake({"platform": "tiktok"}) is None
     assert _channel_to_snake({"platform": ""}) is None
     assert _channel_to_snake("not-a-dict") is None
 
 
 def test_channel_to_snake_absent_optional_fields():
-    from reelradar.server import _channel_to_snake
+    from aizu.server import _channel_to_snake
     # No seeds / no includeHomeFeed → only platform emitted (seed-aware default later).
     assert _channel_to_snake({"platform": "instagram"}) == {"platform": "instagram"}
 
 
 def test_brief_to_snake_channels_branch_translates_and_drops_invalid():
-    from reelradar.server import _brief_to_snake
+    from aizu.server import _brief_to_snake
     out = _brief_to_snake({"channels": [
         {"platform": "instagram", "seedHashtags": ["a"]},
         {"platform": "tiktok"}, "junk"]})
@@ -915,12 +915,12 @@ def test_brief_to_snake_channels_all_invalid_emits_empty():
 
 
 def _brief_to_snake_helper(brief):
-    from reelradar.server import _brief_to_snake
+    from aizu.server import _brief_to_snake
     return _brief_to_snake(brief)
 
 
 def test_campaign_channels_round_trip_via_api(panel):
-    from reelradar.core.store import Store
+    from aizu.core.store import Store
     code, resp = _post(panel["base"] + "/api/campaign", json.dumps({
         "campaignId": "multi-rt", "status": "draft",
         "brief": {"platform": "instagram", "channels": [
@@ -940,7 +940,7 @@ def test_campaign_channels_round_trip_via_api(panel):
 
 
 def test_campaign_channels_absent_is_no_change(panel):
-    from reelradar.core.store import Store
+    from aizu.core.store import Store
     store = Store(panel["db"])
     store.upsert_campaign_brief("nochg", {"platform": "instagram", "channels": [
         {"platform": "instagram"}, {"platform": "youtube"}]})
@@ -957,7 +957,7 @@ def test_campaign_channels_absent_is_no_change(panel):
 
 
 def test_campaign_channels_empty_list_clears_stored(panel):
-    from reelradar.core.store import Store
+    from aizu.core.store import Store
     store = Store(panel["db"])
     store.upsert_campaign_brief("clearch", {"platform": "instagram", "channels": [
         {"platform": "instagram"}, {"platform": "youtube"}]})
@@ -981,7 +981,7 @@ def test_campaign_rejects_bad_brief_platform(panel):
 
 
 def test_campaign_brief_save_merges_and_preserves_prompts(panel):
-    from reelradar.core.store import Store
+    from aizu.core.store import Store
     # Pre-store a brief with tuned prompts.
     store = Store(panel["db"])
     store.upsert_campaign_brief("merge-test", {
@@ -1014,7 +1014,7 @@ def test_merge_base_seeds_from_file_campaign_when_no_db_brief():
     """Editing the FILE-backed primary campaign (no DB brief yet) must seed the
     merge base from campaign.md's FULL brief, so a save can't drop the YAML-only
     knobs (escalate_band, enable_actions, caps, seed_direction, tuned prompts)."""
-    from reelradar.server import _campaign_merge_base
+    from aizu.server import _campaign_merge_base
     store = _fresh_store()
     try:
         base = _campaign_merge_base(store, str(CONFIG), _campaign_id())
@@ -1034,7 +1034,7 @@ def test_merge_base_seeds_from_file_campaign_when_no_db_brief():
 def test_merge_base_is_empty_for_brand_new_campaign():
     """A brand-new UI campaign id matches no file campaign → empty base (nothing
     to preserve), so its brief is exactly the submitted form fields."""
-    from reelradar.server import _campaign_merge_base
+    from aizu.server import _campaign_merge_base
     store = _fresh_store()
     try:
         assert _campaign_merge_base(store, str(CONFIG), "totally-new-campaign-xyz") == {}
@@ -1045,7 +1045,7 @@ def test_merge_base_is_empty_for_brand_new_campaign():
 def test_merge_base_prefers_stored_db_brief():
     """When a DB brief already exists it wins over the file campaign — an edit
     overlays on the stored blob (the pre-existing merge-preserve behaviour)."""
-    from reelradar.server import _campaign_merge_base
+    from aizu.server import _campaign_merge_base
     store = _fresh_store()
     try:
         store.upsert_campaign_brief("ui-camp", {
@@ -1057,7 +1057,7 @@ def test_merge_base_prefers_stored_db_brief():
 
 
 def test_brief_to_snake_persists_prompts_and_drops_blanks():
-    from reelradar.server import _brief_to_snake
+    from aizu.server import _brief_to_snake
     # A non-empty prompt persists; a blank one is dropped (never clobbers a
     # stored tuned prompt on merge).
     assert _brief_to_snake({"matchPrompt": "TUNED"})["match_prompt"] == "TUNED"
@@ -1066,7 +1066,7 @@ def test_brief_to_snake_persists_prompts_and_drops_blanks():
 
 
 def test_campaign_brief_persists_prompts_from_form(panel):
-    from reelradar.core.store import Store
+    from aizu.core.store import Store
     code, resp = _post(panel["base"] + "/api/campaign", json.dumps({
         "campaignId": "prompted", "status": "draft",
         "brief": {"platform": "instagram", "extractDef": "- phone\n- email",
@@ -1444,7 +1444,7 @@ def _activity(panel, qs: str) -> tuple[int, dict]:
 def _seed_run_activity(db_path: str, run_id: str = "run-seed") -> None:
     """Seed a finished session + its narrative events for the file campaign (already
     registered to the panel's org by the fixture), so the feed is org-owned."""
-    from reelradar.core.store import SessionCounters
+    from aizu.core.store import SessionCounters
     store = Store(db_path)
     cid = _campaign_id()
     try:
@@ -1507,7 +1507,7 @@ def test_run_activity_returns_events_and_counters(panel):
 def test_run_activity_multi_platform_events_carry_correct_platform(panel):
     """A multi-platform run tags each event with its own session's platform — so the
     activity feed can show which channel produced each line (C7)."""
-    from reelradar.core.store import Store
+    from aizu.core.store import Store
     cid = _campaign_id()
     store = Store(panel["db"])
     try:
@@ -1797,7 +1797,7 @@ def test_run_dry_stays_in_process_even_in_distributed_mode(panel):
 # ----- v16 lead-budget split (distributed scope='all' must never N× the cap) -----
 
 def test_split_lead_budget_sums_to_total():
-    from reelradar.server import _split_lead_budget
+    from aizu.server import _split_lead_budget
     assert _split_lead_budget(250, 4) == [63, 63, 62, 62]
     assert sum(_split_lead_budget(250, 4)) == 250
     assert _split_lead_budget(10, 1) == [10]          # single campaign → full remainder

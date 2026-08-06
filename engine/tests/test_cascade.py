@@ -1,9 +1,9 @@
 from pathlib import Path
 
-from reelradar.engines.instagram.cascade import Cascade
-from reelradar.core.config import campaign_from_brief, load_campaign
-from reelradar.core.feed import Comment, Reel
-from reelradar.core.router import Decision
+from aizu.engines.instagram.cascade import Cascade
+from aizu.core.config import campaign_from_brief, load_campaign
+from aizu.core.feed import Comment, Reel
+from aizu.core.router import Decision
 
 CONFIG = Path(__file__).resolve().parents[1] / "config"
 
@@ -191,3 +191,105 @@ def test_no_declared_fields_leaves_extraction_unconstrained():
     res = Cascade(r, camp).score_comment(Comment("c1", "u", "interested"))
     assert res.decision.extracted == {"anything": "kept"}
     assert "OUTPUT CONTRACT" not in r.instructions[0]
+
+
+# ----- gap #4: deterministic grounding check for extracted contact fields -----
+
+def test_score_comment_grounds_out_a_hallucinated_phone():
+    """A phone number the model invented — never present in the comment/reel
+    text it was actually shown — must not be trusted onto the persisted match."""
+    d = Decision("match", 0.9, 0.95,
+                 extracted={"phone": "+19995551234", "email": None, "intent": "pricing"})
+    r = ScriptedRouter([d])
+    res = Cascade(r, camp()).score_comment(
+        Comment("c1", "u", "how much is the Pro plan?"))
+    assert res.decision.extracted["phone"] is None
+    assert res.decision.extracted["intent"] == "pricing"   # non-contact field untouched
+
+
+def test_score_comment_keeps_a_real_phone_despite_formatting():
+    """A real phone number that DOES appear (formatting aside) in the comment
+    must survive grounding."""
+    d = Decision("match", 0.9, 0.95,
+                 extracted={"phone": "+14155550142", "email": None, "intent": "pricing"})
+    r = ScriptedRouter([d])
+    res = Cascade(r, camp()).score_comment(
+        Comment("c1", "u", "how much? call +1 415 555 0142"))
+    assert res.decision.extracted["phone"] == "+14155550142"
+
+
+def test_score_comment_grounds_a_hallucinated_email():
+    d = Decision("match", 0.9, 0.95,
+                 extracted={"phone": None, "email": "made-up@nowhere.com", "intent": "pricing"})
+    r = ScriptedRouter([d])
+    res = Cascade(r, camp()).score_comment(Comment("c1", "u", "how much is it?"))
+    assert res.decision.extracted["email"] is None
+
+
+# ----- gap #4: optional corroboration gate -----
+
+def _corroboration_campaign(require: bool):
+    return campaign_from_brief("corrob-camp", {
+        "platform": "instagram", "threshold": 0.7,
+        "match_def": "buyer intent", "extract_def": "- phone\n- company name",
+        "require_corroboration": require,
+    })
+
+
+def test_corroboration_gate_default_off_ignores_a_disagreement():
+    """Off by default — a disagreeing comparison model must not affect anything."""
+    comparisons = [{"model": "candidate-a", "score": 0.1, "error": None}]
+    d = Decision("match", 0.9, 0.95, extracted={}, comparisons=comparisons)
+    r = ScriptedRouter([d])
+    res = Cascade(r, _corroboration_campaign(False)).score_comment(
+        Comment("c1", "u", "we need an app, call me"))
+    assert res.is_match and not res.needs_review
+
+
+def test_corroboration_gate_enabled_routes_disagreement_to_needs_review():
+    comparisons = [{"model": "candidate-a", "score": 0.1, "error": None}]
+    d = Decision("match", 0.9, 0.95, extracted={}, comparisons=comparisons)
+    r = ScriptedRouter([d])
+    res = Cascade(r, _corroboration_campaign(True)).score_comment(
+        Comment("c1", "u", "we need an app, call me"))
+    assert res.is_match and res.needs_review
+
+
+def test_corroboration_gate_enabled_agreement_keeps_verdict():
+    comparisons = [{"model": "candidate-a", "score": 0.9, "error": None}]
+    d = Decision("match", 0.9, 0.95, extracted={}, comparisons=comparisons)
+    r = ScriptedRouter([d])
+    res = Cascade(r, _corroboration_campaign(True)).score_comment(
+        Comment("c1", "u", "we need an app, call me"))
+    assert res.is_match and not res.needs_review
+
+
+def test_corroboration_gate_enabled_inconclusive_comparison_needs_review():
+    comparisons = [{"model": "candidate-a", "score": None, "error": "timeout"}]
+    d = Decision("match", 0.9, 0.95, extracted={}, comparisons=comparisons)
+    r = ScriptedRouter([d])
+    res = Cascade(r, _corroboration_campaign(True)).score_comment(
+        Comment("c1", "u", "we need an app, call me"))
+    assert res.is_match and res.needs_review
+
+
+def test_corroboration_gate_never_touches_score_or_extracted_either_way():
+    """The gate only ever adds `needs_review` metadata — it must never change the
+    persisted score/extracted (default-off path is byte-for-byte unchanged, and
+    turning the flag on must not perturb the verdict itself either)."""
+    comparisons = [{"model": "candidate-a", "score": 0.1, "error": None}]
+    extracted = {"phone": None, "company_name": "Acme"}
+
+    d_off = Decision("match", 0.9, 0.95, extracted=dict(extracted), comparisons=comparisons)
+    res_off = Cascade(ScriptedRouter([d_off]), _corroboration_campaign(False)).score_comment(
+        Comment("c1", "u", "we need an app, call me"))
+
+    d_on = Decision("match", 0.9, 0.95, extracted=dict(extracted), comparisons=comparisons)
+    res_on = Cascade(ScriptedRouter([d_on]), _corroboration_campaign(True)).score_comment(
+        Comment("c1", "u", "we need an app, call me"))
+
+    assert res_off.decision.score == res_on.decision.score == 0.9
+    assert res_off.decision.extracted == res_on.decision.extracted == extracted
+    assert res_off.is_match and res_on.is_match
+    assert res_off.needs_review is False
+    assert res_on.needs_review is True

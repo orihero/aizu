@@ -3,7 +3,7 @@ import os
 import sqlite3
 import tempfile
 
-from reelradar.core.store import SCHEMA_VERSION, Store
+from aizu.core.store import SCHEMA_VERSION, Store
 
 
 def fresh_store():

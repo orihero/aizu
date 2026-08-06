@@ -12,11 +12,11 @@ import tempfile
 
 import pytest
 
-from reelradar.core.feed import Comment, Reel
-from reelradar.core.router import Decision
-from reelradar.engines.reddit import feed as rfeed
-from reelradar.engines.reddit.feed import RedditApiError, RedditDataApiClient
-from reelradar.engines.reddit.session import run_session
+from aizu.core.feed import Comment, Reel
+from aizu.core.router import Decision
+from aizu.engines.reddit import feed as rfeed
+from aizu.engines.reddit.feed import RedditApiError, RedditDataApiClient
+from aizu.engines.reddit.session import run_session
 
 
 # ---------------- token + _get retry/backoff ----------------
@@ -148,7 +148,7 @@ class FlakyFeed:
 
 
 def _campaign():
-    from reelradar.core.config import campaign_from_brief
+    from aizu.core.config import campaign_from_brief
     return campaign_from_brief("reddit-flaky", {
         "platform": "reddit", "threshold": 0.7,
         "relevance_def": "saas product", "match_def": "buyer intent",
@@ -158,7 +158,7 @@ def _campaign():
 def _store():
     fd, path = tempfile.mkstemp(suffix=".db")
     os.close(fd)
-    from reelradar.core.store import Store
+    from aizu.core.store import Store
     return Store(path)
 
 

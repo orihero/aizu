@@ -20,6 +20,8 @@ export const queryKeys = {
 
   /** One run's live activity feed (polled while the run is in flight). */
   runActivity: (runId: string) => ['run-activity', runId] as const,
+  /** GET /api/agent/readiness — polled globally for the "agent not ready" banner. */
+  agentReadiness: ['agent-readiness'] as const,
 
   // ---- superadmin plane (separate /api/admin/* branch) ----
   /** GET /api/admin/whoami — the admin session + impersonation state. */

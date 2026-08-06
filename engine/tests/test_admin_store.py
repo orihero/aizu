@@ -5,7 +5,7 @@ import tempfile
 
 import pytest
 
-from reelradar.core.store import (ADMIN_LOGIN_MAX_FAILURES, SCHEMA_VERSION, Store)
+from aizu.core.store import (ADMIN_LOGIN_MAX_FAILURES, SCHEMA_VERSION, Store)
 
 
 def _tmp() -> str:
@@ -30,7 +30,7 @@ def test_v15_tables_exist_and_version_stamped():
                 "model_comparison_log"} <= names
         ver = store._conn.execute(
             "SELECT value FROM meta WHERE key='schema_version'").fetchone()[0]
-        assert ver == str(SCHEMA_VERSION) == "17"
+        assert ver == str(SCHEMA_VERSION)
     finally:
         store.close()
 

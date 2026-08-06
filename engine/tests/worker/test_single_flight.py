@@ -5,7 +5,7 @@ import os
 import time
 from pathlib import Path
 
-from reelradar.worker import single_flight
+from aizu.worker import single_flight
 
 
 def test_acquire_then_second_attempt_is_blocked(state_dir: Path):

@@ -4,12 +4,12 @@ Injected clock keeps it deterministic and fast."""
 import os
 import tempfile
 
-from reelradar.core.config import campaign_from_brief
-from reelradar.core.feed import Comment, FakeFeed, Reel
-from reelradar.core.pacing import Pacer, PacingConfig
-from reelradar.core.router import Decision
-from reelradar.core.store import Store
-from reelradar.engines.linkedin.session import LinkedInSession, SessionConfig
+from aizu.core.config import campaign_from_brief
+from aizu.core.feed import Comment, FakeFeed, Reel
+from aizu.core.pacing import Pacer, PacingConfig
+from aizu.core.router import Decision
+from aizu.core.store import Store
+from aizu.engines.linkedin.session import LinkedInSession, SessionConfig
 
 
 class SpyRouter:

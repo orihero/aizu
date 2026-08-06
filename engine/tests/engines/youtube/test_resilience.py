@@ -10,11 +10,11 @@ import tempfile
 
 import pytest
 
-from reelradar.core.feed import Comment, Reel
-from reelradar.core.router import Decision
-from reelradar.engines.youtube import feed as ytfeed
-from reelradar.engines.youtube.feed import YouTubeApiError, YouTubeDataApiClient
-from reelradar.engines.youtube.session import run_session
+from aizu.core.feed import Comment, Reel
+from aizu.core.router import Decision
+from aizu.engines.youtube import feed as ytfeed
+from aizu.engines.youtube.feed import YouTubeApiError, YouTubeDataApiClient
+from aizu.engines.youtube.session import run_session
 
 
 # ---------------- _get retry/backoff ----------------
@@ -121,7 +121,7 @@ class FlakyFeed:
 
 
 def _campaign():
-    from reelradar.core.config import campaign_from_brief
+    from aizu.core.config import campaign_from_brief
     return campaign_from_brief("yt-flaky", {
         "platform": "youtube", "threshold": 0.7,
         "relevance_def": "saas product", "match_def": "buyer intent",
@@ -131,7 +131,7 @@ def _campaign():
 def _store():
     fd, path = tempfile.mkstemp(suffix=".db")
     os.close(fd)
-    from reelradar.core.store import Store
+    from aizu.core.store import Store
     return Store(path)
 
 

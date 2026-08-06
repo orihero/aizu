@@ -1,5 +1,5 @@
 [project]
-name = "reelradar"
+name = "aizu"
 version = "0.1.0"
 description = "Instagram Reel-Comment Discovery Agent — local-first, brief-driven engine"
 requires-python = ">=3.10"
@@ -16,20 +16,29 @@ dev = ["pytest>=8.0"]
 # Live Telegram runs read public channels over MTProto (lazy import in
 # feeds/telegram.py — only required for an actual Telegram run): pip install -e ".[telegram]"
 telegram = ["telethon>=1.34"]
+# Local Uzbek STT ("KotibAI", Instagram-only, campaign-gated — see core/transcribe.py).
+# Lazy import in KotibTranscriber._load(); only required when AIZU_STT_ENABLED=1:
+# pip install -e ".[stt]"
+# nvidia-cublas-cu12/nvidia-cudnn-cu12 ship the CUDA runtime DLLs ctranslate2's native
+# loader needs on Windows (confirmed via runtime spike — cublas64_12.dll etc. are NOT
+# found via the system CUDA install, only via these pip-installed copies); Windows-only
+# markers since Linux/mac deployments are expected to provide CUDA via the system image.
+stt = ["faster-whisper>=1.1", "nvidia-cublas-cu12; platform_system=='Windows'",
+       "nvidia-cudnn-cu12>=9,<10; platform_system=='Windows'"]
 
 [project.scripts]
-reelradar = "reelradar.cli:main"
+aizu = "aizu.cli:main"
 # The Phase-6 worker sidecar binary target (packaged via PyInstaller for the desktop
-# app). Reuses sidecar.main verbatim — `reelradar-worker` (dev, pip install -e) and the
+# app). Reuses sidecar.main verbatim — `aizu-worker` (dev, pip install -e) and the
 # PyInstaller binary (packaged) are behaviorally identical, no forked entry logic.
-reelradar-worker = "reelradar.worker.sidecar:main"
+aizu-worker = "aizu.worker.sidecar:main"
 
 [build-system]
 requires = ["setuptools>=68"]
 build-backend = "setuptools.build_meta"
 
 [tool.setuptools.packages.find]
-include = ["reelradar*"]
+include = ["aizu*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

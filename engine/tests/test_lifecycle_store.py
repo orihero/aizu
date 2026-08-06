@@ -6,7 +6,7 @@ import tempfile
 
 import pytest
 
-from reelradar.core.store import SCHEMA_VERSION, Store
+from aizu.core.store import COOLDOWN_BASE_SECONDS, COOLDOWN_MAX_SECONDS, SCHEMA_VERSION, Store
 
 
 def fresh_store():
@@ -217,3 +217,108 @@ def test_set_schedule_unknown_campaign_returns_none():
     store, _ = fresh_store()
     assert store.set_campaign_schedule("nope", kind="daily", hour=9, minute=0,
                                        next_run_at=1.0) is None
+
+
+# ----- session_cooldowns (gap #1: self-healing anti-bot cooldown) -----
+
+def test_record_soft_halt_backoff_doubles_each_attempt():
+    store, _ = fresh_store()
+    try:
+        now = 1_700_000_000.0
+        expected_deltas = [COOLDOWN_BASE_SECONDS, COOLDOWN_BASE_SECONDS * 2,
+                           COOLDOWN_BASE_SECONDS * 4, COOLDOWN_BASE_SECONDS * 8]
+        for i, expected_delta in enumerate(expected_deltas, start=1):
+            row = store.record_soft_halt("c1", "instagram", "action_block", now=now)
+            assert row["attempt"] == i
+            assert row["cooldown_until"] - now == pytest.approx(expected_delta)
+    finally:
+        store.close()
+
+
+def test_record_soft_halt_backoff_caps_at_max():
+    store, _ = fresh_store()
+    try:
+        now = 1_700_000_000.0
+        row = None
+        for _ in range(12):        # 15min * 2**11 would blow way past the 6h cap
+            row = store.record_soft_halt("c1", "instagram", "canary", now=now)
+        assert row["cooldown_until"] - now == pytest.approx(COOLDOWN_MAX_SECONDS)
+    finally:
+        store.close()
+
+
+def test_cooldown_persists_and_rehydrates_after_restart():
+    """No separate warm-up step exists: a fresh Store(path) — simulating a process
+    restart — sees exactly what the prior process last wrote, by simply reading the
+    row back."""
+    store, path = fresh_store()
+    now = 1_700_000_000.0
+    store.record_soft_halt("c1", "instagram", "canary", now=now)
+    store.close()
+
+    store2 = Store(path)
+    try:
+        row = store2.get_cooldown("c1", "instagram")
+        assert row is not None
+        assert row["attempt"] == 1
+        assert row["last_kind"] == "canary"
+        remaining = store2.cooldown_remaining("c1", "instagram", now=now + 1.0)
+        assert remaining == pytest.approx(COOLDOWN_BASE_SECONDS - 1.0)
+    finally:
+        store2.close()
+
+
+def test_cooldown_remaining_zero_once_elapsed_but_row_persists():
+    store, _ = fresh_store()
+    try:
+        now = 1_700_000_000.0
+        store.record_soft_halt("c1", "instagram", "action_block", now=now)
+        past_cooldown = now + COOLDOWN_BASE_SECONDS + 1.0
+        assert store.cooldown_remaining("c1", "instagram", now=past_cooldown) == 0.0
+        assert store.get_cooldown("c1", "instagram") is not None  # row still there
+    finally:
+        store.close()
+
+
+def test_cooldown_remaining_is_zero_when_never_recorded():
+    store, _ = fresh_store()
+    try:
+        assert store.get_cooldown("never", "instagram") is None
+        assert store.cooldown_remaining("never", "instagram") == 0.0
+    finally:
+        store.close()
+
+
+def test_clear_cooldown_resets_the_streak():
+    store, _ = fresh_store()
+    try:
+        now = 1_700_000_000.0
+        store.record_soft_halt("c1", "instagram", "action_block", now=now)
+        store.record_soft_halt("c1", "instagram", "action_block", now=now)  # attempt 2
+        store.clear_cooldown("c1", "instagram")
+        assert store.get_cooldown("c1", "instagram") is None
+
+        row = store.record_soft_halt("c1", "instagram", "action_block", now=now)
+        assert row["attempt"] == 1     # starts over, not continuing the old streak
+    finally:
+        store.close()
+
+
+def test_clear_cooldown_on_untouched_campaign_is_a_no_op():
+    store, _ = fresh_store()
+    try:
+        store.clear_cooldown("nope", "instagram")   # must not raise
+        assert store.get_cooldown("nope", "instagram") is None
+    finally:
+        store.close()
+
+
+def test_cooldown_is_scoped_per_campaign_and_platform():
+    store, _ = fresh_store()
+    try:
+        now = 1_700_000_000.0
+        store.record_soft_halt("c1", "instagram", "action_block", now=now)
+        assert store.get_cooldown("c1", "linkedin") is None   # different platform
+        assert store.get_cooldown("c2", "instagram") is None  # different campaign
+    finally:
+        store.close()

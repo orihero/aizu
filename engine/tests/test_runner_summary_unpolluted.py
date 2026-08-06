@@ -4,7 +4,7 @@ A panel-triggered run is a subprocess whose stdout+stderr are redirected into on
 logfile that ``runner._extract_json`` / ``_summarize`` parse for the run's JSON
 summary. If the new colorful logging leaked onto that stream, the summary would
 silently degrade to ``exit 0``. This spawns a real dry run in spawned mode
-(``REELRADAR_RUN_ID`` set) exactly like RunManager does, and asserts:
+(``AIZU_RUN_ID`` set) exactly like RunManager does, and asserts:
 
   1. the merged stdout/stderr still yields the summary (matches=3), and
   2. the rich activity went to the per-run app logfile instead — proving the
@@ -15,7 +15,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-from reelradar.runner import _extract_json, _summarize
+from aizu.runner import _extract_json, _summarize
 
 ENGINE_ROOT = Path(__file__).resolve().parent.parent
 
@@ -26,15 +26,15 @@ def test_spawned_run_logs_do_not_pollute_parsed_summary(tmp_path):
     run_id = "testrun01"
 
     env = dict(os.environ)
-    env["REELRADAR_RUN_ID"] = run_id                 # → spawned mode (file-only logs)
-    env["REELRADAR_LOG_FILE"] = str(logdir / "reelradar.log")
-    env["REELRADAR_LOG_LEVEL"] = "DEBUG"
+    env["AIZU_RUN_ID"] = run_id                 # → spawned mode (file-only logs)
+    env["AIZU_LOG_FILE"] = str(logdir / "aizu.log")
+    env["AIZU_LOG_LEVEL"] = "DEBUG"
 
     # Mimic default_spawner: capture stdout AND stderr into one per-run logfile.
     merged = tmp_path / "merged.log"
     with open(merged, "ab") as fh:
         proc = subprocess.run(
-            [sys.executable, "-m", "reelradar.cli", "--db", str(db),
+            [sys.executable, "-m", "aizu.cli", "--db", str(db),
              "run", "--dry-run", "--config", str(ENGINE_ROOT / "config")],
             cwd=str(ENGINE_ROOT), env=env, stdout=fh, stderr=subprocess.STDOUT)
 

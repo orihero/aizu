@@ -16,7 +16,11 @@ import {
   writeResponseSchema,
 } from '@/shared/schemas/panelState';
 import {
+  agentLaunchFailureSchema,
+  agentNotReadyResponseSchema,
+  agentReadinessSchema,
   billingPortalResponseSchema,
+  launchAgentLoginResponseSchema,
   runStartResponseSchema,
   campaignsPayloadSchema,
   checkoutSessionResponseSchema,
@@ -61,6 +65,8 @@ import {
 } from '@/shared/schemas/admin';
 import type {
   AddLeadNoteInput,
+  AgentReadiness,
+  AgentReadinessOptions,
   ArchiveCampaignInput,
   AuthUser,
   BillingPortal,
@@ -81,6 +87,7 @@ import type {
   InviteCreateInput,
   InviteInfo,
   InviteLink,
+  LaunchAgentLoginResult,
   LeadsPayload,
   LeadsQuery,
   OrganizationInput,
@@ -127,6 +134,8 @@ const RUN_STOP_ENDPOINT = '/api/run/stop';
 const RUN_PAUSE_ENDPOINT = '/api/run/pause';
 const RUN_RESUME_ENDPOINT = '/api/run/resume';
 const RUN_ACTIVITY_ENDPOINT = '/api/run/activity';
+const AGENT_READINESS_ENDPOINT = '/api/agent/readiness';
+const AGENT_LAUNCH_LOGIN_ENDPOINT = '/api/agent/launch-login';
 const SIGNUP_ENDPOINT = '/api/auth/signup';
 const LOGIN_ENDPOINT = '/api/auth/login';
 const LOGOUT_ENDPOINT = '/api/auth/logout';
@@ -403,12 +412,48 @@ export class HttpPanelRepository implements PanelRepository {
     return this.postForData(CAMPAIGN_INTERVIEW_ENDPOINT, input, interviewResponseSchema);
   }
 
-  runCampaign(input: RunInput): Promise<Result<RunStartResult>> {
-    // postForData maps 202 → ok(data) and 409/400 → appError('http', msg, status). A
-    // fleet run's data carries runId/backend; an in-process run's data has neither, so
-    // the tolerant schema coerces both to null (the drawer then falls back to the RUN
-    // block). data is never server-side null on a 202, so this never mis-reads as error.
-    return this.postForData(RUN_ENDPOINT, input, runStartResponseSchema);
+  async runCampaign(input: RunInput): Promise<Result<RunStartResult>> {
+    let response: Response;
+    try {
+      response = await fetch(this.baseUrl + RUN_ENDPOINT, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(input),
+        credentials: CREDENTIALS,
+      });
+    } catch (cause) {
+      return err(appError('network', `bridge server unreachable: ${describe(cause)}`));
+    }
+    const json = await parseJsonSafely(response);
+    if (!json.ok) return json;
+
+    // The agent-not-ready gate answers 409 with its OWN shape (not the {ok,data,error}
+    // envelope every other run-control write uses) so it can carry the full readiness
+    // snapshot. Check for it before the generic parse below, and tag the error with
+    // `code: 'agent_not_ready'` so the drawer can point admins at the fix banner rather
+    // than showing a generic run-conflict message.
+    if (response.status === 409) {
+      const gate = agentNotReadyResponseSchema.safeParse(json.value);
+      if (gate.success) {
+        return err(appError('http', gate.data.detail, 409, gate.data.error));
+      }
+    }
+
+    // postForData's usual envelope: 202 → ok(data) and other 409s (e.g. the single-run
+    // lock)/400 → appError('http', msg, status). A fleet run's data carries
+    // runId/backend; an in-process run's data has neither, so the tolerant schema
+    // coerces both to null (the drawer then falls back to the RUN block). data is never
+    // server-side null on a 202, so this never mis-reads as error.
+    const parsed = runStartResponseSchema.safeParse(json.value);
+    if (!parsed.success) {
+      return response.ok
+        ? err(appError('validation', 'response shape mismatch'))
+        : err(appError('http', `request failed (HTTP ${response.status})`, response.status));
+    }
+    if (!response.ok || !parsed.data.ok || parsed.data.data === null) {
+      return err(appError('http', parsed.data.error ?? `HTTP ${response.status}`, response.status));
+    }
+    return ok(parsed.data.data);
   }
 
   stopRun(): Promise<Result<void>> {
@@ -453,6 +498,40 @@ export class HttpPanelRepository implements PanelRepository {
       return err(appError('http', parsed.data.error ?? `HTTP ${response.status}`, response.status));
     }
     return ok(parsed.data.data);
+  }
+
+  getAgentReadiness(opts?: AgentReadinessOptions): Promise<Result<AgentReadiness>> {
+    const path = opts?.refresh ? `${AGENT_READINESS_ENDPOINT}?refresh=1` : AGENT_READINESS_ENDPOINT;
+    return this.getRaw(path, agentReadinessSchema, 'agent readiness');
+  }
+
+  async launchAgentLogin(): Promise<Result<LaunchAgentLoginResult>> {
+    let response: Response;
+    try {
+      response = await fetch(this.baseUrl + AGENT_LAUNCH_LOGIN_ENDPOINT, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({}),
+        credentials: CREDENTIALS,
+      });
+    } catch (cause) {
+      return err(appError('network', `bridge server unreachable: ${describe(cause)}`));
+    }
+    const json = await parseJsonSafely(response);
+    if (!json.ok) return json;
+
+    if (!response.ok) {
+      // 500 carries {error, detail} when Chrome itself couldn't be started; a 403
+      // (not owner/admin) has no such body — fall back to a generic HTTP message.
+      const failure = agentLaunchFailureSchema.safeParse(json.value);
+      const message = failure.success ? failure.data.detail : `launch failed (HTTP ${response.status})`;
+      return err(appError('http', message, response.status));
+    }
+    const parsed = launchAgentLoginResponseSchema.safeParse(json.value);
+    if (!parsed.success) {
+      return err(appError('validation', 'launch-login response shape mismatch'));
+    }
+    return ok(parsed.data);
   }
 
   updateSettings(input: WorkspaceSettingsInput): Promise<Result<void>> {

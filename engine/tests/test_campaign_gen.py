@@ -5,8 +5,8 @@ import socket
 
 import pytest
 
-from reelradar import campaign_gen as cg
-from reelradar.campaign_gen import (CampaignGenError, ProductContext,
+from aizu import campaign_gen as cg
+from aizu.campaign_gen import (CampaignGenError, ProductContext,
                                      UrlFetchError, _PlaywrightUnavailable,
                                      _assert_url_safe, _html_to_text,
                                      assemble_draft, assemble_interview,

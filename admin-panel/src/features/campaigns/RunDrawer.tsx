@@ -5,8 +5,10 @@ import { Button } from '@/shared/ui/Button';
 import { Drawer } from '@/shared/ui/Drawer';
 import { cn } from '@/shared/lib/cn';
 import { queryKeys } from '@/shared/api/queryKeys';
+import { ResultError, type AppError } from '@/shared/lib/result';
 import { usePauseRun, useResumeRun, useRunCampaign, useStopRun } from '@/shared/hooks/useWriteMutations';
 import { useRunActivity } from '@/shared/hooks/useRunActivity';
+import { useCan } from '@/shared/hooks/useCan';
 import {
   selectIsAnyRunActive,
   selectIsCampaignRunning,
@@ -14,6 +16,7 @@ import {
   selectLastRunForCampaign,
 } from '@/shared/selectors/campaigns';
 import type { Campaign, RunBlock } from '@/shared/types/domain';
+import { describeRunStartError } from './describeRunStartError';
 import { RunActivityFeed } from './RunActivityFeed';
 
 // Quick-pick lead targets; custom covers anything in [1, MAX_LEADS].
@@ -27,6 +30,39 @@ const DEFAULT_CAP_MINUTES = 120;
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : 'Something went wrong.';
+}
+
+/** react-query's mutation `.error` is `unknown`, but every write here goes through
+ * `unwrap()`, which only ever throws a ResultError — recover the typed AppError so
+ * describeRunStartError can branch on its `code`, not just its message text. */
+function toAppError(error: unknown): AppError {
+  return error instanceof ResultError
+    ? error.appError
+    : { kind: 'unknown', message: errorMessage(error) };
+}
+
+interface RunStartErrorProps {
+  readonly error: unknown;
+}
+
+/** The run-start (POST /api/run) inline error. A plain conflict/validation failure
+ * just shows the server's message; the 409 agent-not-ready gate additionally points
+ * the operator at the fix — the global banner for an admin, "ask an admin" otherwise. */
+function RunStartError({ error }: RunStartErrorProps) {
+  const canFixAgent = useCan('fix_agent');
+  const described = describeRunStartError(toAppError(error));
+  return (
+    <div className="space-y-1">
+      <p className="text-xs font-medium text-danger">{described.message}</p>
+      {described.agentNotReady ? (
+        <p className="text-xs font-medium text-text-faint">
+          {canFixAgent
+            ? 'Use the "Instagram agent" banner at the top of the app to fix this, then try again.'
+            : 'An administrator needs to fix this (see the banner at the top of the app) before a run can start.'}
+        </p>
+      ) : null}
+    </div>
+  );
 }
 
 interface RunDrawerProps {
@@ -285,9 +321,7 @@ export function RunDrawer({ campaign, run, isOpen, onClose }: RunDrawerProps) {
           {isAnyActive ? (
             <p className="text-xs font-medium text-warn">Another run is active — wait for it to finish.</p>
           ) : null}
-          {runCampaign.isError ? (
-            <p className="text-xs font-medium text-danger">{errorMessage(runCampaign.error)}</p>
-          ) : null}
+          {runCampaign.isError ? <RunStartError error={runCampaign.error} /> : null}
 
           {feedRunId ? (
             <div className="border-t border-border pt-3">

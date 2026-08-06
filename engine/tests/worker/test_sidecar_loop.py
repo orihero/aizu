@@ -10,13 +10,13 @@ from typing import Optional
 
 import pytest
 
-from reelradar.worker import job_runner, sidecar
-from reelradar.worker.config import WorkerConfig
-from reelradar.worker.job_runner import CampaignNotFound
-from reelradar.worker.lease_client import Result
+from aizu.worker import job_runner, sidecar
+from aizu.worker.config import WorkerConfig
+from aizu.worker.job_runner import CampaignNotFound
+from aizu.worker.lease_client import Result
 import threading
 
-from reelradar.worker.sidecar import (Controls, Sidecar, apply_heartbeat,
+from aizu.worker.sidecar import (Controls, Sidecar, apply_heartbeat,
                                       apply_presence_flags)
 
 
@@ -89,8 +89,8 @@ def test_leases_runs_and_acks(monkeypatch, cfg: WorkerConfig):
 def test_heartbeat_collects_local_run_events(tmp_path, cfg: WorkerConfig):
     """The job heartbeat thread reads NEW local run_events (after its cursor) and maps
     them to the wire batch it ships — the mechanism behind the fleet live feed (Gap A)."""
-    from reelradar.core.store import Store
-    from reelradar.worker.sidecar import _HeartbeatThread
+    from aizu.core.store import Store
+    from aizu.worker.sidecar import _HeartbeatThread
 
     db = str(tmp_path / "hb.db")
     store = Store(db)
@@ -212,7 +212,7 @@ def test_malformed_leased_job_is_rejected(monkeypatch, cfg: WorkerConfig):
 
 
 def test_single_flight_blocks_second_job_for_same_account(monkeypatch, cfg: WorkerConfig):
-    from reelradar.worker import single_flight
+    from aizu.worker import single_flight
     # Pre-hold the lock for this account so the leased job is skipped (no run/ack/nack).
     held = single_flight.try_acquire(cfg.state_dir, "1-instagram-_default")
     assert held is not None
@@ -277,7 +277,7 @@ def test_ack_ships_captured_leads_from_the_local_store(cfg: WorkerConfig, tmp_pa
     """_ack reads the run's captured leads from the LOCAL store and includes them in
     the ack body as camelCase DTOs (campaign omitted — forced server-side)."""
     from types import SimpleNamespace
-    from reelradar.core.store import Store
+    from aizu.core.store import Store
     store = Store(str(tmp_path / "w.db"))
     try:
         store.start_session("s-1", "c", "instagram", run_id="run-1", org_id=1)

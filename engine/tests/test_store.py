@@ -1,8 +1,9 @@
 import os
 import sqlite3
 import tempfile
+import time
 
-from reelradar.core.store import SCHEMA_VERSION, Store, SessionCounters
+from aizu.core.store import SCHEMA_VERSION, Store, SessionCounters
 
 
 def fresh_store():
@@ -337,7 +338,7 @@ import time as _time
 
 import pytest as _pytest
 
-from reelradar.auth import hash_password
+from aizu.auth import hash_password
 
 
 def test_fresh_db_has_auth_tables():
@@ -526,7 +527,7 @@ def test_status_breakdown_and_pipeline():
     b = store.status_breakdown("c")
     assert b["new"] == 1 and b["interested"] == 1 and b["closed"] == 1
     assert set(b) == {"new", "in_progress", "interested", "closed",
-                      "couldnt_connect", "archived"}
+                      "couldnt_connect", "archived", "needs_review"}
     p = store.pipeline_conversion("c")
     assert p["total"] == 4 and p["won"] == 2           # interested + closed
     assert p["winRate"] == 0.5
@@ -715,3 +716,172 @@ def test_v10_self_heal_on_upgrading_db():
     ver = conn.execute("SELECT value FROM meta WHERE key='schema_version'").fetchone()[0]
     conn.close()
     assert ver == str(SCHEMA_VERSION)
+
+
+# ---- v18: Uzbek-only local STT (seen_reels.transcript*/sessions.transcriptions) ----
+
+
+def test_fresh_db_is_v18_with_stt_columns():
+    """A brand-new DB gets the v18 STT columns and the v19 video-analysis columns
+    straight from SCHEMA (no self-heal needed) and stamps schema_version."""
+    store, path = fresh_store()
+    seen_cols = {r[1] for r in store._conn.execute(
+        "PRAGMA table_info(seen_reels)").fetchall()}
+    assert {"transcript", "transcript_lang", "transcript_ms"} <= seen_cols
+    # v19 video-analysis columns land from SCHEMA on a fresh DB too.
+    assert {"video_analyzed", "video_analysis_summary"} <= seen_cols
+    session_cols = {r[1] for r in store._conn.execute(
+        "PRAGMA table_info(sessions)").fetchall()}
+    assert "transcriptions" in session_cols
+    assert "video_analyses" in session_cols
+    conn = sqlite3.connect(path)
+    ver = conn.execute("SELECT value FROM meta WHERE key='schema_version'").fetchone()[0]
+    conn.close()
+    assert ver == str(SCHEMA_VERSION)
+
+
+def test_v18_self_heal_stt_columns_on_upgrading_db():
+    """A pre-v18 DB (built by hand, no transcript*/transcriptions columns) self-heals
+    on open: the columns are added via ALTER TABLE and prior rows survive — same
+    self-heal contract already proven for v10 (run_events) and v17 (found_by_models)."""
+    fd, path = tempfile.mkstemp(suffix=".db"); os.close(fd)
+    _make_legacy_v1_db(path)   # a pre-v2 DB predates every additive column, incl. v18's
+    store = Store(path)
+    try:
+        seen_cols = {r[1] for r in store._conn.execute(
+            "PRAGMA table_info(seen_reels)").fetchall()}
+        assert {"transcript", "transcript_lang", "transcript_ms"} <= seen_cols
+        session_cols = {r[1] for r in store._conn.execute(
+            "PRAGMA table_info(sessions)").fetchall()}
+        assert "transcriptions" in session_cols
+        # The pre-existing seen_reels row survived the ALTER TABLE self-heal, with
+        # the new columns taking NULL (no backfill, matches every other additive
+        # column added this way).
+        row = store._conn.execute(
+            "SELECT transcript, transcript_lang, transcript_ms FROM seen_reels "
+            "WHERE campaign_id='c' AND reel_id='r'").fetchone()
+        assert row is not None
+        assert tuple(row) == (None, None, None)
+        # The new mark_seen()/reels() STT kwargs are usable post-upgrade.
+        store.mark_seen("c", "r", transcript="salom dunyo", transcript_lang="uz")
+        reels = store.reels("c")
+        assert reels[0]["transcript"] == "salom dunyo"
+        assert reels[0]["transcript_lang"] == "uz"
+    finally:
+        store.close()
+    conn = sqlite3.connect(path)
+    ver = conn.execute("SELECT value FROM meta WHERE key='schema_version'").fetchone()[0]
+    conn.close()
+    assert ver == str(SCHEMA_VERSION)
+
+
+def test_mark_seen_transcript_roundtrips_and_sticky_merges():
+    """transcript/transcript_lang round-trip through mark_seen()/reels(), and a
+    later mark_seen() call with transcript=None must NOT blank a previously
+    written transcript — the same COALESCE sticky-merge semantics already proven
+    for ocr_text."""
+    store, _ = fresh_store()
+    store.mark_seen("c", "r1", relevant=True, caption="salom",
+                    transcript="mahsulot narxi qancha", transcript_lang="uz")
+    reels = store.reels("c")
+    assert len(reels) == 1
+    assert reels[0]["transcript"] == "mahsulot narxi qancha"
+    assert reels[0]["transcript_lang"] == "uz"
+
+    # A later poll of the same reel (e.g. relevance re-check) omits transcript —
+    # must not blank what was already captured.
+    store.mark_seen("c", "r1", relevant=True, caption="salom")
+    reels = store.reels("c")
+    assert reels[0]["transcript"] == "mahsulot narxi qancha"
+    assert reels[0]["transcript_lang"] == "uz"
+
+
+def test_mark_seen_without_transcript_leaves_it_null():
+    """A campaign that never transcribes (STT gate off) must leave transcript*
+    NULL — no accidental default text."""
+    store, _ = fresh_store()
+    store.mark_seen("c", "r1", relevant=True)
+    reels = store.reels("c")
+    assert reels[0]["transcript"] is None
+    assert reels[0]["transcript_lang"] is None
+
+
+def test_transcriptions_counter_roundtrips():
+    """SessionCounters.transcriptions (mirrors escalations) persists through
+    update_counters()/get_session() — the same counter parity already proven for
+    reels_seen/matches/feed_health_flag in test_counters_roundtrip."""
+    store, _ = fresh_store()
+    store.start_session("s1", "c")
+    store.update_counters("s1", SessionCounters(transcriptions=3, matches=1))
+    s = store.get_session("s1")
+    assert s["transcriptions"] == 3 and s["matches"] == 1
+
+
+# ---- v20: session liveness heartbeat (SessionWatchdog hang-prevention fix) ----
+
+
+def test_start_session_seeds_heartbeat_and_pid():
+    store, _ = fresh_store()
+    before = time.time()
+    store.start_session("s1", "c")
+    s = store.get_session("s1")
+    assert s["pid"] == os.getpid()
+    assert s["last_activity_at"] is not None
+    assert s["last_activity_at"] >= before
+
+
+def test_update_counters_bumps_last_activity_at():
+    store, _ = fresh_store()
+    store.start_session("s1", "c")
+    seeded = store.get_session("s1")["last_activity_at"]
+    # Force the clock forward so the bump is observably different, then confirm
+    # a normal counters flush (every engine's periodic Session._flush) advances
+    # the heartbeat — this is the ONLY thing that keeps a live session's
+    # last_activity_at fresh; no other call site needs to touch it.
+    with store._tx() as c:
+        c.execute("UPDATE sessions SET last_activity_at=? WHERE session_id=?",
+                  (seeded - 1000, "s1"))
+    store.update_counters("s1", SessionCounters(reels_seen=1))
+    bumped = store.get_session("s1")["last_activity_at"]
+    assert bumped > seeded - 1000
+
+
+def test_find_stalled_sessions_flags_only_the_quiet_one():
+    store, _ = fresh_store()
+    store.start_session("s-fresh", "c")
+    store.start_session("s-stale", "c")
+    now = time.time()
+    with store._tx() as c:
+        c.execute("UPDATE sessions SET last_activity_at=? WHERE session_id=?",
+                  (now - 1000, "s-stale"))
+    stalled = store.find_stalled_sessions(stall_timeout_s=180, now=now)
+    assert [r["session_id"] for r in stalled] == ["s-stale"]
+
+
+def test_find_stalled_sessions_falls_back_to_started_at_when_never_bumped():
+    """A pre-v20 row (or one whose heartbeat was never bumped) has
+    last_activity_at NULL — the fallback to started_at must still flag it once
+    it's old enough, not silently exempt it forever."""
+    store, path = fresh_store()
+    store.start_session("s1", "c")
+    now = time.time()
+    conn = sqlite3.connect(path)
+    conn.execute(
+        "UPDATE sessions SET started_at=?, last_activity_at=NULL WHERE session_id=?",
+        (now - 1000, "s1"))
+    conn.commit()
+    conn.close()
+    store2 = Store(path)
+    stalled = store2.find_stalled_sessions(stall_timeout_s=180, now=now)
+    assert [r["session_id"] for r in stalled] == ["s1"]
+
+
+def test_find_stalled_sessions_ignores_non_running_rows():
+    store, _ = fresh_store()
+    store.start_session("s1", "c")
+    store.end_session("s1", "completed")
+    now = time.time()
+    with store._tx() as c:
+        c.execute("UPDATE sessions SET last_activity_at=? WHERE session_id=?",
+                  (now - 1000, "s1"))
+    assert store.find_stalled_sessions(stall_timeout_s=180, now=now) == []

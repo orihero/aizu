@@ -6,7 +6,7 @@ import { z } from 'zod';
  * never-trust-external-JSON rule the panel-state schemas follow.
  */
 
-/** The four RBAC roles. Mirror of engine/reelradar/rbac.py + shared/auth/roles.ts. */
+/** The four RBAC roles. Mirror of engine/aizu/rbac.py + shared/auth/roles.ts. */
 export const roleSchema = z.enum(['owner', 'admin', 'member', 'viewer']);
 
 /** The company a user belongs to (null while a session has no org context). */

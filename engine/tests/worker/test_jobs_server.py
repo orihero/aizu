@@ -13,10 +13,10 @@ from pathlib import Path
 
 import pytest
 
-from reelradar.server import (WORKER_BOOTSTRAP_ENV, serve)
-from reelradar.admin_auth import ADMIN_IP_ALLOWLIST_ENV
-from reelradar.core.store import Store
-from reelradar.secrets import SECRET_KEY_ENV
+from aizu.server import (WORKER_BOOTSTRAP_ENV, serve)
+from aizu.admin_auth import ADMIN_IP_ALLOWLIST_ENV
+from aizu.core.store import Store
+from aizu.secrets import SECRET_KEY_ENV
 from ._admin import ADMIN_KEY, admin_cookie, set_admin_env
 
 ROOT = Path(__file__).resolve().parents[2]

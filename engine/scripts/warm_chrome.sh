@@ -3,7 +3,7 @@
 #
 # The engine NEVER launches its own browser (config/soul.md: "a passive observer
 # attached to a real, warmed, logged-in Chrome"). It connects to an already-running
-# Chrome via the DevTools protocol at REELRADAR_CDP_URL (engine/.env → 127.0.0.1:9333).
+# Chrome via the DevTools protocol at AIZU_CDP_URL (engine/.env → 127.0.0.1:9333).
 #
 # Two gotchas, both validated live:
 #
@@ -14,18 +14,18 @@
 #      regular Google Chrome 149 removed the CDP "browser context management" surface
 #      (Browser.setDownloadBehavior), so Playwright's connect_over_cdp dies right after
 #      the websocket connects with "Browser context management is not supported"
-#      (see reelradar/cdp.py:attach). Playwright 1.60 is already the latest, so there is
+#      (see aizu/cdp.py:attach). Playwright 1.60 is already the latest, so there is
 #      no newer Playwright to fix it. The fix is to attach to Playwright's OWN bundled
 #      "Chrome for Testing" build, whose CDP surface matches the installed Playwright.
 #      This script resolves that binary automatically.
 set -euo pipefail
 
-PORT="${REELRADAR_CDP_PORT:-9333}"
+PORT="${AIZU_CDP_PORT:-9333}"
 # Chrome for Testing is a DIFFERENT (older) build than your system Chrome, so it gets a
 # DEDICATED profile dir — a profile written by Chrome 149 cannot be reopened by CfT 148.
 # Log into each managed-CDP platform ONCE in this window (instagram.com, linkedin.com,
-# x.com); the sessions persist in this dir across launches. See docs/ENGINES.md §9.
-PROFILE="${REELRADAR_CHROME_PROFILE:-$HOME/.reelradar-cft-profile}"
+# x.com); the sessions persist in this dir across launches. See docs/architecture/engines.md §9.
+PROFILE="${AIZU_CHROME_PROFILE:-$HOME/.aizu-cft-profile}"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 VENV_PY="${SCRIPT_DIR}/../.venv/bin/python"

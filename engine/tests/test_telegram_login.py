@@ -8,7 +8,7 @@ import types
 
 import pytest
 
-from reelradar.engines.telegram.login import TelegramLoginError, TelegramLoginManager
+from aizu.engines.telegram.login import TelegramLoginError, TelegramLoginManager
 
 
 class SessionPasswordNeededError(Exception):

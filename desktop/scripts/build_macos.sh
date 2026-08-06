@@ -23,10 +23,10 @@ echo "[2/4] Tauri app bundle (no sidecar resource)"
 ( cd "$DESK/src-tauri" && tauri build --bundles app )
 
 APP="$DESK/src-tauri/target/release/bundle/macos/AIZU Worker.app"
-echo "[3/4] Embed onedir sidecar → Resources/sidecar/reelradar-worker/"
+echo "[3/4] Embed onedir sidecar → Resources/sidecar/aizu-worker/"
 rm -rf "$APP/Contents/Resources/sidecar"
 mkdir -p "$APP/Contents/Resources/sidecar"
-cp -R "$DESK/pyinstaller/dist/reelradar-worker" "$APP/Contents/Resources/sidecar/reelradar-worker"
+cp -R "$DESK/pyinstaller/dist/aizu-worker" "$APP/Contents/Resources/sidecar/aizu-worker"
 
 echo "[4/5] Re-sign the whole bundle ad-hoc"
 codesign --force --deep --sign - "$APP"

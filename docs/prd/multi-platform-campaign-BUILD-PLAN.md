@@ -142,7 +142,7 @@ Ordered steps (each compiles + tests green before the next):
 4. Wire `campaign_from_brief` channels parse + `campaign_to_brief` emission with the ≥2 collapse and the **M4** `len==1` scalar-from-`channels[0]` rule. → the seven `test_campaign_{from,to}_brief_*` incl. `_json_serializable`
 5. `cli.py` — add `import dataclasses`; extend the config import with `ChannelSpec`; add `_CDP_PLATFORMS` + `_POISON_HALT_KINDS` frozensets; add `_effective_channels` + `_campaign_with_channel`. → the seven `test_effective_channels_*` / `test_campaign_with_channel_*`
 
-**Pre-merge guard:** `grep -n "_resolve_home_feed(" reelradar/core/config.py` must return **exactly 3 lines** (def + 2 call sites). A missed call site is a runtime `TypeError`.
+**Pre-merge guard:** `grep -n "_resolve_home_feed(" aizu/core/config.py` must return **exactly 3 lines** (def + 2 call sites). A missed call site is a runtime `TypeError`.
 
 ---
 
@@ -150,7 +150,7 @@ Ordered steps (each compiles + tests green before the next):
 
 ### PHASE 1 — Engine data model + CLI helpers · deps: none
 
-**`reelradar/core/config.py`**
+**`aizu/core/config.py`**
 - `_resolve_home_feed` · **modify** — add 4th param `seed_channels: list[str]`; `return not (seed_hashtags or seed_accounts or seed_channels)`; update call sites `:253`, `:300`.
 - `ChannelSpec` · **add** — frozen dataclass, tuple seed fields default `()`, `include_home_feed:bool=True`; above `Campaign`.
 - `_channel_spec_from_dict` · **add** — drops non-`SUPPORTED_PLATFORMS` entries (→ `None`); resolves `include_home_feed` seed-aware when key absent.
@@ -158,7 +158,7 @@ Ordered steps (each compiles + tests green before the next):
 - `campaign_from_brief` · **modify** — parse `brief["channels"]` via comprehension over `_channel_spec_from_dict`; pass `seed_channels` as the new 4th arg to `_resolve_home_feed`; add `channels=channels`.
 - `campaign_to_brief` · **modify** — emit `channels` only when `len ≥ 2` with `list()` seeds (no tuples); **M4:** when `len==1`, source flat scalars from `channels[0]`.
 
-**`reelradar/cli.py`** *(M6: P1 is sole owner of these)*
+**`aizu/cli.py`** *(M6: P1 is sole owner of these)*
 - imports · **modify** — `import dataclasses`; extend `from .core.config import …` with `ChannelSpec`.
 - `_CDP_PLATFORMS` / `_POISON_HALT_KINDS` · **add** — frozensets after `_PER_ORG_CREDENTIAL_PLATFORMS` (≈`:122`).
 - `_effective_channels` · **add** — returns a **new list each call**; synthesizes one `ChannelSpec` from scalars when `channels==()`.
@@ -172,7 +172,7 @@ Ordered steps (each compiles + tests green before the next):
 
 ### PHASE 2 — Halt classification + CLI fan-out loop · deps: 1
 
-**`reelradar/engines/base.py`**
+**`aizu/engines/base.py`**
 - `HaltKind` · **add** — `Literal[...]` (import `Literal`); `HaltSession.__init__` · **modify** — `(reason, kind="unknown")`, store `self.kind`; `SUMMARY_KEYS` · **modify** — append `"halt_kind"` (now 12 keys).
 
 **Per-engine `session.py` (7 raise sites + summaries)**
@@ -181,7 +181,7 @@ Ordered steps (each compiles + tests green before the next):
 - `linkedin/session.py` — `_process_comments:121` → `"canary"`; `run:169` → `"daytime"`; `halt_kind` in summary + return.
 - `youtube / telegram / reddit session.py` — no raise sites; add `"halt_kind": None` to each summary dict.
 
-**`reelradar/cli.py`** *(M6: P1 helpers are consumed, not re-added)*
+**`aizu/cli.py`** *(M6: P1 helpers are consumed, not re-added)*
 - `_run_one_channel` · **add** — always runs ≥1 pass (**D1**); no loop for `_SINGLE_PASS_PLATFORMS`; immutable `agg[k]=agg[k]+…`; returns sub-summary with `sessions/spend_usd/halt_reason/halt_kind`.
 - `_run_session_loop` · **modify** — full rewrite to channel fan-out over `_effective_channels`; spread-only dict updates; `per_platform` with sub-summary / `{skipped:"cdp_poisoned"}` / `{error:str}`; daytime breaks cleanly (no poison); CDP poison kinds set `cdp_poisoned`.
 - `_live_campaigns` · **modify** — stable sort CDP campaigns before API-platform campaigns.
@@ -197,7 +197,7 @@ Ordered steps (each compiles + tests green before the next):
 
 ### PHASE 3 — Activity-feed platform tag + SCHEMA_VERSION 10→11 · deps: none (parallel)
 
-**`reelradar/core/store.py`**
+**`aizu/core/store.py`**
 - `SCHEMA_VERSION` · **modify** — `10 → 11`; append `"; v11: activity-feed platform tag (join-only, no DDL)"`. No new `_init_schema` branch.
 - `Store.fetch_run_events` · **modify** — `LEFT JOIN sessions s ON s.session_id = re.session_id`, select `s.platform AS platform`; org filter stays on `re.org_id`; returned dict gains `"platform": str\|None`.
 
@@ -213,14 +213,14 @@ Ordered steps (each compiles + tests green before the next):
 
 ### PHASE 4 — Server brief wire-format + merge sentinel + perPlatform · deps: 1, 2
 
-**`reelradar/server.py`**
+**`aizu/server.py`**
 - `_BRIEF_KEYS` · **modify** — add `'channels': 'channels'` (now 15 pairs); **not** in `_BRIEF_BLANK_DROP_KEYS`.
 - `_channel_to_snake` · **add** — non-dict / non-`SUPPORTED_PLATFORMS` → `None`; camel→snake seed coercion (strip blanks); **omit absent** optional seed + `includeHomeFeed` keys (reuses `_to_bool`).
 - `_brief_to_snake` · **modify** — channels branch in the loop (`if snake=='channels': … continue`); absent → not emitted (no-change); `[]` / all-invalid → emit `[]` (clear). **C3.**
 - `_handle_campaign` · **modify** — comment only documenting the shallow-merge sentinel; no logic change.
 - run-result serialization · **add** (**G1**) — surface `per_platform → perPlatform` and `halt_kind → haltKind` in the panel JSON (RunManager outcome / per-page response).
 
-**`reelradar/panel.py`** *(M5: hard-gate on P1; access `c.channels` directly, no getattr guard)*
+**`aizu/panel.py`** *(M5: hard-gate on P1; access `c.channels` directly, no getattr guard)*
 - `_all_campaign_platforms` · **add** — non-empty channels → each platform; else `[brief.get('platform','instagram')]`.
 - `_draft_campaign` · **modify** — add `'platforms': _all_campaign_platforms(stored_brief or {})`.
 - `_build_campaigns` · **modify** — primary card adds `'platforms': [ch.platform for ch in campaign.channels] if campaign.channels else [campaign.platform]`.

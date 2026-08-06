@@ -1,0 +1,1150 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AIZU: a signal to act</title>
+<meta name="description" content="Tell AIZU what you sell and who you serve. It returns a short list of qualified, ready-to-buy customers, every week. A pipeline that fills itself.">
+<meta property="og:title" content="AIZU: a signal to act">
+<meta property="og:description" content="Tell AIZU what you sell and who you serve. It returns a short list of qualified, ready-to-buy customers, every week.">
+<meta property="og:type" content="website">
+<meta property="og:url" content="https://aizu.app/">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%2316161a'/%3E%3Ccircle cx='14' cy='18' r='4.5' fill='%23d9f24f'/%3E%3Cpath d='M20.5 6.2 A 13.5 13.5 0 0 1 27.8 13.5' fill='none' stroke='%23d9f24f' stroke-width='2.6' stroke-linecap='round'/%3E%3C/svg%3E">
+<style>
+/* ============================================================
+   AIZU landing. Ink is the ground, lime is signal only.
+   Shape system: surfaces 16px, inner cards 12px, buttons pill.
+   Theme: dark, locked page-wide (brand is dark-first).
+   ============================================================ */
+:root{
+  --ink:#16161a;
+  --ink-2:#1b1b20;
+  --ink-3:#202026;
+  --line:#2a2a30;
+  --grey-3:#43434c;
+  --grey-2:#6b6b73;
+  --grey-1:#9a9aa2;
+  --paper:#f2f2f4;
+  --lime:#d9f24f;
+  --lime-08:rgba(217,242,79,.08);
+  --lime-14:rgba(217,242,79,.14);
+  --sans:"Inter Tight","Inter","SF Pro Display","Segoe UI Variable Display","Segoe UI",system-ui,-apple-system,sans-serif;
+  --mono:ui-monospace,"JetBrains Mono","SFMono-Regular","Cascadia Mono",Consolas,monospace;
+  --r-surface:16px;
+  --r-inner:12px;
+  --maxw:1120px;
+  --pad:clamp(20px,5vw,48px);
+}
+*{margin:0;padding:0;box-sizing:border-box}
+html{scroll-behavior:smooth;scroll-padding-top:86px}
+body{
+  background:var(--ink);
+  color:var(--grey-1);
+  font-family:var(--sans);
+  font-size:17px;
+  line-height:1.6;
+  -webkit-font-smoothing:antialiased;
+  overflow-x:clip;
+}
+::selection{background:var(--lime);color:var(--ink)}
+img,svg{max-width:100%;display:block}
+a{color:inherit;text-decoration:none}
+button{font:inherit;color:inherit;background:none;border:0;cursor:pointer}
+:focus-visible{outline:2px solid var(--lime);outline-offset:3px;border-radius:4px}
+h1,h2,h3{color:var(--paper);font-weight:600;letter-spacing:-.025em;line-height:1.12}
+strong{color:var(--paper);font-weight:600}
+.wrap{max-width:var(--maxw);margin-inline:auto;padding-inline:var(--pad)}
+.skip{position:absolute;left:-9999px;top:0;background:var(--lime);color:var(--ink);padding:10px 18px;border-radius:0 0 8px 0;z-index:99;font-weight:600}
+.skip:focus{left:0}
+
+/* ---------- section rhythm ---------- */
+section{padding-block:clamp(76px,10vw,140px)}
+.sec-title{font-size:clamp(1.9rem,4vw,2.9rem);max-width:24ch;margin-bottom:clamp(22px,3vw,34px)}
+
+/* ---------- reveal ---------- */
+.reveal{opacity:0;transform:translateY(16px);transition:opacity .7s ease,transform .7s cubic-bezier(.22,.61,.36,1)}
+.reveal.in{opacity:1;transform:none}
+.reveal.d1{transition-delay:.08s}.reveal.d2{transition-delay:.16s}.reveal.d3{transition-delay:.24s}
+
+/* ---------- buttons: pill, tactile press, AA contrast ---------- */
+.btn{
+  display:inline-flex;align-items:center;justify-content:center;gap:10px;
+  padding:14px 26px;border-radius:999px;font-weight:600;font-size:16px;
+  letter-spacing:-.01em;transition:transform .18s ease,box-shadow .18s ease,background .18s ease,border-color .18s ease;
+  white-space:nowrap;
+}
+.btn:active{transform:translateY(1px) scale(.99)}
+.btn-lime{background:var(--lime);color:var(--ink)}
+.btn-lime:hover{box-shadow:0 0 0 6px var(--lime-14),0 6px 28px rgba(217,242,79,.18);transform:translateY(-1px)}
+.btn-ghost{border:1px solid var(--grey-3);color:var(--paper)}
+.btn-ghost:hover{border-color:var(--grey-1);transform:translateY(-1px)}
+.btn-sm{padding:10px 20px;font-size:14.5px}
+
+/* ---------- ping mark (brand logo, single geometric mark) ---------- */
+.ping-mark .arc{stroke-dasharray:1;stroke-dashoffset:1}
+.ping-mark.drawn .arc,
+.ping-mark.in .arc{animation:draw-arc .9s cubic-bezier(.3,0,.2,1) .15s forwards}
+@keyframes draw-arc{to{stroke-dashoffset:0}}
+@keyframes redraw-arc{from{stroke-dashoffset:1}to{stroke-dashoffset:0}}
+
+/* ---------- nav: one line, 68px ---------- */
+.nav{
+  position:sticky;top:0;z-index:50;
+  background:rgba(22,22,26,.85);backdrop-filter:blur(14px);-webkit-backdrop-filter:blur(14px);
+  border-bottom:1px solid var(--line);
+}
+.nav-in{display:flex;align-items:center;gap:32px;height:68px;max-width:var(--maxw);margin-inline:auto;padding-inline:var(--pad)}
+.logo{display:flex;align-items:center;gap:10px;font-weight:600;color:var(--paper);font-size:18px;letter-spacing:-.02em}
+.logo .jp{font-family:var(--mono);font-size:13px;color:var(--grey-1);letter-spacing:.08em;margin-top:2px}
+.logo svg{width:26px;height:26px;color:var(--lime)}
+.nav-links{display:flex;gap:28px;margin-left:auto;align-items:center}
+.nav-links a{font-size:15px;color:var(--grey-1);transition:color .15s}
+.nav-links a:hover{color:var(--paper)}
+.nav .btn{margin-left:8px}
+@media (max-width:760px){
+  .nav-links a:not(.btn){display:none}
+  .nav-in{gap:16px}
+}
+
+/* ---------- hero: asymmetric split ---------- */
+.hero{padding-block:clamp(48px,6vw,88px) clamp(56px,7vw,96px);position:relative}
+.hero::before{ /* faint signal atmosphere, lime held under 8% */
+  content:"";position:absolute;inset:0;pointer-events:none;
+  background:radial-gradient(720px 420px at 78% 8%,rgba(217,242,79,.06),transparent 68%);
+}
+.hero-grid{
+  position:relative;display:grid;grid-template-columns:1.05fr 1fr;
+  gap:clamp(32px,5vw,72px);align-items:center;
+}
+.hero h1{font-size:clamp(2.2rem,4.4vw,3.4rem);letter-spacing:-.033em;max-width:20ch}
+.hero .sub{max-width:42ch;margin-top:20px;font-size:clamp(1.02rem,1.5vw,1.16rem);color:var(--grey-1)}
+.hero-ctas{display:flex;gap:14px;margin-top:32px;flex-wrap:wrap}
+@media (max-width:940px){
+  .hero-grid{grid-template-columns:1fr}
+  .hero h1{max-width:17ch}
+}
+@media (max-width:480px){.hero-ctas .btn{white-space:normal;text-align:center}}
+
+/* ---------- signal theater (vertical flow) ---------- */
+.theater{
+  display:flex;flex-direction:column;gap:13px;
+  background:
+    radial-gradient(420px 300px at 50% 42%,var(--lime-08),transparent 70%),
+    var(--ink-2);
+  border:1px solid var(--line);border-radius:var(--r-surface);
+  padding:clamp(20px,2.6vw,30px);
+  position:relative;overflow:hidden;text-align:left;
+}
+.theater::before{ /* quiet dot grid = ambient noise */
+  content:"";position:absolute;inset:0;pointer-events:none;opacity:.5;
+  background-image:radial-gradient(rgba(154,154,162,.13) 1px,transparent 1.4px);
+  background-size:26px 26px;
+}
+.stage{position:relative;display:flex;flex-direction:column;gap:10px;min-width:0}
+.stage-label{font-family:var(--mono);font-size:11.5px;letter-spacing:.1em;color:var(--grey-1)}
+.stage-label b{color:var(--paper);font-weight:400}
+.mid-label{text-align:center}
+
+/* input card */
+.input-card{
+  background:var(--ink-3);border:1px solid var(--line);border-radius:var(--r-inner);
+  padding:15px 16px 17px;display:flex;flex-direction:column;gap:10px;
+  transition:border-color .3s,box-shadow .3s;
+}
+.theater.armed .input-card{border-color:rgba(217,242,79,.35);box-shadow:0 0 0 1px var(--lime-08),0 0 26px var(--lime-08)}
+.input-line{font-family:var(--mono);font-size:12.5px;letter-spacing:.02em;color:var(--paper);line-height:1.5;min-height:1.6em;word-break:break-word}
+.input-line .key{color:var(--grey-1);margin-right:8px}
+.caret{display:none;width:7px;height:13px;background:var(--grey-1);vertical-align:-2px;margin-left:2px}
+.input-line.active .caret{display:inline-block;animation:blink 1s steps(1) infinite}
+@keyframes blink{50%{opacity:0}}
+
+/* the black box */
+.mid-flow{display:flex;flex-direction:column;align-items:center;width:100%}
+.wire{position:relative;width:2px;height:34px;flex:0 0 auto;margin-inline:auto;background:linear-gradient(180deg,var(--line),var(--grey-3),var(--line));border-radius:2px}
+.wire::after{ /* direction cue */
+  content:"";position:absolute;left:50%;bottom:0;width:6px;height:6px;
+  border-top:2px solid var(--grey-3);border-right:2px solid var(--grey-3);
+  transform:translate(-50%,1px) rotate(135deg);
+}
+.pulse{position:absolute;inset:0;opacity:0;pointer-events:none}
+.pulse::before{
+  content:"";position:absolute;left:50%;top:0;width:9px;height:9px;border-radius:50%;
+  background:var(--lime);box-shadow:0 0 10px rgba(217,242,79,.9),0 0 26px rgba(217,242,79,.45);
+  transform:translate(-50%,-50%);
+}
+.pulse.go{animation:travelY .8s cubic-bezier(.45,0,.3,1) forwards}
+@keyframes travelY{0%{transform:translateY(0);opacity:0}12%{opacity:1}88%{opacity:1}100%{transform:translateY(100%);opacity:0}}
+.blackbox{
+  width:88px;height:88px;border-radius:var(--r-surface);margin-block:5px;
+  background:var(--ink);border:1px solid var(--grey-3);
+  display:flex;flex-direction:column;align-items:center;justify-content:center;gap:5px;
+  transition:box-shadow .35s,border-color .35s;
+}
+.blackbox svg{width:32px;height:32px;color:var(--lime)}
+.blackbox .bb-label{font-family:var(--mono);font-size:9.5px;letter-spacing:.14em;color:var(--grey-1)}
+.blackbox.fire{border-color:rgba(217,242,79,.5);box-shadow:0 0 0 1px var(--lime-14),0 0 34px var(--lime-14)}
+.blackbox .arc{stroke-dasharray:1;stroke-dashoffset:0}
+.blackbox.fire .arc{animation:redraw-arc .55s cubic-bezier(.3,0,.2,1) both}
+
+/* output cards: mini preview of the real deliverable */
+.lead-cards{list-style:none;display:flex;flex-direction:column;gap:9px}
+.lead-card{
+  display:flex;align-items:center;gap:12px;
+  background:var(--ink-3);border:1px dashed var(--grey-3);border-radius:var(--r-inner);
+  padding:11px 14px;opacity:.32;transform:translateY(4px);
+  transition:opacity .5s ease,transform .5s ease,border-color .5s ease,box-shadow .5s ease;
+}
+.lead-card.lit{
+  opacity:1;transform:none;border-style:solid;border-color:var(--line);
+  box-shadow:0 0 0 1px var(--lime-08),0 8px 24px rgba(0,0,0,.35);
+}
+.lead-avatar{width:28px;height:28px;border-radius:50%;background:var(--grey-3);flex:0 0 auto}
+.lead-copy{display:flex;flex-direction:column;gap:3px;flex:1;min-width:0}
+.lead-copy .l-who{font-size:12.5px;font-weight:600;color:var(--paper);letter-spacing:-.01em;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.lead-copy .l-ask{font-size:12px;color:var(--grey-1);line-height:1.4;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.lead-tag{
+  flex:0 0 auto;font-family:var(--mono);font-size:10.5px;letter-spacing:.1em;color:var(--grey-1);
+  border:1px solid var(--line);border-radius:999px;padding:5px 10px;background:var(--ink);
+  transition:color .5s,border-color .5s;
+}
+.lead-card.lit .lead-tag{color:var(--lime);border-color:rgba(217,242,79,.3)}
+.theater-caption{margin-top:14px;font-size:13.5px;color:var(--grey-1);text-align:center}
+
+/* ---------- audience strip ---------- */
+.audience{border-block:1px solid var(--line);padding-block:24px}
+.audience p{font-size:14.5px;color:var(--grey-1);text-align:center;max-width:72ch;margin-inline:auto}
+
+/* ---------- the miss ---------- */
+.problem-grid{display:grid;grid-template-columns:1fr 1fr;gap:clamp(28px,4vw,56px)}
+.problem-grid h3{font-size:clamp(1.25rem,2vw,1.55rem);margin-bottom:12px}
+.problem-grid p{max-width:44ch}
+.kicker-line{
+  margin-top:clamp(40px,5vw,64px);font-size:clamp(1.2rem,2.4vw,1.6rem);
+  color:var(--grey-1);letter-spacing:-.02em;font-weight:600;max-width:34ch;line-height:1.35;
+}
+.kicker-line em{font-style:normal;color:var(--paper)}
+.miss-diagram{margin-top:clamp(40px,5vw,60px);border:1px solid var(--line);border-radius:var(--r-surface);background:var(--ink-2);padding:clamp(18px,3vw,30px);overflow-x:auto}
+.miss-diagram svg{min-width:520px;width:100%;height:auto}
+@media (max-width:760px){.problem-grid{grid-template-columns:1fr}}
+
+/* ---------- name payoff ---------- */
+.payoff{background:var(--ink-2);border-block:1px solid var(--line);position:relative;overflow:hidden}
+.payoff .jp-water{
+  position:absolute;right:-2rem;top:50%;transform:translateY(-50%);
+  font-size:clamp(11rem,28vw,22rem);font-weight:600;line-height:1;
+  color:#2a2a30;opacity:.5;
+  pointer-events:none;user-select:none;white-space:nowrap;
+}
+.payoff .wrap{position:relative}
+.payoff-lock{
+  font-size:clamp(2rem,5vw,3.4rem);letter-spacing:-.03em;line-height:1.2;
+  margin-bottom:clamp(26px,3.5vw,40px);text-wrap:balance;
+}
+.payoff-lock .jp{font-family:var(--mono);font-weight:400;color:var(--grey-1);font-size:.72em;letter-spacing:.06em}
+.payoff-lock .sig{color:var(--lime);font-style:italic;display:inline-block;padding-bottom:.12em} /* descender clearance for g */
+.payoff p{max-width:54ch;font-size:clamp(1.02rem,1.5vw,1.18rem)}
+.payoff p+p{margin-top:14px}
+
+/* ---------- what you get: asymmetric bento (3 items, 3 cells) ---------- */
+.bento{display:grid;grid-template-columns:3fr 2fr;gap:clamp(14px,2vw,22px)}
+.cell{
+  background:var(--ink-2);border:1px solid var(--line);border-radius:var(--r-surface);
+  padding:clamp(24px,3vw,36px);display:flex;flex-direction:column;gap:14px;
+}
+.cell h3{font-size:clamp(1.3rem,2.2vw,1.7rem);letter-spacing:-.02em}
+.cell p{font-size:15.5px;max-width:46ch}
+.cell .diagram{margin-top:auto;padding-top:18px}
+.cell-precision{ /* the anchor cell: lime tint + dot field */
+  background:radial-gradient(360px 240px at 68% 30%,var(--lime-08),transparent 72%),var(--ink-2);
+}
+.cell-pipeline{
+  grid-column:1 / -1;
+  flex-direction:row;align-items:center;gap:clamp(24px,4vw,56px);flex-wrap:wrap;
+  background-image:radial-gradient(rgba(154,154,162,.10) 1px,transparent 1.4px);
+  background-size:26px 26px;
+}
+.cell-pipeline .cell-text{flex:1 1 300px;display:flex;flex-direction:column;gap:14px}
+.cell-pipeline .diagram{flex:1 1 280px;margin-top:0;padding-top:0}
+@media (max-width:900px){
+  .bento{grid-template-columns:1fr}
+  .cell-pipeline{flex-direction:column;align-items:stretch}
+}
+
+/* ---------- how you use it: hairline columns, no cards ---------- */
+.how-intro{color:var(--grey-1);font-size:clamp(1.05rem,1.8vw,1.25rem);margin:-6px 0 clamp(36px,5vw,52px)}
+.how-intro strong{color:var(--paper)}
+.steps{display:grid;grid-template-columns:repeat(3,1fr)}
+.step{padding-inline:clamp(20px,3vw,36px);display:flex;flex-direction:column;gap:12px}
+.step:first-child{padding-left:0}
+.step:last-child{padding-right:0}
+.step+.step{border-left:1px solid var(--line)}
+.step h3{font-size:1.3rem}
+.step p{font-size:15.5px;max-width:36ch}
+.step .mini{height:60px;display:flex;align-items:center;margin-top:auto;padding-top:14px}
+.mini-wire{position:relative;width:100%;height:2px;background:linear-gradient(90deg,var(--line),var(--grey-3),var(--line));border-radius:2px}
+.mini-dot{position:absolute;inset:0;opacity:0;pointer-events:none;animation:travelX 2.8s cubic-bezier(.45,0,.3,1) infinite}
+.mini-dot::before{
+  content:"";position:absolute;left:0;top:50%;width:8px;height:8px;border-radius:50%;
+  background:var(--lime);box-shadow:0 0 10px rgba(217,242,79,.8);transform:translate(-50%,-50%);
+}
+@keyframes travelX{0%{transform:translateX(0);opacity:0}12%{opacity:1}88%{opacity:1}100%{transform:translateX(100%);opacity:0}}
+.mini-input{width:100%;display:flex;flex-direction:column;gap:8px}
+.mini-input .row{height:9px;border-radius:5px;background:var(--grey-3)}
+.mini-input .row:nth-child(2){width:64%;background:var(--line)}
+.mini-out{width:100%;display:flex;flex-direction:column;gap:8px}
+.mini-out .row{height:8px;border-radius:4px;background:var(--grey-3)}
+.mini-out .row:nth-child(2){width:72%}
+.mini-out .row:nth-child(3){width:85%}
+.how-closer{margin-top:clamp(36px,5vw,56px);display:flex;flex-wrap:wrap;align-items:center;gap:22px;justify-content:space-between}
+.how-closer p{font-size:clamp(1.2rem,2vw,1.4rem);font-weight:600;letter-spacing:-.02em;color:var(--grey-1)}
+.how-closer p em{font-style:normal;color:var(--lime)}
+@media (max-width:900px){
+  .steps{grid-template-columns:1fr;gap:28px}
+  .step{padding-inline:0}
+  .step+.step{border-left:0;border-top:1px solid var(--line);padding-top:28px}
+}
+
+/* ---------- sample lead ---------- */
+.sample-intro{color:var(--grey-1);font-size:clamp(1.02rem,1.6vw,1.18rem);max-width:54ch;margin:0 0 clamp(32px,4vw,44px)}
+.sample-intro strong{color:var(--paper)}
+.sample-card{
+  max-width:660px;background:var(--ink-2);border:1px solid var(--line);border-radius:var(--r-surface);
+  padding:clamp(22px,3vw,32px);display:flex;flex-direction:column;gap:16px;
+  box-shadow:0 0 0 1px var(--lime-08),0 12px 44px rgba(0,0,0,.35);
+}
+.sample-card .s-head{display:flex;align-items:center;justify-content:space-between;gap:12px 14px;flex-wrap:wrap}
+.sample-card .s-who{color:var(--paper);font-weight:600;letter-spacing:-.01em}
+.s-tag{
+  display:inline-flex;align-items:center;gap:7px;flex:0 0 auto;
+  font-family:var(--mono);font-size:10.5px;letter-spacing:.1em;color:var(--lime);
+  border:1px solid rgba(217,242,79,.3);border-radius:999px;padding:5px 10px;background:var(--ink);
+}
+.s-tag i{width:6px;height:6px;border-radius:50%;background:var(--lime);box-shadow:0 0 8px rgba(217,242,79,.7);flex:0 0 auto} /* the page's one semantic status dot */
+.sample-card blockquote{border-left:2px solid var(--grey-3);padding-left:16px;color:var(--grey-1);font-size:1.02rem;line-height:1.55}
+.sample-card .s-foot{
+  display:flex;align-items:center;justify-content:space-between;gap:10px 14px;flex-wrap:wrap;
+  border-top:1px solid var(--line);padding-top:16px;
+}
+.sample-card .s-when{font-family:var(--mono);font-size:11.5px;letter-spacing:.08em;color:var(--grey-1)}
+.sample-card .s-reach{font-size:13.5px;color:var(--grey-1)}
+.sample-note{margin-top:18px;font-size:13.5px;color:var(--grey-1);max-width:58ch}
+
+/* ---------- trust: editorial prose, no cards, no icons ---------- */
+.trust{background:var(--ink-2);border-block:1px solid var(--line)}
+.trust-prose{max-width:62ch;display:flex;flex-direction:column;gap:20px}
+.trust-prose p{font-size:clamp(1rem,1.5vw,1.12rem)}
+
+/* ---------- pricing ---------- */
+.pricing-head{display:flex;flex-wrap:wrap;align-items:flex-end;justify-content:space-between;gap:24px;margin-bottom:clamp(32px,4vw,48px)}
+.pricing-head .sec-title{margin-bottom:0}
+.pricing-head p{max-width:46ch;margin-top:14px}
+.toggle{
+  display:inline-flex;align-items:center;background:var(--ink-2);border:1px solid var(--line);
+  border-radius:999px;padding:4px;gap:2px;
+}
+.toggle button{
+  padding:9px 18px;border-radius:999px;font-size:14px;font-weight:600;color:var(--grey-1);
+  transition:background .2s,color .2s;
+}
+.toggle button[aria-pressed="true"]{background:var(--grey-3);color:var(--paper)}
+.toggle .save{font-family:var(--mono);font-size:10.5px;letter-spacing:.06em;color:var(--grey-1);margin-left:6px}
+.plans{display:grid;grid-template-columns:repeat(3,1fr);gap:clamp(14px,2vw,24px);align-items:stretch}
+.plan{
+  background:var(--ink-2);border:1px solid var(--line);border-radius:var(--r-surface);
+  padding:24px 22px;display:flex;flex-direction:column;gap:6px;position:relative;
+}
+.plan h3{font-size:1.1rem}
+.plan .plan-for{font-size:13px;color:var(--grey-1);min-height:3.2em;line-height:1.45;margin-top:2px}
+.plan .price{margin-top:10px;color:var(--paper);font-weight:600;letter-spacing:-.03em;font-size:clamp(1.7rem,2.4vw,2.1rem);display:flex;align-items:baseline;gap:4px}
+.plan .price .per{font-size:.95rem;color:var(--grey-1);font-weight:400;letter-spacing:0}
+.plan .price-sub{font-family:var(--mono);font-size:11px;letter-spacing:.04em;color:var(--grey-1);min-height:2.6em;line-height:1.4;margin-top:2px}
+.plan .leads{margin-top:8px;font-size:14.5px;color:var(--grey-1)}
+.plan .leads strong{font-size:1.1em}
+.plan .btn{margin-top:16px;width:100%}
+.plan ul{list-style:none;margin-top:18px;display:flex;flex-direction:column;gap:9px;font-size:13.5px;color:var(--grey-1)}
+.plan ul li{padding-left:16px;position:relative}
+.plan ul li::before{content:"";position:absolute;left:0;top:.62em;width:7px;height:2px;background:var(--grey-3)}
+.plan ul li.plus{font-style:italic;padding-left:0}
+.plan ul li.plus::before{content:none}
+.plan-popular{
+  border-color:rgba(217,242,79,.45);
+  background:radial-gradient(280px 200px at 50% 0%,var(--lime-08),transparent 72%),var(--ink-2);
+  box-shadow:0 0 0 1px var(--lime-08),0 12px 44px rgba(0,0,0,.4);
+}
+.badge{
+  position:absolute;top:-13px;left:50%;transform:translateX(-50%);
+  font-family:var(--mono);font-size:10.5px;letter-spacing:.12em;text-transform:uppercase;
+  background:var(--lime);color:var(--ink);border-radius:999px;padding:5px 12px;font-weight:600;white-space:nowrap;
+}
+.pricing-foot{margin-top:26px;font-size:13.5px;color:var(--grey-1);max-width:64ch}
+/* Custom plan: full-width horizontal row */
+.plan-scale{
+  grid-column:1 / -1;
+  flex-direction:row;align-items:center;flex-wrap:wrap;
+  gap:clamp(18px,3vw,40px);padding:clamp(22px,3vw,30px) clamp(20px,3vw,34px);
+}
+.plan-scale .scale-main{flex:1 1 260px;display:flex;flex-direction:column;gap:6px}
+.plan-scale .plan-for{min-height:0;margin-top:0}
+.plan-scale ul{margin-top:0;flex:1 1 240px}
+.plan-scale .scale-cta{display:flex;flex-direction:column;gap:8px;align-items:flex-start;flex:0 0 auto}
+.plan-scale .price{margin-top:0}
+.plan-scale .price-sub{min-height:0}
+.plan-scale .btn{margin-top:8px;width:auto}
+@media (max-width:900px){
+  .plans{grid-template-columns:1fr;gap:24px}
+  .plan .plan-for{min-height:0}
+  .plan .price-sub{min-height:0}
+  .plans .plan-popular{order:-1}
+  .plan-scale{flex-direction:column;align-items:stretch}
+  .plan-scale .scale-cta{align-items:stretch}
+  .plan-scale .btn{width:100%}
+}
+
+/* ---------- faq ---------- */
+.faq-list{max-width:720px}
+.faq-list details{border-top:1px solid var(--line)}
+.faq-list details:last-child{border-bottom:1px solid var(--line)}
+.faq-list summary{
+  list-style:none;cursor:pointer;display:flex;align-items:center;justify-content:space-between;gap:20px;
+  padding:22px 4px;font-weight:600;color:var(--paper);font-size:1.05rem;letter-spacing:-.01em;
+}
+.faq-list summary::-webkit-details-marker{display:none}
+.faq-list summary .plusicon{flex:0 0 auto;width:22px;height:22px;position:relative;transition:transform .25s ease}
+.faq-list summary .plusicon::before,.faq-list summary .plusicon::after{
+  content:"";position:absolute;background:var(--grey-2);left:50%;top:50%;
+}
+.faq-list summary .plusicon::before{width:14px;height:1.5px;transform:translate(-50%,-50%)}
+.faq-list summary .plusicon::after{width:1.5px;height:14px;transform:translate(-50%,-50%)}
+.faq-list details[open] summary .plusicon{transform:rotate(45deg)}
+.faq-list details[open] summary .plusicon::before,.faq-list details[open] summary .plusicon::after{background:var(--lime)}
+.faq-list .a{padding:0 4px 26px;max-width:60ch;font-size:15.5px}
+.faq-escape{margin-top:28px;font-size:14.5px;color:var(--grey-1)}
+.faq-escape a{color:var(--paper);border-bottom:1px solid var(--grey-3)}
+.faq-escape a:hover{border-color:var(--lime)}
+
+/* ---------- final cta ---------- */
+.final{text-align:center;position:relative;overflow:hidden;border-top:1px solid var(--line)}
+.final::before{
+  content:"";position:absolute;inset:0;pointer-events:none;
+  background:radial-gradient(640px 380px at 50% 72%,var(--lime-08),transparent 70%);
+}
+.final-in{position:relative;display:flex;flex-direction:column;align-items:center}
+.final .bigping{width:72px;height:auto;color:var(--lime);margin-bottom:30px}
+.final h2{font-size:clamp(2rem,5vw,3.4rem);letter-spacing:-.03em;max-width:18ch}
+.final .sigline{margin-top:20px;font-size:clamp(1.05rem,2vw,1.35rem);font-weight:600;color:var(--lime);letter-spacing:-.015em}
+.final .hero-ctas{margin-top:32px;justify-content:center}
+
+/* ---------- footer ---------- */
+footer{border-top:1px solid var(--line);padding-block:44px;font-size:14px;color:var(--grey-1)}
+.foot-top{display:flex;flex-wrap:wrap;gap:24px 40px;align-items:center;justify-content:space-between}
+.foot-logo{display:flex;align-items:center;gap:10px;color:var(--grey-1)}
+.foot-logo svg{width:20px;height:20px;color:var(--lime)}
+.foot-logo .jp{font-family:var(--mono);font-size:12px;letter-spacing:.08em}
+.foot-links{display:flex;flex-wrap:wrap;gap:8px 24px;list-style:none}
+.foot-links a{color:var(--grey-1);transition:color .15s}
+.foot-links a:hover{color:var(--paper)}
+.foot-bottom{margin-top:26px;padding-top:22px;border-top:1px solid var(--line);display:flex;flex-wrap:wrap;gap:10px 40px;justify-content:space-between;font-size:13px}
+
+/* ---------- sticky cta bar ---------- */
+.sticky-cta{
+  position:fixed;left:0;right:0;bottom:0;z-index:60;
+  background:rgba(27,27,32,.92);backdrop-filter:blur(12px);-webkit-backdrop-filter:blur(12px);
+  border-top:1px solid var(--line);
+  transform:translateY(110%);visibility:hidden;
+  transition:transform .35s ease,visibility 0s linear .35s;
+}
+.sticky-cta.show{transform:translateY(0);visibility:visible;transition:transform .35s ease,visibility 0s}
+.sticky-cta-in{
+  max-width:var(--maxw);margin-inline:auto;
+  padding:12px var(--pad) calc(12px + env(safe-area-inset-bottom,0px));
+  display:flex;align-items:center;gap:18px;justify-content:space-between;
+}
+.sticky-cta-in .txt{font-size:14.5px;font-weight:600;letter-spacing:-.01em;color:var(--paper);min-width:0}
+.sticky-cta-in .txt .subline{display:block;font-weight:400;font-size:12.5px;color:var(--grey-1)}
+.sticky-cta-in .btns{display:flex;gap:10px;align-items:center;flex:0 0 auto}
+@media (max-width:600px){
+  .sticky-cta-in .txt .subline{display:none}
+  .sticky-cta-in .txt{font-size:13.5px}
+  .sticky-cta-in .btns .btn-ghost{display:none}
+}
+
+/* ---------- reduced motion ---------- */
+@media (prefers-reduced-motion: reduce){
+  html{scroll-behavior:auto}
+  *,*::before,*::after{
+    animation-duration:.01ms !important;animation-iteration-count:1 !important;
+    transition-duration:.01ms !important;
+  }
+  .reveal{opacity:1 !important;transform:none !important}
+  .pulse,.mini-dot{opacity:0 !important}
+  .lead-card{opacity:1;transform:none;border-style:solid}
+  .lead-card .lead-tag{color:var(--lime);border-color:rgba(217,242,79,.3)}
+  .ping-mark .arc,.blackbox .arc{stroke-dashoffset:0 !important}
+  .sticky-cta{transition:none}
+}
+</style>
+<noscript><style>
+  /* no-JS: everything visible, arcs drawn, animated pulses at rest */
+  .reveal{opacity:1;transform:none}
+  .ping-mark .arc{stroke-dashoffset:0;animation:none}
+  .pulse,.mini-dot{display:none}
+  .caret{display:none !important}
+  .lead-card{opacity:1;transform:none;border-style:solid}
+</style></noscript>
+</head>
+<body>
+<a class="skip" href="#main">Skip to content</a>
+
+<!-- ================= NAV ================= -->
+<nav class="nav" aria-label="Main">
+  <div class="nav-in">
+    <a class="logo" href="#top" aria-label="AIZU home">
+      <svg class="ping-mark drawn" viewBox="0 0 32 32" aria-hidden="true">
+        <circle cx="14" cy="18" r="4.5" fill="currentColor"/>
+        <path class="arc" pathLength="1" d="M20.5 6.2 A 13.5 13.5 0 0 1 27.8 13.5" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round"/>
+      </svg>
+      <span>AIZU</span><span class="jp" aria-hidden="true">合図</span>
+    </a>
+    <div class="nav-links">
+      <a href="#why">Why AIZU</a>
+      <a href="#how">How it works</a>
+      <a href="#pricing">Pricing</a>
+      <a href="#faq">FAQ</a>
+      <a class="btn btn-lime btn-sm" href="https://aizu.app/app">Start free</a>
+    </div>
+  </div>
+</nav>
+
+<main id="main">
+<!-- ================= HERO: asymmetric split ================= -->
+<header class="hero" id="top">
+  <div class="wrap hero-grid">
+    <div>
+      <h1>Meet your next customers while they're still deciding.</h1>
+      <p class="sub">Tell AIZU what you sell and who you serve. It returns a short list of <strong>ready-to-buy customers</strong>, every week.</p>
+      <div class="hero-ctas">
+        <a class="btn btn-lime" href="https://aizu.app/app">Start free</a>
+        <a class="btn btn-ghost" href="#how">See how it works</a>
+      </div>
+    </div>
+
+    <!-- SIGNAL THEATER: input, black box, delivered leads -->
+    <div>
+      <div class="theater" id="theater" role="img" aria-label="Abstract animation. You describe what you sell and who you serve. AIZU finds the signal. Ready-to-buy customers appear, each showing who they are and what they asked for.">
+        <div class="stage" aria-hidden="true">
+          <p class="stage-label"><b>you describe</b></p>
+          <div class="input-card">
+            <p class="input-line" id="line-sell"><span class="key">sell ›</span><span class="typed" id="type-sell">handmade ceramic tableware</span><span class="caret"></span></p>
+            <p class="input-line" id="line-serve"><span class="key">serve ›</span><span class="typed" id="type-serve">people furnishing a first home</span><span class="caret"></span></p>
+          </div>
+        </div>
+        <div class="stage" aria-hidden="true">
+          <div class="mid-flow">
+            <div class="wire"><span class="pulse" id="pulse-in"></span></div>
+            <div class="blackbox" id="blackbox">
+              <svg class="ping-mark" viewBox="0 0 32 32" aria-hidden="true">
+                <circle cx="14" cy="18" r="4.5" fill="currentColor"/>
+                <path class="arc" pathLength="1" d="M20.5 6.2 A 13.5 13.5 0 0 1 27.8 13.5" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round"/>
+              </svg>
+              <span class="bb-label">AIZU 合図</span>
+            </div>
+            <div class="wire"><span class="pulse" id="pulse-out"></span></div>
+          </div>
+        </div>
+        <div class="stage" aria-hidden="true">
+          <p class="stage-label"><b>ready-to-buy customers</b></p>
+          <ul class="lead-cards" id="lead-cards">
+            <li class="lead-card lit"><span class="lead-avatar"></span><span class="lead-copy"><span class="l-who">K. · furnishing a first home</span><span class="l-ask">"Who makes a dinnerware set that lasts?"</span></span><span class="lead-tag">ready to buy</span></li>
+            <li class="lead-card lit"><span class="lead-avatar"></span><span class="lead-copy"><span class="l-who">M. · just moved in</span><span class="l-ask">"Want handmade plates, any makers?"</span></span><span class="lead-tag">ready to buy</span></li>
+            <li class="lead-card lit"><span class="lead-avatar"></span><span class="lead-copy"><span class="l-who">J. · gift for a new home</span><span class="l-ask">"Where do I find ceramic tableware?"</span></span><span class="lead-tag">ready to buy</span></li>
+          </ul>
+        </div>
+      </div>
+      <p class="theater-caption">Describe your business once. AIZU delivers the people already asking for it.</p>
+    </div>
+  </div>
+</header>
+
+<!-- ================= AUDIENCE STRIP ================= -->
+<div class="audience reveal">
+  <div class="wrap">
+    <p>Built for people who sell direct: e-commerce and DTC brands, agencies, service providers, coaches and creators, B2B sellers.</p>
+  </div>
+</div>
+
+<!-- ================= THE MISS ================= -->
+<section id="why" aria-labelledby="why-title">
+  <div class="wrap">
+    <h2 class="sec-title reveal" id="why-title">They're already asking.</h2>
+    <div class="problem-grid">
+      <div class="reveal">
+        <p>Right now, someone out there is looking for exactly what you sell, and asking who can help.</p>
+      </div>
+      <div class="reveal d1">
+        <h3>Gone before you find them.</h3>
+        <p>By the time you'd ever find them, they've moved on. And you've spent hours you don't have: chasing, sorting, guessing.</p>
+      </div>
+    </div>
+
+    <div class="miss-diagram reveal d2" role="img" aria-label="Diagram of outcomes. Without AIZU, the moment a customer asks has passed by the time you find them. With AIZU, you are there while the moment is live.">
+      <svg viewBox="0 0 560 168" aria-hidden="true">
+        <!-- without -->
+        <text x="0" y="14" fill="#9a9aa2" font-family="ui-monospace,monospace" font-size="10" letter-spacing="1.5">WITHOUT</text>
+        <line x1="0" y1="44" x2="560" y2="44" stroke="#2a2a30" stroke-width="2"/>
+        <circle cx="120" cy="44" r="6" fill="#43434c"/>
+        <text x="98" y="70" fill="#9a9aa2" font-family="ui-monospace,monospace" font-size="10">the moment</text>
+        <circle cx="470" cy="44" r="5" fill="none" stroke="#43434c" stroke-width="1.5"/>
+        <text x="432" y="24" fill="#9a9aa2" font-family="ui-monospace,monospace" font-size="10">you find them</text>
+        <path d="M132 32 q170 -26 328 4" fill="none" stroke="#43434c" stroke-width="1" stroke-dasharray="3 5"/>
+        <text x="252" y="70" fill="#9a9aa2" font-family="ui-monospace,monospace" font-size="10">days later, gone</text>
+        <!-- with -->
+        <text x="0" y="112" fill="#9a9aa2" font-family="ui-monospace,monospace" font-size="10" letter-spacing="1.5">WITH AIZU</text>
+        <line x1="0" y1="140" x2="560" y2="140" stroke="#2a2a30" stroke-width="2"/>
+        <circle cx="120" cy="140" r="6" fill="#d9f24f"/>
+        <circle cx="120" cy="140" r="12" fill="none" stroke="#d9f24f" stroke-width="1" opacity=".35"/>
+        <circle cx="158" cy="140" r="5" fill="none" stroke="#d9f24f" stroke-width="1.5" opacity=".9"/>
+        <text x="176" y="145" fill="#9a9aa2" font-family="ui-monospace,monospace" font-size="10">you're there, while it still counts</text>
+      </svg>
+    </div>
+
+    <p class="kicker-line reveal d3">The customer was real. The moment was real. <em>You just weren't there.</em></p>
+  </div>
+</section>
+
+<!-- ================= NAME PAYOFF ================= -->
+<section class="payoff" aria-labelledby="payoff-title">
+  <span class="jp-water" aria-hidden="true">合図</span>
+  <div class="wrap">
+    <h2 class="payoff-lock reveal" id="payoff-title">AIZU <span class="jp" lang="ja">合図</span>. <em class="sig">A signal to act.</em></h2>
+    <p class="reveal d1">AIZU is Japanese for <strong>a signal to act</strong>. In all the noise online, it surfaces the one that matters: the customer worth reaching, right now.</p>
+    <p class="reveal d2"><strong>Not more noise. Not another tab to check.</strong> One clear signal, delivered while it still counts.</p>
+  </div>
+</section>
+
+<!-- ================= WHAT YOU GET: bento ================= -->
+<section aria-labelledby="get-title">
+  <div class="wrap">
+    <h2 class="sec-title reveal" id="get-title">What you get.</h2>
+    <div class="bento">
+
+      <article class="cell cell-precision reveal">
+        <h3>5 qualified &gt; 100 junk.</h3>
+        <p>Not more leads. The right ones. A short list of people ready to buy, each one already looking for what you offer.</p>
+        <div class="diagram" role="img" aria-label="Diagram: a field of grey dots with five lime dots. Five qualified beats one hundred junk.">
+          <svg viewBox="0 0 280 88" aria-hidden="true">
+            <g fill="#43434c">
+              <circle cx="14" cy="16" r="3.2"/><circle cx="40" cy="16" r="3.2"/><circle cx="66" cy="16" r="3.2"/><circle cx="92" cy="16" r="3.2"/><circle cx="118" cy="16" r="3.2"/><circle cx="144" cy="16" r="3.2"/><circle cx="170" cy="16" r="3.2"/><circle cx="222" cy="16" r="3.2"/><circle cx="248" cy="16" r="3.2"/><circle cx="274" cy="16" r="3.2"/>
+              <circle cx="14" cy="44" r="3.2"/><circle cx="40" cy="44" r="3.2"/><circle cx="92" cy="44" r="3.2"/><circle cx="118" cy="44" r="3.2"/><circle cx="144" cy="44" r="3.2"/><circle cx="196" cy="44" r="3.2"/><circle cx="222" cy="44" r="3.2"/><circle cx="248" cy="44" r="3.2"/>
+              <circle cx="14" cy="72" r="3.2"/><circle cx="66" cy="72" r="3.2"/><circle cx="92" cy="72" r="3.2"/><circle cx="118" cy="72" r="3.2"/><circle cx="170" cy="72" r="3.2"/><circle cx="196" cy="72" r="3.2"/><circle cx="222" cy="72" r="3.2"/><circle cx="274" cy="72" r="3.2"/>
+            </g>
+            <g fill="#d9f24f">
+              <circle cx="196" cy="16" r="3.6"/>
+              <circle cx="66" cy="44" r="3.6"/>
+              <circle cx="274" cy="44" r="3.6"/>
+              <circle cx="40" cy="72" r="3.6"/>
+              <circle cx="248" cy="72" r="3.6"/>
+            </g>
+          </svg>
+        </div>
+      </article>
+
+      <article class="cell reveal d1">
+        <h3>Stop chasing. Start winning.</h3>
+        <p>Tell AIZU what you sell and who you serve. It does the finding, quietly and continuously, so your hours go back into serving customers instead of hunting for them.</p>
+      </article>
+
+      <article class="cell cell-pipeline reveal d2">
+        <div class="cell-text">
+          <h3>A pipeline that fills itself.</h3>
+          <p>A steady stream of ready-to-buy customers, arriving week after week. Next month is already taken care of while you close this one.</p>
+        </div>
+        <div class="diagram" role="img" aria-label="Diagram: bars rising week after week, each topped with a lime dot. A pipeline that keeps filling.">
+          <svg viewBox="0 0 280 88" aria-hidden="true">
+            <g fill="#2a2a30">
+              <rect x="20" y="60" width="22" height="20" rx="4"/>
+              <rect x="62" y="52" width="22" height="28" rx="4"/>
+              <rect x="104" y="46" width="22" height="34" rx="4"/>
+              <rect x="146" y="38" width="22" height="42" rx="4"/>
+              <rect x="188" y="30" width="22" height="50" rx="4"/>
+              <rect x="230" y="20" width="22" height="60" rx="4"/>
+            </g>
+            <g fill="#d9f24f">
+              <circle cx="31" cy="52" r="4"/><circle cx="73" cy="44" r="4"/><circle cx="115" cy="38" r="4"/><circle cx="157" cy="30" r="4"/><circle cx="199" cy="22" r="4"/><circle cx="241" cy="12" r="4"/>
+            </g>
+            <g fill="#9a9aa2" font-family="ui-monospace,monospace" font-size="8">
+              <text x="24" y="87">w1</text><text x="66" y="87">w2</text><text x="108" y="87">w3</text><text x="150" y="87">w4</text><text x="192" y="87">w5</text><text x="234" y="87">w6</text>
+            </g>
+          </svg>
+        </div>
+      </article>
+    </div>
+  </div>
+</section>
+
+<!-- ================= HOW YOU USE IT ================= -->
+<section id="how" aria-labelledby="how-title">
+  <div class="wrap">
+    <h2 class="sec-title reveal" id="how-title">How you use it.</h2>
+    <p class="how-intro reveal">Three steps. <strong>The middle one is ours.</strong></p>
+    <div class="steps">
+
+      <article class="step reveal">
+        <h3>Describe</h3>
+        <p>Tell AIZU what you sell and who you serve. One short description in plain words. That's the whole setup.</p>
+        <div class="mini" aria-hidden="true">
+          <div class="mini-input"><span class="row"></span><span class="row"></span></div>
+        </div>
+      </article>
+
+      <article class="step reveal d1">
+        <h3>Signal</h3>
+        <p>Out in the open, people are already asking who can help. AIZU surfaces the ones that match you while the moment is live.</p>
+        <div class="mini" aria-hidden="true">
+          <div class="mini-wire"><span class="mini-dot"></span></div>
+        </div>
+      </article>
+
+      <article class="step reveal d2">
+        <h3>Customers</h3>
+        <p>A short list lands in your account: who they are, what they asked for in their own words, and a direct way to respond. Next week, it refills.</p>
+        <div class="mini" aria-hidden="true">
+          <div class="mini-out">
+            <span class="row"></span>
+            <span class="row"></span>
+            <span class="row"></span>
+          </div>
+        </div>
+      </article>
+    </div>
+
+    <div class="how-closer reveal d3">
+      <p>You never see the noise. <em>You only see the signal.</em></p>
+      <a class="btn btn-lime" href="https://aizu.app/app">Start free</a>
+    </div>
+  </div>
+</section>
+
+<!-- ================= SAMPLE LEAD ================= -->
+<section id="sample" aria-labelledby="sample-title">
+  <div class="wrap">
+    <h2 class="sec-title reveal" id="sample-title">What lands in your account.</h2>
+    <p class="sample-intro reveal d1">Every lead answers three things: <strong>who they are, what they asked for in their own words, and when they asked.</strong> With a direct way to respond. A representative example:</p>
+    <div class="sample-card reveal d2">
+      <div class="s-head">
+        <p class="s-who">K., furnishing a first apartment</p>
+        <span class="s-tag" aria-label="Qualified: ready to buy"><i aria-hidden="true"></i>ready to buy</span>
+      </div>
+      <blockquote>"Looking for a handmade ceramic dinnerware set for our new place. Happy to pay more for something that lasts. Who should I talk to?"</blockquote>
+      <div class="s-foot">
+        <p class="s-when">asked in public · surfaced 2h later</p>
+        <p class="s-reach">Direct way to respond included</p>
+      </div>
+    </div>
+    <p class="sample-note reveal d3">Details anonymized and illustrative. Every delivered lead carries these same fields, matched to what you sell.</p>
+  </div>
+</section>
+
+<!-- ================= TRUST ================= -->
+<section class="trust" aria-labelledby="trust-title">
+  <div class="wrap">
+    <h2 class="sec-title reveal" id="trust-title">Quiet. Respectful. Yours.</h2>
+    <div class="trust-prose">
+      <p class="reveal"><strong>Quiet.</strong> AIZU works in the background. No dashboards demanding attention, nothing to babysit. It shows up when there's something worth acting on.</p>
+      <p class="reveal d1"><strong>Respectful.</strong> Never pushy, never spam. AIZU finds people who are already looking; it doesn't manufacture interest that isn't there.</p>
+      <p class="reveal d2"><strong>Yours.</strong> What you tell AIZU about your business, and every lead it delivers, belongs to you. Never sold, never shared. Leave anytime and take it with you.</p>
+    </div>
+  </div>
+</section>
+
+<!-- ================= PRICING ================= -->
+<section id="pricing" aria-labelledby="pricing-title">
+  <div class="wrap">
+    <div class="pricing-head reveal">
+      <div>
+        <h2 class="sec-title" id="pricing-title">Pay for customers, not software.</h2>
+        <p>Every plan delivers the same thing: qualified, ready-to-buy customers, every month. The only question is how many you can handle.</p>
+      </div>
+      <div class="toggle" role="group" aria-label="Billing period">
+        <button type="button" id="bill-m" aria-pressed="true">Monthly</button>
+        <button type="button" id="bill-y" aria-pressed="false">Yearly <span class="save">2 mo free</span></button>
+      </div>
+    </div>
+
+    <div class="plans">
+
+      <article class="plan reveal" aria-label="Free plan">
+        <h3>Free</h3>
+        <p class="plan-for">Try the signal for yourself. No card required.</p>
+        <p class="price"><span>$0</span><span class="per" data-m="/mo" data-y="/mo">/mo</span></p>
+        <p class="price-sub" data-m="forever · no card" data-y="forever · no card">forever · no card</p>
+        <p class="leads"><strong>10</strong> qualified leads / mo</p>
+        <a class="btn btn-ghost btn-sm" data-plan="free" href="https://aizu.app/app?plan=free&amp;billing=monthly">Start free</a>
+        <ul>
+          <li>10 qualified, ready-to-buy leads every month</li>
+          <li>One business description</li>
+          <li>Fresh leads delivered weekly</li>
+          <li>Nothing to cancel, ever</li>
+        </ul>
+      </article>
+
+      <article class="plan plan-popular reveal d1" aria-label="Starter plan, most popular">
+        <p class="badge">Most popular</p>
+        <h3>Starter</h3>
+        <p class="plan-for">For growing businesses: a pipeline that genuinely fills itself.</p>
+        <p class="price"><span data-m="$24.99" data-y="$249">$24.99</span><span class="per" data-m="/mo" data-y="/yr">/mo</span></p>
+        <p class="price-sub" data-m="about $0.10 per qualified lead" data-y="about $20.75/mo, $0.08 per lead">about $0.10 per qualified lead</p>
+        <p class="leads"><strong>250</strong> qualified leads / mo</p>
+        <a class="btn btn-lime btn-sm" data-plan="starter" href="https://aizu.app/app?plan=starter&amp;billing=monthly">Choose Starter</a>
+        <ul>
+          <li class="plus">Everything in Free, plus:</li>
+          <li>250 qualified leads every month</li>
+          <li>Up to 3 offer profiles</li>
+          <li>Lead feedback: your list gets sharper</li>
+          <li>Priority support</li>
+        </ul>
+      </article>
+
+      <article class="plan reveal d2" aria-label="Pro plan">
+        <h3>Pro</h3>
+        <p class="plan-for">For teams: volume without the junk. Every lead still qualified.</p>
+        <p class="price"><span data-m="$149" data-y="$1,490">$149</span><span class="per" data-m="/mo" data-y="/yr">/mo</span></p>
+        <p class="price-sub" data-m="about $0.07 per qualified lead" data-y="about $124/mo, $0.06 per lead">about $0.07 per qualified lead</p>
+        <p class="leads"><strong>2,000</strong> qualified leads / mo</p>
+        <a class="btn btn-ghost btn-sm" data-plan="pro" href="https://aizu.app/app?plan=pro&amp;billing=monthly">Choose Pro</a>
+        <ul>
+          <li class="plus">Everything in Starter, plus:</li>
+          <li>2,000 qualified leads every month</li>
+          <li>Unlimited offer profiles</li>
+          <li>Team seats</li>
+          <li>Dedicated support</li>
+        </ul>
+      </article>
+
+      <article class="plan plan-scale reveal d3" aria-label="Custom plan">
+        <div class="scale-main">
+          <h3>Custom</h3>
+          <p class="plan-for">For serious pipelines: volume tailored to what your team can handle, with onboarding and support to match.</p>
+        </div>
+        <ul>
+          <li class="plus">Everything in Pro, plus:</li>
+          <li>Volume tailored to your pipeline</li>
+          <li>Tailored onboarding</li>
+          <li>Priority support and SLA</li>
+        </ul>
+        <div class="scale-cta">
+          <p class="price"><span>Custom</span></p>
+          <p class="price-sub" data-m="per-deal volume, talk to us" data-y="per-deal volume, talk to us">per-deal volume, talk to us</p>
+          <a class="btn btn-ghost btn-sm" href="mailto:hello@aizu.app?subject=AIZU%20Custom%20plan">Talk to sales</a>
+        </div>
+      </article>
+    </div>
+
+    <p class="pricing-foot reveal">Leads are qualified customers delivered to your account each month. Upgrade, downgrade, or cancel anytime. No contracts, no lock-in.</p>
+  </div>
+</section>
+
+<!-- ================= FAQ ================= -->
+<section id="faq" aria-labelledby="faq-title">
+  <div class="wrap">
+    <h2 class="sec-title reveal" id="faq-title">Fair questions, straight answers.</h2>
+    <div class="faq-list reveal d1">
+
+      <details open>
+        <summary>Where do the customers come from?<span class="plusicon" aria-hidden="true"></span></summary>
+        <p class="a">From public intent signals: people already asking, in public, for exactly what you offer. AIZU's job is to surface the ones that match your business while the moment is still live. What you get is the outcome: a qualified, ready-to-buy customer. The finding is our work, not yours.</p>
+      </details>
+
+      <details>
+        <summary>What exactly do I get with each lead?<span class="plusicon" aria-hidden="true"></span></summary>
+        <p class="a">Each lead includes who they are, what they asked for in their own words, when they asked, and a direct way to respond. Enough to reach out the same day, with context. No guesswork, no digging.</p>
+      </details>
+
+      <details>
+        <summary>Is this cold outreach or a bought list?<span class="plusicon" aria-hidden="true"></span></summary>
+        <p class="a">No. AIZU doesn't sell contact databases, and it doesn't blast strangers. Every lead is a person who has already signaled, in public and on their own, that they're looking for what you sell. You're not interrupting anyone. You're answering.</p>
+      </details>
+
+      <details>
+        <summary>How do I know the leads are actually qualified?<span class="plusicon" aria-hidden="true"></span></summary>
+        <p class="a">Because qualification is the product. Every lead matches what you sell and who you serve, and shows real, current intent to buy. If a lead isn't a fit, tell us; your list gets sharper.</p>
+      </details>
+
+      <details>
+        <summary>If a competitor uses AIZU too, do we get the same leads?<span class="plusicon" aria-hidden="true"></span></summary>
+        <p class="a">Leads are matched to your description, so two businesses with different offers get different lists. Where offers genuinely overlap, a lead can appear on more than one list; that's the honest answer. Your edge is timing: AIZU delivers while the moment is live, and the first thoughtful reply usually wins.</p>
+      </details>
+
+      <details>
+        <summary>How fast do I see results?<span class="plusicon" aria-hidden="true"></span></summary>
+        <p class="a">Your first leads typically arrive within days of describing your business, and then they keep coming, week after week. Start on Free: ten qualified leads a month is enough to feel the difference before you spend a dollar.</p>
+      </details>
+
+      <details>
+        <summary>Can I cancel anytime?<span class="plusicon" aria-hidden="true"></span></summary>
+        <p class="a">Yes. Monthly plans cancel with one click, effective at the end of your billing period. No contracts, no exit calls. The Free plan needs no card at all.</p>
+      </details>
+
+      <details>
+        <summary>Whose data is it?<span class="plusicon" aria-hidden="true"></span></summary>
+        <p class="a">Yours. The description of your business, and every lead AIZU delivers, belong to you: never sold, never shared, never used to help anyone else. If you leave, you take it all with you.</p>
+      </details>
+    </div>
+    <p class="faq-escape reveal d2">Can't find your answer? <a href="mailto:hello@aizu.app">Write to hello@aizu.app</a>. A person replies.</p>
+  </div>
+</section>
+
+<!-- ================= FINAL CTA ================= -->
+<section class="final" id="final" aria-labelledby="final-title">
+  <div class="wrap final-in">
+    <svg class="bigping ping-mark reveal" viewBox="0 0 120 120" aria-hidden="true">
+      <circle cx="52" cy="68" r="14" fill="currentColor"/>
+      <path class="arc" pathLength="1" d="M74 26 A 46 46 0 0 1 99 51" fill="none" stroke="currentColor" stroke-width="7" stroke-linecap="round"/>
+    </svg>
+    <h2 class="reveal d1" id="final-title">Your next customer may be asking right now.</h2>
+    <p class="sigline reveal d2">AIZU finds the signal. You win the customer.</p>
+    <div class="hero-ctas reveal d3">
+      <a class="btn btn-lime" href="https://aizu.app/app">Start free</a>
+      <a class="btn btn-ghost" href="mailto:hello@aizu.app?subject=AIZU%20sales">Talk to sales</a>
+    </div>
+  </div>
+</section>
+</main>
+
+<!-- ================= FOOTER ================= -->
+<footer>
+  <div class="wrap">
+    <div class="foot-top">
+      <a class="foot-logo" href="#top" aria-label="AIZU, back to top">
+        <svg viewBox="0 0 32 32" aria-hidden="true">
+          <circle cx="14" cy="18" r="4.5" fill="currentColor"/>
+          <path d="M20.5 6.2 A 13.5 13.5 0 0 1 27.8 13.5" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round"/>
+        </svg>
+        <span>AIZU</span><span class="jp" aria-hidden="true">合図</span><span class="jp">A signal to act.</span>
+      </a>
+      <ul class="foot-links">
+        <li><a href="#pricing">Pricing</a></li>
+        <li><a href="#faq">FAQ</a></li>
+        <li><a href="https://aizu.app/terms">Terms</a></li>
+        <li><a href="https://aizu.app/privacy">Privacy</a></li>
+        <li><a href="mailto:hello@aizu.app">Contact: hello@aizu.app</a></li>
+      </ul>
+    </div>
+    <div class="foot-bottom">
+      <p>Quiet. Respectful. Yours. Your data is never sold or shared.</p>
+      <p>© 2026 AIZU · aizu.app</p>
+    </div>
+  </div>
+</footer>
+
+<!-- ================= STICKY CTA BAR ================= -->
+<div class="sticky-cta" id="sticky-cta" aria-hidden="true">
+  <div class="sticky-cta-in">
+    <p class="txt">Your next customer may be asking right now.<span class="subline">10 qualified leads a month, free. No card.</span></p>
+    <div class="btns">
+      <a class="btn btn-ghost btn-sm" href="#pricing">See pricing</a>
+      <a class="btn btn-lime btn-sm" href="https://aizu.app/app">Start free</a>
+    </div>
+  </div>
+</div>
+
+<script>
+(function(){
+  "use strict";
+  var reduceMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+
+  /* ---------- scroll reveal (IntersectionObserver, motivated: hierarchy on entry) ---------- */
+  var reveals = document.querySelectorAll(".reveal");
+  if (reduceMotion || !("IntersectionObserver" in window)) {
+    reveals.forEach(function(el){ el.classList.add("in"); });
+  } else {
+    var io = new IntersectionObserver(function(entries){
+      entries.forEach(function(e){
+        if (e.isIntersecting) { e.target.classList.add("in"); io.unobserve(e.target); }
+      });
+    }, { threshold: 0.12, rootMargin: "0px 0px -6% 0px" });
+    reveals.forEach(function(el){ io.observe(el); });
+  }
+
+  /* ---------- pricing toggle ---------- */
+  var billM = document.getElementById("bill-m");
+  var billY = document.getElementById("bill-y");
+  function setPeriod(p){
+    document.querySelectorAll("[data-m]").forEach(function(el){
+      el.textContent = (p === "m") ? el.getAttribute("data-m") : el.getAttribute("data-y");
+    });
+    document.querySelectorAll(".plans a[data-plan]").forEach(function(a){
+      a.href = "https://aizu.app/app?plan=" + a.getAttribute("data-plan") +
+               "&billing=" + (p === "m" ? "monthly" : "yearly");
+    });
+    billM.setAttribute("aria-pressed", p === "m" ? "true" : "false");
+    billY.setAttribute("aria-pressed", p === "y" ? "true" : "false");
+  }
+  billM.addEventListener("click", function(){ setPeriod("m"); });
+  billY.addEventListener("click", function(){ setPeriod("y"); });
+
+  /* ---------- faq: one open at a time ---------- */
+  var faqs = document.querySelectorAll(".faq-list details");
+  faqs.forEach(function(d){
+    d.addEventListener("toggle", function(){
+      if (d.open) faqs.forEach(function(o){ if (o !== d) o.open = false; });
+    });
+  });
+
+  /* ---------- sticky cta bar ----------
+     Appears once the hero has scrolled away; retires when the final CTA
+     or the footer enters view. visibility:hidden keeps hidden links
+     untabbable; aria-hidden mirrors the state. */
+  var bar = document.getElementById("sticky-cta");
+  var heroEl = document.getElementById("top");
+  var finalEl = document.getElementById("final");
+  var footEl = document.querySelector("footer");
+  if (bar && heroEl && finalEl && footEl && "IntersectionObserver" in window) {
+    var heroGone = false, finalSeen = false, footSeen = false;
+    var updateBar = function(){
+      var show = heroGone && !finalSeen && !footSeen;
+      bar.classList.toggle("show", show);
+      bar.setAttribute("aria-hidden", show ? "false" : "true");
+    };
+    new IntersectionObserver(function(entries){
+      entries.forEach(function(e){ heroGone = !e.isIntersecting; });
+      updateBar();
+    }, { threshold: 0.05 }).observe(heroEl);
+    new IntersectionObserver(function(entries){
+      entries.forEach(function(e){ finalSeen = e.isIntersecting; });
+      updateBar();
+    }, { threshold: 0.15 }).observe(finalEl);
+    new IntersectionObserver(function(entries){
+      entries.forEach(function(e){ footSeen = e.isIntersecting; });
+      updateBar();
+    }, { threshold: 0.05 }).observe(footEl);
+  }
+})();
+</script>
+<script>
+/* Signal theater choreography (motivated: storytelling, input to outcome).
+   Isolated in its own script block so a parse failure here cannot kill
+   the reveal/pricing/FAQ/sticky-bar wiring above. */
+(function(){
+  "use strict";
+  var reduceMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+
+  var theater = document.getElementById("theater");
+  if (!theater) return;
+  var sellEl = document.getElementById("type-sell");
+  var serveEl = document.getElementById("type-serve");
+  var lineSell = document.getElementById("line-sell");
+  var lineServe = document.getElementById("line-serve");
+  var blackbox = document.getElementById("blackbox");
+  var pulseIn = document.getElementById("pulse-in");
+  var pulseOut = document.getElementById("pulse-out");
+  var cards = Array.prototype.slice.call(document.querySelectorAll("#lead-cards .lead-card"));
+
+  if (reduceMotion) return; /* static scene already in markup */
+
+  var inView = true;
+  var tio = new IntersectionObserver(function(entries){
+    entries.forEach(function(e){ inView = e.isIntersecting; });
+  }, { threshold: 0.2 });
+  tio.observe(theater);
+
+  function wait(ms){ return new Promise(function(r){ setTimeout(r, ms); }); }
+  function waitVisible(){
+    return new Promise(function(resolve){
+      (function check(){
+        if (inView && !document.hidden) resolve();
+        else setTimeout(check, 400);
+      })();
+    });
+  }
+  function typeInto(el, text){
+    return new Promise(function(resolve){
+      var i = 0;
+      (function tick(){
+        el.textContent = text.slice(0, i);
+        i++;
+        if (i <= text.length) setTimeout(tick, 26 + Math.random() * 26);
+        else resolve();
+      })();
+    });
+  }
+  function replay(el, cls){
+    el.classList.remove(cls);
+    void el.offsetWidth; /* reflow to restart animation */
+    el.classList.add(cls);
+  }
+
+  var EXAMPLES = [
+    { sell: "handmade ceramic tableware", serve: "people furnishing a first home", leads: [
+      { who: "K. · furnishing a first home", ask: "“Who makes a dinnerware set that lasts?”" },
+      { who: "M. · just moved in", ask: "“Want handmade plates, any makers?”" },
+      { who: "J. · gift for a new home", ask: "“Where do I find ceramic tableware?”" }
+    ]},
+    { sell: "done-for-you email marketing", serve: "DTC founders past first traction", leads: [
+      { who: "A. · DTC founder", ask: "“Need someone to run our email flows.”" },
+      { who: "R. · store owner", ask: "“Who actually does email marketing well?”" },
+      { who: "S. · brand lead", ask: "“Hiring help for lifecycle email.”" }
+    ]},
+    { sell: "online strength coaching", serve: "desk workers short on time", leads: [
+      { who: "D. · desk job, no time", ask: "“Any coach who does 30-minute sessions?”" },
+      { who: "T. · new parent", ask: "“Need a plan I can stick to. Who helps?”" },
+      { who: "P. · remote worker", ask: "“Looking for an online strength coach.”" }
+    ]},
+    { sell: "brand design sprints", serve: "startups about to launch", leads: [
+      { who: "L. · launching next month", ask: "“Need a brand ready in three weeks.”" },
+      { who: "N. · first-time founder", ask: "“Who does fast brand sprints?”" },
+      { who: "E. · seed-stage startup", ask: "“Looking for a launch identity. Recs?”" }
+    ]}
+  ];
+
+  async function loop(){
+    var ex = 0;
+    for (;;) {
+      await waitVisible();
+      var pair = EXAMPLES[ex % EXAMPLES.length];
+      ex++;
+
+      /* reset scene */
+      cards.forEach(function(c){ c.classList.remove("lit"); });
+      theater.classList.remove("armed");
+      sellEl.textContent = "";
+      serveEl.textContent = "";
+      await wait(500);
+
+      /* type the description */
+      lineSell.classList.add("active");
+      await typeInto(sellEl, pair.sell);
+      lineSell.classList.remove("active");
+      lineServe.classList.add("active");
+      await wait(180);
+      await typeInto(serveEl, pair.serve);
+      lineServe.classList.remove("active");
+      theater.classList.add("armed");
+      await wait(600);
+
+      /* three pulses, three qualified customers */
+      for (var i = 0; i < cards.length; i++) {
+        await waitVisible();
+        replay(pulseIn, "go");
+        await wait(820);
+        replay(blackbox, "fire");
+        await wait(620);
+        replay(pulseOut, "go");
+        await wait(820);
+        var lead = pair.leads[i];
+        if (lead) {
+          cards[i].querySelector(".l-who").textContent = lead.who;
+          cards[i].querySelector(".l-ask").textContent = lead.ask;
+        }
+        cards[i].classList.add("lit");
+        await wait(1050);
+      }
+
+      /* hold the full scene, then move on */
+      await wait(3000);
+    }
+  }
+  loop();
+})();
+</script>
+</body>
+</html>

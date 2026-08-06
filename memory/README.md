@@ -9,7 +9,7 @@ the code (unlike per-developer agent memory), so it's the shared source of truth
 | File | What it holds |
 |------|---------------|
 | [`known-issues.md`](./known-issues.md) | The main ledger: every real bug/gotcha + root cause + fix + how to avoid, grouped by area (desktop app, distributed workers, local dev/deploy, general dev findings). |
-| [`feedback_ui_mistakes.md`](./feedback_ui_mistakes.md) | UI-specific mistakes (layout/routing/tokens) in the `Why / How to apply` format. |
+| [`feedback-ui-mistakes.md`](./feedback-ui-mistakes.md) | UI-specific mistakes (layout/routing/tokens) in the `Why / How to apply` format. |
 
 ## Entry format (for `known-issues.md`)
 

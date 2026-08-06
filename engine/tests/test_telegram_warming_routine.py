@@ -19,21 +19,21 @@ from pathlib import Path
 
 import pytest
 
-from reelradar import dispatch
-from reelradar.core.accounts import (
+from aizu import dispatch
+from aizu.core.accounts import (
     FLAGGED,
     PROVISIONED,
     WARMING,
     warming_sentinel_campaign,
 )
-from reelradar.core.config import Campaign
-from reelradar.core.pacing import Pacer, PacingConfig
-from reelradar.core.store import Store
-from reelradar.engines.base import HaltSession
-from reelradar.engines.telegram.feed import TgMessage
-from reelradar.engines.telegram.warming_writes import TelegramFloodError, TgChannel
-from reelradar.engines.warming.ramp import budget_for_day
-from reelradar.engines.warming.telegram import (
+from aizu.core.config import Campaign
+from aizu.core.pacing import Pacer, PacingConfig
+from aizu.core.store import Store
+from aizu.engines.base import HaltSession
+from aizu.engines.telegram.feed import TgMessage
+from aizu.engines.telegram.warming_writes import TelegramFloodError, TgChannel
+from aizu.engines.warming.ramp import budget_for_day
+from aizu.engines.warming.telegram import (
     TelegramWarmingExecutor,
     derive_keywords,
     run_telegram_warming_session,
@@ -482,9 +482,9 @@ def test_dispatch_routes_telegram_to_tg_routine(monkeypatch):
         called["tg"] = True
         return {"session_id": "x", "halt_reason": None}
 
-    import reelradar.engines.warming.telegram as tg_mod
+    import aizu.engines.warming.telegram as tg_mod
     monkeypatch.setattr(tg_mod, "run_telegram_warming_session", _fake_tg)
-    from reelradar.engines.warming.session import run_warming_session
+    from aizu.engines.warming.session import run_warming_session
     run_warming_session(campaign=_campaign(seed_channels=["@s"]), store=store,
                         router=None, feed=None, soul=None,
                         pacer=_no_sleep_pacer())
@@ -495,12 +495,12 @@ def test_dispatch_instagram_warming_does_not_call_tg_routine(monkeypatch):
     store, _ = fresh_store()
     store.upsert_campaign_meta("camp1", org_id=1, status="live")
     store.add_account(1, "instagram", "ig_acct")
-    import reelradar.engines.warming.telegram as tg_mod
+    import aizu.engines.warming.telegram as tg_mod
     monkeypatch.setattr(tg_mod, "run_telegram_warming_session",
                         lambda **k: (_ for _ in ()).throw(
                             AssertionError("TG path on instagram!")))
-    from reelradar.core.feed import FakeFeed, Reel, Comment
-    from reelradar.engines.warming.session import run_warming_session
+    from aizu.core.feed import FakeFeed, Reel, Comment
+    from aizu.engines.warming.session import run_warming_session
     feed = FakeFeed([Reel(reel_id="r1", author="a", caption="c",
                           comments=[Comment("c1", "u", "hi", "en")])])
     ig_campaign = Campaign(

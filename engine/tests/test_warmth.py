@@ -2,9 +2,9 @@
 import os
 import tempfile
 
-from reelradar.core import warmth as W
-from reelradar.core.store import Store
-from reelradar.core.accounts import WARMING, READY
+from aizu.core import warmth as W
+from aizu.core.store import Store
+from aizu.core.accounts import WARMING, READY
 
 
 def fresh_store():

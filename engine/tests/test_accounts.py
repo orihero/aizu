@@ -1,7 +1,7 @@
 """Unit tests for the pure account lifecycle state machine (warming PRD §3.1)."""
 import pytest
 
-from reelradar.core.accounts import (
+from aizu.core.accounts import (
     ACCOUNT_STATES,
     ACTIVE,
     COOLING,

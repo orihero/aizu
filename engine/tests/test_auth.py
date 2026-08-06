@@ -1,5 +1,5 @@
-"""Auth tests: the stdlib hashing/throttle primitives (reelradar.auth) and the
-bridge's email+password endpoints + the session gate over /api/* (reelradar.server).
+"""Auth tests: the stdlib hashing/throttle primitives (aizu.auth) and the
+bridge's email+password endpoints + the session gate over /api/* (aizu.server).
 
 The panel is a local control plane; once auth is on, every /api/* surface except
 /api/auth/* must present a valid session cookie."""
@@ -15,10 +15,10 @@ from pathlib import Path
 
 import pytest
 
-from reelradar.auth import (LoginThrottle, hash_password, new_session_token,
+from aizu.auth import (LoginThrottle, hash_password, new_session_token,
                             verify_password)
-from reelradar.server import serve
-from reelradar.core.store import Store
+from aizu.server import serve
+from aizu.core.store import Store
 
 ROOT = Path(__file__).resolve().parents[1]
 CONFIG = ROOT / "config"
@@ -274,7 +274,7 @@ def test_successful_login_resets_the_failure_lockout_counter(server):
 
 def test_login_runs_exactly_one_verify_for_unknown_email(server, monkeypatch):
     """Anti-enumeration: an unknown email still runs one (dummy) verify."""
-    import reelradar.server as srv
+    import aizu.server as srv
     calls = []
     real = srv.verify_password
 

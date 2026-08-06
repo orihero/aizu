@@ -9,10 +9,10 @@ from pathlib import Path
 
 import pytest
 
-from reelradar.secrets import SecretCipherError
-from reelradar.worker.token_backends import (KeyringBackend, KeyringBackendError,
+from aizu.secrets import SecretCipherError
+from aizu.worker.token_backends import (KeyringBackend, KeyringBackendError,
                                              TokenBackendError)
-from reelradar.worker.token_store import TokenStore, resolve_backend_kind
+from aizu.worker.token_store import TokenStore, resolve_backend_kind
 
 from .fakes import FailingFakeKeyring, FakeKeyring
 
@@ -114,7 +114,7 @@ def test_resolve_garbage_value_raises_valueerror():
 # ----- TokenStore façade selection ---------------------------------------------
 
 def test_store_explicit_keyring_unavailable_raises(state_dir: Path, monkeypatch):
-    monkeypatch.setattr("reelradar.worker.token_store.KEYRING_AVAILABLE", False)
+    monkeypatch.setattr("aizu.worker.token_store.KEYRING_AVAILABLE", False)
     with pytest.raises(KeyringBackendError):
         TokenStore(state_dir, backend_kind_env="keyring")
 

@@ -1,8 +1,8 @@
 """LinkedInCascade — copy-first relevance (vision when thin) + comment matching."""
-from reelradar.core.config import campaign_from_brief
-from reelradar.core.feed import Comment, Reel
-from reelradar.core.router import Decision
-from reelradar.engines.linkedin.cascade import LinkedInCascade
+from aizu.core.config import campaign_from_brief
+from aizu.core.feed import Comment, Reel
+from aizu.core.router import Decision
+from aizu.engines.linkedin.cascade import LinkedInCascade
 
 
 class SpyRouter:

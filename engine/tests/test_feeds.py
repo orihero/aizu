@@ -4,11 +4,11 @@ import tempfile
 
 import pytest
 
-from reelradar.cli import _resolve_platform_credentials
-from reelradar.core.config import campaign_from_brief
-from reelradar.dispatch import build_feed
-from reelradar.secrets import SecretCipher
-from reelradar.core.store import Store
+from aizu.cli import _resolve_platform_credentials
+from aizu.core.config import campaign_from_brief
+from aizu.dispatch import build_feed
+from aizu.secrets import SecretCipher
+from aizu.core.store import Store
 
 
 def test_youtube_requires_seeds():
@@ -66,7 +66,7 @@ def test_youtube_credentials_missing_key_is_loud():
 def test_telegram_uses_explicit_credentials_over_env(monkeypatch):
     # Avoid the real Telethon connect by faking the client constructor; assert the
     # per-org creds (not env) are what build_feed threads through.
-    from reelradar.engines.telegram import feed as tg
+    from aizu.engines.telegram import feed as tg
     captured = {}
 
     class FakeClient:
@@ -123,7 +123,7 @@ def test_resolve_credentials_none_when_unregistered_or_unset():
 
 
 def test_instagram_build_feed_threads_include_home_feed(monkeypatch):
-    from reelradar.engines.instagram.cdp import CDPFeed
+    from aizu.engines.instagram.cdp import CDPFeed
     monkeypatch.setattr(CDPFeed, "attach", lambda self: None)  # no real Chrome
     feed = build_feed("instagram", cdp_url="http://127.0.0.1:9222",
                       seed_hashtags=["flutterdev"], include_home_feed=False)
@@ -132,7 +132,7 @@ def test_instagram_build_feed_threads_include_home_feed(monkeypatch):
 
 
 def test_cdpfeed_sources_honor_include_home_feed():
-    from reelradar.engines.instagram.cdp import REELS_URL, CDPConfig, CDPFeed
+    from aizu.engines.instagram.cdp import REELS_URL, CDPConfig, CDPFeed
     on = CDPFeed(CDPConfig(seed_hashtags=("flutterdev",), include_home_feed=True))
     off = CDPFeed(CDPConfig(seed_hashtags=("flutterdev",), include_home_feed=False))
     assert REELS_URL in on._sources()                    # home feed walked first
@@ -143,7 +143,7 @@ def test_cdpfeed_sources_honor_include_home_feed():
 def test_cdpfeed_detects_keyword_search_redirect():
     # A tag source that lands on IG's keyword-search fallback is a no-reels
     # redirect → skip fast; a tag that lands where requested is NOT.
-    from reelradar.engines.instagram.cdp import CDPFeed, TAG_URL
+    from aizu.engines.instagram.cdp import CDPFeed, TAG_URL
     feed = CDPFeed()
     tag = TAG_URL.format(tag="leadgen")
     search = "https://www.instagram.com/explore/search/keyword/?q=%23leadgen"
@@ -154,7 +154,7 @@ def test_cdpfeed_detects_keyword_search_redirect():
 def test_cdpfeed_requested_search_url_is_not_a_redirect():
     # If the SOURCE itself was a search URL, landing on search is expected —
     # not a redirect to skip.
-    from reelradar.engines.instagram.cdp import CDPFeed
+    from aizu.engines.instagram.cdp import CDPFeed
     feed = CDPFeed()
     search = "https://www.instagram.com/explore/search/keyword/?q=x"
     assert feed._source_redirected(search, search) is False

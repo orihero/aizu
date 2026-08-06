@@ -7,9 +7,9 @@ from pathlib import Path
 
 import pytest
 
-from reelradar import cli
-from reelradar.core.config import campaign_from_brief, load_campaign
-from reelradar.core.store import Store
+from aizu import cli
+from aizu.core.config import campaign_from_brief, load_campaign
+from aizu.core.store import Store
 
 ROOT = Path(__file__).resolve().parents[1]
 CONFIG = ROOT / "config"

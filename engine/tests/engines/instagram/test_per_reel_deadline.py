@@ -5,12 +5,12 @@ deterministic and fast (no real sleeping)."""
 import os
 import tempfile
 
-from reelradar.core.config import campaign_from_brief
-from reelradar.core.feed import Comment, FakeFeed, Reel
-from reelradar.core.mock_router import MockRouter
-from reelradar.core.pacing import Pacer, PacingConfig
-from reelradar.core.store import Store
-from reelradar.engines.instagram.session import Session, SessionConfig
+from aizu.core.config import campaign_from_brief
+from aizu.core.feed import Comment, FakeFeed, Reel
+from aizu.core.mock_router import MockRouter
+from aizu.core.pacing import Pacer, PacingConfig
+from aizu.core.store import Store
+from aizu.engines.instagram.session import Session, SessionConfig
 
 
 def _store():

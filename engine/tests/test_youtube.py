@@ -4,7 +4,7 @@ The Data API HTTP is isolated behind YouTubeApiPort, so the video→Reel /
 comment→Comment mapping and comment pagination are tested with a fake port —
 no API key, no network.
 """
-from reelradar.engines.youtube.feed import YouTubeFeed, YtComment, YtVideo
+from aizu.engines.youtube.feed import YouTubeFeed, YtComment, YtVideo
 
 
 class FakeYouTubeApi:
@@ -60,6 +60,6 @@ def test_fetch_comments_maps_and_paginates():
 
 def test_no_frames_and_healthy():
     feed = YouTubeFeed(client=FakeYouTubeApi(), channels=["UC_dev"])
-    from reelradar.core.feed import Reel
+    from aizu.core.feed import Reel
     assert feed.capture_frames(Reel(reel_id="v1")) == []
     assert feed.healthy() is True

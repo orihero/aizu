@@ -13,10 +13,10 @@ from pathlib import Path
 
 import pytest
 
-from reelradar.worker import (JOB_RESULT_KIND_CAMPAIGN_NOT_FOUND,
+from aizu.worker import (JOB_RESULT_KIND_CAMPAIGN_NOT_FOUND,
                               JOB_RESULT_KIND_ERROR, JOB_RESULT_KIND_SOUL_MISSING,
                               JOB_RESULT_KIND_SPEC_UNREADABLE, job_child, job_runner)
-from reelradar.worker.config import JobSpec, WorkerConfig
+from aizu.worker.config import JobSpec, WorkerConfig
 
 
 def _spec_dict(cfg: WorkerConfig, result_file: Path, **job_kw) -> dict:
@@ -117,12 +117,12 @@ def test_jobspec_payload_round_trips():
 def test_real_subprocess_wiring_end_to_end(cfg: WorkerConfig, tmp_path):
     """Spawn the REAL child against a spec pointing at a test-only stub _execute_job,
     proving argv → spec-file → result-file survives a genuine process boundary.
-    The stub is injected via REELRADAR_JOB_CHILD_STUB so it works across the fork."""
+    The stub is injected via AIZU_JOB_CHILD_STUB so it works across the fork."""
     spec, result = tmp_path / "spec.json", tmp_path / "result.json"
     _write_spec(cfg, spec, result)
     stub = tmp_path / "stub.py"
     stub.write_text(
-        "from reelradar.worker import job_runner, job_child\n"
+        "from aizu.worker import job_runner, job_child\n"
         "job_runner._execute_job = lambda store, job, *, cfg: "
         "{'matches': 1, 'run_id': 'run-1', 'job_id': job.id}\n"
         "import sys\n"

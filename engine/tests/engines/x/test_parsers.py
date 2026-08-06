@@ -4,7 +4,7 @@ Locks the by-shape contract (a rotated doc_id still parses), that the embedded
 quoted parent is never miscounted, that replies vs quote-posts get the right
 ``is_reply`` flag, and that the composite cursor packs/unpacks losslessly.
 """
-from reelradar.engines.x.parsers import (looks_like_timeline_response, pack_cursor,
+from aizu.engines.x.parsers import (looks_like_timeline_response, pack_cursor,
                                           parse_posts, parse_quotes, parse_replies,
                                           unpack_cursor)
 

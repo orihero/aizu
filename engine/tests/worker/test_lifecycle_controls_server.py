@@ -15,10 +15,10 @@ import pytest
 import sqlite3
 import time
 
-from reelradar.core.store import WORKER_TOKEN_TTL_SEC
-from reelradar.admin_auth import ADMIN_IP_ALLOWLIST_ENV
-from reelradar.secrets import SECRET_KEY_ENV
-from reelradar.server import (MIN_AGENT_VERSION_ENV, WORKER_BOOTSTRAP_ENV, serve)
+from aizu.core.store import WORKER_TOKEN_TTL_SEC
+from aizu.admin_auth import ADMIN_IP_ALLOWLIST_ENV
+from aizu.secrets import SECRET_KEY_ENV
+from aizu.server import (MIN_AGENT_VERSION_ENV, WORKER_BOOTSTRAP_ENV, serve)
 from ._admin import ADMIN_KEY, admin_cookie, set_admin_env
 
 ROOT = Path(__file__).resolve().parents[2]

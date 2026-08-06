@@ -3,9 +3,12 @@ value, never block the greenlet forever. Every Playwright op below raises
 PlaywrightTimeout (the per-call timeout now fires instead of hanging); each guard
 must return its documented fail-safe without propagating.
 """
-from reelradar.core.cdp import PlaywrightTimeout
-from reelradar.core.feed import Reel
-from reelradar.engines.instagram.cdp import CDPConfig, CDPFeed
+import threading
+import time
+
+from aizu.core.cdp import PlaywrightTimeout
+from aizu.core.feed import Reel
+from aizu.engines.instagram.cdp import CDPConfig, CDPFeed
 
 
 class _LandingPage:
@@ -127,3 +130,58 @@ def test_share_reel_returns_false_on_timeout():
     feed = CDPFeed()
     feed._ipage = _TimeoutPage()
     assert feed.share_reel(Reel(reel_id="Cabc123")) is False
+
+
+# ---- FIX 2: Instagram's login/challenge-wall signature (core/cdp.py's
+# CDPFeedBase.walk() calls _login_wall_reason after every source navigation) ----
+
+def test_login_wall_reason_detects_login_url():
+    feed = CDPFeed()
+    assert feed._login_wall_reason(
+        "https://www.instagram.com/accounts/login/?next=%2Freels%2F"
+    ) == ("instagram_login_required", "login")
+
+
+def test_login_wall_reason_detects_challenge_url():
+    feed = CDPFeed()
+    assert feed._login_wall_reason(
+        "https://www.instagram.com/challenge/action/"
+    ) == ("instagram_challenge_required", "checkpoint")
+
+
+def test_login_wall_reason_none_for_an_ordinary_url():
+    feed = CDPFeed()
+    assert feed._login_wall_reason("https://www.instagram.com/reels/") is None
+
+
+def test_login_wall_reason_none_for_empty_landed_url():
+    feed = CDPFeed()
+    assert feed._login_wall_reason("") is None
+
+
+# ---- FIX 1: context.cookies() is a CDP round-trip with no timeout= of its
+# own — a hang there must degrade _reel_media_request to None, not hang. ----
+
+class _HangingCookiesPage:
+    def __init__(self):
+        class _Ctx:
+            def cookies(self):
+                threading.Event().wait()   # never returns — models a frozen CDP pipe
+        self.context = _Ctx()
+
+    def evaluate(self, *a, **k):
+        return "some-agent/1.0"
+
+
+def test_reel_media_request_degrades_when_cookies_call_hangs_forever():
+    feed = CDPFeed(CDPConfig(js_timeout_ms=150))
+    feed._page = _HangingCookiesPage()
+    feed._code_to_media_url["Cabc123"] = "https://cdn.example.test/video.mp4"
+    t0 = time.monotonic()
+    result = feed._reel_media_request(Reel(reel_id="Cabc123"))
+    assert time.monotonic() - t0 < 2.0
+    # Degrades to an empty cookie header, never raises/hangs; the url/UA still work.
+    assert result is not None
+    url, headers = result
+    assert url == "https://cdn.example.test/video.mp4"
+    assert headers["cookies"] == ""

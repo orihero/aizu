@@ -16,7 +16,7 @@ helpers (``like_reel``/``follow_author``/``save_reel``/``share_reel``) via the
 from pathlib import Path
 
 _ROOT = Path(__file__).resolve().parent.parent
-_WARMING_DIR = _ROOT / "reelradar" / "engines" / "warming"
+_WARMING_DIR = _ROOT / "aizu" / "engines" / "warming"
 _WARMING_SESSION = _WARMING_DIR / "session.py"
 _WARMING_EXECUTOR = _WARMING_DIR / "executor.py"
 _WARMING_TELEGRAM = _WARMING_DIR / "telegram.py"

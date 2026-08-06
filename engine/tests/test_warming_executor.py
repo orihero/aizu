@@ -6,14 +6,14 @@ import tempfile
 
 import pytest
 
-from reelradar.core.accounts import warming_sentinel_campaign
-from reelradar.core.config import Campaign
-from reelradar.core.feed import FeedSource, Reel
-from reelradar.core.pacing import Pacer, PacingConfig
-from reelradar.core.store import Store
-from reelradar.engines.base import HaltSession
-from reelradar.engines.warming.executor import WarmingActionExecutor
-from reelradar.engines.warming.ramp import budget_for_day
+from aizu.core.accounts import warming_sentinel_campaign
+from aizu.core.config import Campaign
+from aizu.core.feed import FeedSource, Reel
+from aizu.core.pacing import Pacer, PacingConfig
+from aizu.core.store import Store
+from aizu.engines.base import HaltSession
+from aizu.engines.warming.executor import WarmingActionExecutor
+from aizu.engines.warming.ramp import budget_for_day
 
 
 def fresh_store():
@@ -215,7 +215,7 @@ def test_share_uses_campaign_share_target_when_set():
     c = _campaign(seed_hashtags=["marketing"], share_target="myhandle")
     # Force every probability to fire by patching the budget probs to 1.0 via rng.
     ex = _executor(store, feed, c, account_id=aid, rng=random.Random(0))
-    from reelradar.engines.warming.ramp import ActionBudget
+    from aizu.engines.warming.ramp import ActionBudget
     budget = ActionBudget("ramp", likes=0, follows=0, connects=0, dwell_windows=3,
                           read_only=False, saves=0, shares=1,
                           p_like=0.0, p_save=0.0, p_follow=0.0, p_share=1.0,
@@ -233,7 +233,7 @@ def test_per_day_like_cap_enforced_within_session():
     aid = store.add_account(1, "instagram", "acct")
     feed = RecordingFeed()
     c = _campaign(seed_hashtags=["marketing"])
-    from reelradar.engines.warming.ramp import ActionBudget
+    from aizu.engines.warming.ramp import ActionBudget
     # like cap 3, p_like=1.0 so it always fires until the cap is hit.
     budget = ActionBudget("ramp", likes=3, follows=0, connects=0, dwell_windows=3,
                           read_only=False, saves=0, shares=0,
@@ -251,7 +251,7 @@ def test_per_day_cap_persists_across_two_sessions():
     store.upsert_campaign_meta("camp1", org_id=1, status="live")
     aid = store.add_account(1, "instagram", "acct")
     c = _campaign(seed_hashtags=["marketing"])
-    from reelradar.engines.warming.ramp import ActionBudget
+    from aizu.engines.warming.ramp import ActionBudget
     budget = ActionBudget("ramp", likes=3, follows=0, connects=0, dwell_windows=3,
                           read_only=False, saves=0, shares=0,
                           p_like=1.0, p_save=0.0, p_follow=0.0, p_share=0.0,
@@ -283,7 +283,7 @@ def test_failed_fire_does_not_consume_cap():
             return False     # like always fails
 
     feed = FailLikeFeed()
-    from reelradar.engines.warming.ramp import ActionBudget
+    from aizu.engines.warming.ramp import ActionBudget
     budget = ActionBudget("ramp", likes=2, follows=0, connects=0, dwell_windows=3,
                           read_only=False, saves=0, shares=0,
                           p_like=1.0, p_save=0.0, p_follow=0.0, p_share=0.0,
@@ -306,7 +306,7 @@ def test_action_block_raises_halt_session():
     aid = store.add_account(1, "instagram", "acct")
     feed = RecordingFeed(block=True)
     c = _campaign(seed_hashtags=["marketing"])
-    from reelradar.engines.warming.ramp import ActionBudget
+    from aizu.engines.warming.ramp import ActionBudget
     budget = ActionBudget("ramp", likes=5, follows=0, connects=0, dwell_windows=3,
                           read_only=False, saves=0, shares=0,
                           p_like=1.0, p_save=0.0, p_follow=0.0, p_share=0.0,
@@ -329,7 +329,7 @@ def test_delays_are_randomized_and_right_skewed():
                   rng=random.Random(42), sleep=slept.append)
     ex = _executor(store, RecordingFeed(), c, account_id=aid, pacer=pacer,
                    rng=random.Random(42))
-    from reelradar.engines.warming.ramp import ActionBudget
+    from aizu.engines.warming.ramp import ActionBudget
     budget = ActionBudget("ramp", likes=99, follows=0, connects=0, dwell_windows=3,
                           read_only=False, saves=0, shares=0,
                           p_like=1.0, p_save=0.0, p_follow=0.0, p_share=0.0,

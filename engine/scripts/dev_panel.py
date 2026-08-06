@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
 """Dev runner for the panel bridge with auto-restart on Python edits.
 
-The bridge (reelradar.server) is a plain stdlib ThreadingHTTPServer with no
+The bridge (aizu.server) is a plain stdlib ThreadingHTTPServer with no
 reloader: a running process holds the code it was launched with, so editing
-reelradar/*.py has *no effect* until the process restarts. This wrapper watches
+aizu/*.py has *no effect* until the process restarts. This wrapper watches
 the package for .py changes and restarts the `panel` subprocess automatically —
 the same instant-feedback loop the Vite frontend already gets from HMR.
 
-  python scripts/dev_panel.py                 # db=reelradar.db, port=8765
+  python scripts/dev_panel.py                 # db=aizu.db, port=8765
   python scripts/dev_panel.py --port 8770
   .venv/bin/python scripts/dev_panel.py --db other.db
 
@@ -28,7 +28,7 @@ POLL_INTERVAL_SECONDS = 1.0
 GRACEFUL_SHUTDOWN_SECONDS = 5.0
 
 ENGINE_ROOT = Path(__file__).resolve().parent.parent
-WATCH_DIR = ENGINE_ROOT / "reelradar"
+WATCH_DIR = ENGINE_ROOT / "aizu"
 
 
 def _snapshot() -> dict[Path, float]:
@@ -47,7 +47,7 @@ def _build_command(args: argparse.Namespace) -> list[str]:
     # Mirror the documented launch line; sys.executable keeps us in the same
     # interpreter the runner was started with (venv or system).
     return [
-        sys.executable, "-m", "reelradar.cli",
+        sys.executable, "-m", "aizu.cli",
         "--db", args.db,
         "panel",
         "--panel-dir", args.panel_dir,
@@ -87,7 +87,7 @@ def _wait_for_change(baseline: dict[Path, float]) -> dict[Path, float]:
 def main() -> int:
     parser = argparse.ArgumentParser(
         description="Auto-restarting dev runner for the panel bridge")
-    parser.add_argument("--db", default="reelradar.db")
+    parser.add_argument("--db", default="aizu.db")
     parser.add_argument("--panel-dir", default="../admin-panel/dist")
     parser.add_argument("--config", default="config")
     parser.add_argument("--host", default="127.0.0.1")

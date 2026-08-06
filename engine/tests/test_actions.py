@@ -1,7 +1,7 @@
 from pathlib import Path
 
-from reelradar.engines.instagram.actions import ActionPolicy
-from reelradar.core.config import campaign_from_brief, load_campaign
+from aizu.engines.instagram.actions import ActionPolicy
+from aizu.core.config import campaign_from_brief, load_campaign
 
 CONFIG = Path(__file__).resolve().parents[1] / "config"
 

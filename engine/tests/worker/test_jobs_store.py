@@ -13,7 +13,7 @@ from pathlib import Path
 
 import pytest
 
-from reelradar.core.store import (DEFAULT_JOB_MAX_ATTEMPTS, Store,
+from aizu.core.store import (DEFAULT_JOB_MAX_ATTEMPTS, Store,
                                    default_lease_ttl_sec, nack_backoff_sec)
 
 PLAT = "instagram"

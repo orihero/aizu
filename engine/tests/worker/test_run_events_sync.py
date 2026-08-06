@@ -12,7 +12,7 @@ from pathlib import Path
 
 import pytest
 
-from reelradar.core.store import MAX_RUN_EVENTS_SYNC, Store
+from aizu.core.store import MAX_RUN_EVENTS_SYNC, Store
 
 PLAT = "instagram"
 

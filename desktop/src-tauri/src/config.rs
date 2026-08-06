@@ -11,7 +11,7 @@
 //! ever written back to the TOML.
 //!
 //! Mirrors the Python `WorkerConfig` field names where they cross the env boundary, so the
-//! env we hand the child (`REELRADAR_*`) lines up with `reelradar.worker.config`.
+//! env we hand the child (`AIZU_*`) lines up with `aizu.worker.config`.
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -27,7 +27,7 @@ use crate::errors::DesktopError;
 pub const DEFAULT_CDP_PORT: u16 = 9333;
 
 /// The sidecar control-surface default. Deliberately NOT 8799 — the dev panel
-/// (`reelradar.cli panel --port 8799`) commonly runs on 8799 on a dev box, so the worker
+/// (`aizu.cli panel --port 8799`) commonly runs on 8799 on a dev box, so the worker
 /// control surface uses a distinct port to avoid the collision.
 pub const DEFAULT_CONTROL_PORT: u16 = 8788;
 
@@ -36,12 +36,12 @@ const CONFIG_FILENAME: &str = "config.toml";
 
 /// The worker bootstrap token is a SECRET, so it is NEVER written to config.toml. The dev
 /// menu stores it in this sibling 0600 file, which the supervisor reads and passes to the
-/// child as `REELRADAR_WORKER_BOOTSTRAP_TOKEN`. (A future upgrade moves this to the OS
+/// child as `AIZU_WORKER_BOOTSTRAP_TOKEN`. (A future upgrade moves this to the OS
 /// keychain; a 0600 file is the pragmatic local-fleet store for now.)
 const TOKEN_FILENAME: &str = "dispatch-token.secret";
 
 /// Provider / engine secrets the SIDECAR's engine subprocess needs for a live run
-/// (`OPENROUTER_API_KEY`, `REELRADAR_SECRET_KEY`, model overrides, `YOUTUBE_API_KEY`,
+/// (`OPENROUTER_API_KEY`, `AIZU_SECRET_KEY`, model overrides, `YOUTUBE_API_KEY`,
 /// `TELEGRAM_*`, …). A GUI-launched worker inherits only a minimal launchd environment, so
 /// these can NOT be assumed present in the app's env — without them every live run dies at
 /// `_build_run_io` with "OPENROUTER_API_KEY not set" and the job completes with zero leads.
@@ -59,7 +59,7 @@ struct TomlConfig {
     cdp_port: u16,
     #[serde(default)]
     chrome_profile_dir: String,
-    /// Path to the bundled/installed `reelradar-worker` binary. If empty, the supervisor
+    /// Path to the bundled/installed `aizu-worker` binary. If empty, the supervisor
     /// resolves it relative to the app resource dir.
     #[serde(default)]
     sidecar_binary_path: String,
@@ -71,7 +71,7 @@ struct TomlConfig {
     control_port: u16,
     /// Which platforms this box advertises it can run (capability declaration). Comma-
     /// separated (`instagram,x,linkedin`) or `all` for every supported platform. Passed
-    /// to the sidecar as `REELRADAR_WORKER_PLATFORMS`; without a matching capability the
+    /// to the sidecar as `AIZU_WORKER_PLATFORMS`; without a matching capability the
     /// fleet dispatch rejects a run with "no capable worker". Default: `all`.
     #[serde(default = "default_worker_platforms")]
     worker_platforms: String,
@@ -97,21 +97,21 @@ pub struct DesktopConfig {
     /// Dedicated Chrome user-data-dir (NEVER the default profile — Chrome refuses
     /// --remote-debugging-port on the default profile).
     pub chrome_profile_dir: PathBuf,
-    /// Absolute path to the `reelradar-worker` binary, or empty to resolve from resources.
+    /// Absolute path to the `aizu-worker` binary, or empty to resolve from resources.
     pub sidecar_binary_path: PathBuf,
-    /// Worker state dir (`REELRADAR_WORKER_STATE`) — machine-id, single-flight locks, logs/.
+    /// Worker state dir (`AIZU_WORKER_STATE`) — machine-id, single-flight locks, logs/.
     pub state_dir: PathBuf,
-    /// SQLite DB path (`REELRADAR_DB`).
+    /// SQLite DB path (`AIZU_DB`).
     pub db_path: PathBuf,
     /// Loopback control-surface port (default 8799).
     pub control_port: u16,
-    /// Platforms this box advertises as capabilities (`REELRADAR_WORKER_PLATFORMS`):
+    /// Platforms this box advertises as capabilities (`AIZU_WORKER_PLATFORMS`):
     /// comma-separated or `all`. Empty/`all` → every supported platform, pool-wide.
     pub worker_platforms: String,
 }
 
 impl DesktopConfig {
-    /// The CDP URL we hand the child as `REELRADAR_CDP_URL` and the Chrome manager binds.
+    /// The CDP URL we hand the child as `AIZU_CDP_URL` and the Chrome manager binds.
     pub fn cdp_url(&self) -> String {
         format!("http://127.0.0.1:{}", self.cdp_port)
     }
@@ -129,7 +129,7 @@ dispatch_base_url = "https://your-cloud-dispatch.example.com"  # the cloud you l
 cdp_port = 9333            # managed Chrome remote-debugging port
 control_port = 8799        # loopback control surface
 chrome_profile_dir = ""    # a DEDICATED profile dir (NOT your default Chrome profile); "" = auto under app data
-sidecar_binary_path = ""   # "" = use the reelradar-worker bundled inside the app
+sidecar_binary_path = ""   # "" = use the aizu-worker bundled inside the app
 state_dir = ""             # "" = auto under app data
 db_path = ""               # "" = auto under app data
 worker_platforms = "all"   # platforms this box can run: "all" or e.g. "instagram,x,linkedin"
@@ -172,7 +172,7 @@ fn default_config(app: &AppHandle) -> DesktopConfig {
         chrome_profile_dir: data.join("chrome-profile"),
         sidecar_binary_path: PathBuf::new(),
         state_dir: data.join("worker-state"),
-        db_path: data.join("reelradar.db"),
+        db_path: data.join("aizu.db"),
         control_port: DEFAULT_CONTROL_PORT,
         worker_platforms: default_worker_platforms(),
     }
@@ -210,7 +210,7 @@ impl TomlConfig {
             chrome_profile_dir: or_default(self.chrome_profile_dir, data.join("chrome-profile")),
             sidecar_binary_path: PathBuf::from(self.sidecar_binary_path),
             state_dir: or_default(self.state_dir, data.join("worker-state")),
-            db_path: or_default(self.db_path, data.join("reelradar.db")),
+            db_path: or_default(self.db_path, data.join("aizu.db")),
             control_port: self.control_port,
             worker_platforms: {
                 let p = self.worker_platforms.trim();
@@ -293,7 +293,7 @@ const SECRETS_EXAMPLE: &str = r#"# AIZU Worker — engine/provider secrets for t
 # OPENROUTER_API_KEY=sk-or-...
 #
 # Needed if this box runs campaigns for orgs with encrypted per-org connections:
-# REELRADAR_SECRET_KEY=...
+# AIZU_SECRET_KEY=...
 #
 # Optional model / platform overrides (fall back to engine defaults if absent):
 # OPENROUTER_TEXT_MODEL=...
@@ -351,7 +351,7 @@ mod tests {
 # a comment\n\
 \n\
 OPENROUTER_API_KEY=sk-or-abc123\n\
-  REELRADAR_SECRET_KEY = \"quoted-value\" \n\
+  AIZU_SECRET_KEY = \"quoted-value\" \n\
 OPENROUTER_TEXT_MODEL='single-quoted'\n\
 # trailing comment\n";
         let pairs = parse_secrets(body);
@@ -359,7 +359,7 @@ OPENROUTER_TEXT_MODEL='single-quoted'\n\
             pairs,
             vec![
                 ("OPENROUTER_API_KEY".to_string(), "sk-or-abc123".to_string()),
-                ("REELRADAR_SECRET_KEY".to_string(), "quoted-value".to_string()),
+                ("AIZU_SECRET_KEY".to_string(), "quoted-value".to_string()),
                 ("OPENROUTER_TEXT_MODEL".to_string(), "single-quoted".to_string()),
             ]
         );

@@ -5,10 +5,10 @@ use the submission (title+selftext) as comment context with a Reddit-shaped
 scaffold ("SUBMISSION BEING COMMENTED ON"). Comments at any depth are scored the
 same way (a deeply-nested reply is judged exactly like a top-level one).
 """
-from reelradar.core.config import campaign_from_brief
-from reelradar.core.feed import Comment, Reel
-from reelradar.core.router import Decision
-from reelradar.engines.reddit.cascade import RedditCascade, _comment_content
+from aizu.core.config import campaign_from_brief
+from aizu.core.feed import Comment, Reel
+from aizu.core.router import Decision
+from aizu.engines.reddit.cascade import RedditCascade, _comment_content
 
 
 class SpyRouter:

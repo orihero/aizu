@@ -1,5 +1,6 @@
 import type {
   ActiveRun,
+  AgentReadiness,
   Alert,
   Billing,
   Campaign,
@@ -80,7 +81,7 @@ export function buildStatusChange(overrides: Partial<StatusChange> = {}): Status
   return {
     fromStatus: 'new',
     toStatus: 'in_progress',
-    by: 'tester@reelradar.test',
+    by: 'tester@aizu.test',
     at: 'Jun 11',
     atTs: 1_718_104_320,
     note: null,
@@ -92,7 +93,7 @@ export function buildLeadNote(overrides: Partial<LeadNote> = {}): LeadNote {
   return {
     id: 'n1',
     body: 'Called, left a voicemail.',
-    authorEmail: 'tester@reelradar.test',
+    authorEmail: 'tester@aizu.test',
     authorId: 1,
     createdAt: 'Jun 11',
     createdAtTs: 1_718_104_500,
@@ -324,6 +325,20 @@ export function buildRunBlock(overrides: Partial<RunBlock> = {}): RunBlock {
   return {
     active: null,
     recent: [],
+    ...overrides,
+  };
+}
+
+/** GET /api/agent/readiness — defaults to the healthy state (CDP up, Instagram
+ * logged in) so tests opt INTO the not-ready cases explicitly. */
+export function buildAgentReadiness(overrides: Partial<AgentReadiness> = {}): AgentReadiness {
+  return {
+    ready: true,
+    cdp: 'ok',
+    instagram: 'logged_in',
+    checkedAt: 1_718_800_000,
+    detail: null,
+    cdpUrl: 'http://127.0.0.1:9222',
     ...overrides,
   };
 }

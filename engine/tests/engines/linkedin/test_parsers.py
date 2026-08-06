@@ -4,7 +4,7 @@ Locks the by-shape contract: posts and comments are recognized by their structur
 (not the request URL), so a drifted endpoint still parses; the several Voyager
 text-nesting variants are tolerated; and the paging cursor advances correctly.
 """
-from reelradar.engines.linkedin.parsers import (looks_like_comment_response,
+from aizu.engines.linkedin.parsers import (looks_like_comment_response,
                                                  looks_like_post_response,
                                                  parse_comments, parse_posts)
 

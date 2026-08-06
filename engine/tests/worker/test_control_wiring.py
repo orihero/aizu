@@ -8,10 +8,10 @@ from typing import Optional
 
 import pytest
 
-from reelradar.worker import job_runner
-from reelradar.worker.config import WorkerConfig
-from reelradar.worker.lease_client import Result
-from reelradar.worker.sidecar import Sidecar, SidecarControlSource
+from aizu.worker import job_runner
+from aizu.worker.config import WorkerConfig
+from aizu.worker.lease_client import Result
+from aizu.worker.sidecar import Sidecar, SidecarControlSource
 
 
 class _FakeClient:

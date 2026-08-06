@@ -1,13 +1,14 @@
 """Encrypted worker-token persistence (token_store.py, BUILD-PLAN §2.4 / review #2)."""
 from __future__ import annotations
 
+import os
 import stat
 from pathlib import Path
 
 import pytest
 
-from reelradar.secrets import SecretCipher, SecretCipherError
-from reelradar.worker.token_store import TokenStore
+from aizu.secrets import SecretCipher, SecretCipherError
+from aizu.worker.token_store import TokenStore
 
 
 def test_save_then_load_roundtrips(state_dir: Path, cipher: SecretCipher):
@@ -23,6 +24,8 @@ def test_token_is_not_stored_in_plaintext(state_dir: Path, cipher: SecretCipher)
     assert "plaintext-leak-check" not in blob  # encrypted at rest
 
 
+@pytest.mark.skipif(os.name != "posix",
+                    reason="0600 mode bits are POSIX-only; Windows secures files via ACLs")
 def test_token_file_is_mode_0600(state_dir: Path, cipher: SecretCipher):
     store = TokenStore(state_dir, cipher=cipher)
     store.save("t")

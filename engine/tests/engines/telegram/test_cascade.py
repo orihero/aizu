@@ -4,10 +4,10 @@ Telegram is text-first, so the cascade must NEVER call classify_image and must
 use the channel message as reply context with a Telegram-shaped scaffold
 ("CHANNEL MESSAGE BEING REPLIED TO").
 """
-from reelradar.core.config import campaign_from_brief
-from reelradar.core.feed import Comment, Reel
-from reelradar.core.router import Decision
-from reelradar.engines.telegram.cascade import TelegramCascade, _comment_content
+from aizu.core.config import campaign_from_brief
+from aizu.core.feed import Comment, Reel
+from aizu.core.router import Decision
+from aizu.engines.telegram.cascade import TelegramCascade, _comment_content
 
 
 class SpyRouter:

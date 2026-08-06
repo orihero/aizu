@@ -5,12 +5,12 @@ import tempfile
 
 import pytest
 
-from reelradar import dispatch
-from reelradar.core.accounts import PROVISIONED, WARMING, warming_sentinel_campaign
-from reelradar.core.config import Campaign, campaign_from_brief, campaign_to_brief
-from reelradar.core.feed import Comment, FakeFeed, Reel
-from reelradar.core.pacing import Pacer, PacingConfig
-from reelradar.core.store import Store
+from aizu import dispatch
+from aizu.core.accounts import PROVISIONED, WARMING, warming_sentinel_campaign
+from aizu.core.config import Campaign, campaign_from_brief, campaign_to_brief
+from aizu.core.feed import Comment, FakeFeed, Reel
+from aizu.core.pacing import Pacer, PacingConfig
+from aizu.core.store import Store
 
 
 def fresh_store():

@@ -32,7 +32,7 @@ campaigns and the file campaign are untouched (empty channel list = today's beha
 
 ## 1. Data model
 
-### New: `ChannelSpec` (`engine/reelradar/core/config.py`, above `Campaign`)
+### New: `ChannelSpec` (`engine/aizu/core/config.py`, above `Campaign`)
 
 ```python
 @dataclass(frozen=True)
@@ -96,10 +96,10 @@ reopen doesn't re-run earlier rename migrations. The activity-feed platform tagg
 
 ---
 
-## 2. Run orchestration (`engine/reelradar/cli.py`, `engines/base.py`)
+## 2. Run orchestration (`engine/aizu/cli.py`, `engines/base.py`)
 
 **Invariant preserved:** one subprocess per run (`runner.py` `build_argv` unchanged),
-one `REELRADAR_RUN_ID`, one `RunManager` lock, **strictly sequential** channels (forced
+one `AIZU_RUN_ID`, one `RunManager` lock, **strictly sequential** channels (forced
 by the single warmed Chrome + the `sync_playwright().start()` re-entry guard).
 `dispatch.run_engine_session` / `select_engine` and every engine are called **once per
 channel, unchanged.**
@@ -303,7 +303,7 @@ empty.) The RunActivityDrawer renders a per-platform tag on each line.
 | **4. Server brief wire-format** | `_channel_to_snake`, `_brief_to_snake` channels branch + invalid-platform drop, sentinel merge (M2) | `server.py`, `panel.py` | integration: channels round-trip, invalid dropped, absent=no-change vs `[]`=clear, card `platforms` + legacy fallback |
 | **5. Frontend schema + form state** | `channelEntrySchema`, dual-path `toInput`, single-channel collapse + scalar overwrite, multi-channel `hasRequiredSeeds` | `panelState.ts`, `useCampaignForm.ts` | Vitest: dual-path, collapse, `.catch` on old payloads |
 | **6. Frontend UI** | `PlatformChannels` add/remove + confirm + >1-CDP warning; multi-chip card | `CampaignForm.tsx`, `CampaignCard.tsx` | RTL: add/remove, confirm-on-discard, multi-CDP warning, multi-chip + legacy render |
-| **7. E2E + docs** | end-to-end IG+Telegram campaign; update `engine/docs/ENGINES.md` (fan-out + multi-CDP warming) | `admin-panel/e2e/`, docs | E2E: create IG+Telegram, brief round-trips, card shows 2 chips, dry-run yields per-platform sessions |
+| **7. E2E + docs** | end-to-end IG+Telegram campaign; update `docs/architecture/engines.md` (fan-out + multi-CDP warming) | `admin-panel/e2e/`, docs | E2E: create IG+Telegram, brief round-trips, card shows 2 chips, dry-run yields per-platform sessions |
 
 > **Phase ordering note (L1):** Phase 2 ships engine fan-out before Phase 4 lets the
 > server persist a multi-channel brief; Phase 2's tests hand-construct multi-channel

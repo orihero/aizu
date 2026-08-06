@@ -9,9 +9,9 @@ Two layers:
   - RedditFeed: maps RedditComment → core Comment (composite id, is_reply=depth>0)
     and applies the created_utc watermark so re-polls only score fresh comments.
 """
-from reelradar.core.feed import Comment as CoreComment
-from reelradar.engines.reddit import feed as rfeed
-from reelradar.engines.reddit.feed import (RedditComment, RedditDataApiClient,
+from aizu.core.feed import Comment as CoreComment
+from aizu.engines.reddit import feed as rfeed
+from aizu.engines.reddit.feed import (RedditComment, RedditDataApiClient,
                                            RedditFeed, RedditSubmission)
 
 

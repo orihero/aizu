@@ -5,7 +5,7 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
-from reelradar.core.schedule import TASHKENT, next_fire
+from aizu.core.schedule import TASHKENT, next_fire
 
 
 def _epoch_local(y, mo, d, h, mi):

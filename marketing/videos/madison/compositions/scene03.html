@@ -1,0 +1,286 @@
+<!doctype html>
+<html lang="en" data-resolution="landscape">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=1920, height=1080" />
+    <title>AIZU — Scene 02 · Variant B — Task Overwhelm</title>
+    <script src="https://cdn.jsdelivr.net/npm/gsap@3.14.2/dist/gsap.min.js"></script>
+    <style>
+      @font-face {
+        font-family: "Sora";
+        font-style: normal;
+        font-weight: 100 900;
+        font-display: block;
+        src: url("assets/fonts/sora-latin.woff2") format("woff2");
+        unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA,
+          U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193,
+          U+2212, U+2215, U+FEFF, U+FFFD;
+      }
+      @font-face {
+        font-family: "Sora";
+        font-style: normal;
+        font-weight: 100 900;
+        font-display: block;
+        src: url("assets/fonts/sora-latin-ext.woff2") format("woff2");
+        unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF,
+          U+0304, U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020,
+          U+20A0-20AB, U+20AD-20C0, U+2113, U+2C60-2C7F, U+A720-A7FF;
+      }
+
+      :root {
+        --bg: #eef0f3;
+        --surface: #ffffff;
+        --surface-2: #f4f5f9;
+        --border: #e6e8ee;
+        --text: #16161a;
+        --muted: #5b5e6b;
+        --faint: #747680;
+        --brand: #16161a;
+        --brand-deep: #34343d;
+        --accent: #d9f24f;
+        --on-accent: #16161a;
+        --on-brand: #ffffff;
+        --danger: #dc2626;
+        --r-tile: 23px;
+        --r-card: 17px;
+        --shadow-card: 0 24px 60px rgba(22, 22, 26, 0.1), 0 4px 12px rgba(22, 22, 26, 0.05);
+        --shadow-chip: 0 14px 34px rgba(22, 22, 26, 0.12), 0 2px 6px rgba(22, 22, 26, 0.05);
+      }
+
+      * {
+        margin: 0;
+        padding: 0;
+        box-sizing: border-box;
+      }
+      html,
+      body {
+        width: 1920px;
+        height: 1080px;
+        overflow: hidden;
+      }
+      body {
+        font-family: Inter, system-ui, sans-serif;
+        color: var(--text);
+      }
+      #root {
+        position: relative;
+        width: 1920px;
+        height: 1080px;
+        overflow: hidden;
+      }
+
+      #bg {
+        position: absolute;
+        inset: 0;
+        background: var(--bg);
+      }
+      #bg-dots {
+        position: absolute;
+        inset: 0;
+        background-image: radial-gradient(circle, rgba(22, 22, 26, 0.07) 1.5px, transparent 1.5px);
+        background-size: 46px 46px;
+      }
+      #bg-glow {
+        position: absolute;
+        left: 360px;
+        top: 60px;
+        width: 1200px;
+        height: 1000px;
+        border-radius: 50%;
+        background: radial-gradient(circle, rgba(220, 38, 38, 0.22), rgba(220, 38, 38, 0) 70%);
+        filter: blur(60px);
+      }
+
+      #scene {
+        position: absolute;
+        inset: 0;
+      }
+
+      /* ---------- the person in the middle of it ---------- */
+      /* Entrance elements start hidden in CSS — a zero-duration tl.set at t=0 is not
+         reliably applied when the renderer seeks to exactly 0. Opacity only, so it
+         never collides with the GSAP scale tween. */
+      #hub,
+      .chip {
+        opacity: 0;
+      }
+      #hub {
+        position: absolute;
+        left: 840px;
+        top: 380px;
+        width: 240px;
+        height: 240px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        border-radius: 50%;
+        background: linear-gradient(140deg, var(--brand-deep), var(--brand));
+        box-shadow: var(--shadow-card);
+      }
+      #hub svg {
+        display: block;
+        width: 116px;
+        height: 116px;
+      }
+
+      /* ---------- the pile of work ---------- */
+      .chip {
+        position: absolute;
+        width: 380px;
+        padding: 24px 30px;
+        background: var(--surface);
+        border: 1px solid var(--border);
+        border-radius: var(--r-tile);
+        box-shadow: var(--shadow-chip);
+        font-size: 25px;
+        line-height: 1.35;
+        color: var(--text);
+      }
+      #chip-1 {
+        left: 200px;
+        top: 150px;
+      }
+      #chip-2 {
+        left: 1340px;
+        top: 140px;
+      }
+      #chip-3 {
+        left: 90px;
+        top: 400px;
+      }
+      #chip-4 {
+        left: 1450px;
+        top: 380px;
+      }
+      #chip-5 {
+        left: 180px;
+        top: 660px;
+      }
+      #chip-6 {
+        left: 1370px;
+        top: 640px;
+      }
+      #chip-7 {
+        left: 770px;
+        top: 860px;
+      }
+    </style>
+  </head>
+  <body>
+    <div
+      id="root"
+      data-composition-id="main"
+      data-start="0"
+      data-width="1920"
+      data-height="1080"
+      data-duration="5.5"
+    >
+      <div id="bg" class="clip" data-start="0" data-duration="5.5" data-track-index="0">
+        <div id="bg-dots"></div>
+        <div id="bg-glow"></div>
+      </div>
+
+      <div id="scene" class="clip" data-start="0" data-duration="5.5" data-track-index="1">
+        <div id="hub">
+          <svg viewBox="0 0 24 24" fill="none" stroke="#ffffff" stroke-width="1.6">
+            <circle cx="12" cy="8" r="4" />
+            <path d="M4 21v-1a8 8 0 0 1 16 0v1" stroke-linecap="round" />
+          </svg>
+        </div>
+
+        <div id="chip-1" class="chip">Write ad copy for six platforms</div>
+        <div id="chip-2" class="chip">Set up targeting for every one of them</div>
+        <div id="chip-3" class="chip">Monitor cost-per-click every single day</div>
+        <div id="chip-4" class="chip">A/B test the creatives. Again.</div>
+        <div id="chip-5" class="chip">Chase leads that never reply</div>
+        <div id="chip-6" class="chip">Rebuild the audience that stopped working</div>
+        <div id="chip-7" class="chip">Report on ROAS by Monday</div>
+      </div>
+    </div>
+
+    <script>
+      window.__timelines = window.__timelines || {};
+      const tl = gsap.timeline({ paused: true });
+
+      const CHIPS_AT = 0.6;
+      const STAGGER = 0.17;
+      const CROWD_AT = 2.3;
+      const COLLAPSE_AT = 4.55;
+      const SCENE_END = 5.5;
+
+      /* Pre-calculated layout constants — the inward pull is derived from each chip's
+         authored position at setup, never measured at tween time. */
+      const CENTER_X = 960;
+      const CENTER_Y = 500;
+      const CHIP_W = 380;
+      const CHIPS = [
+        { sel: "#chip-1", left: 200, top: 150 },
+        { sel: "#chip-2", left: 1340, top: 140 },
+        { sel: "#chip-3", left: 90, top: 400 },
+        { sel: "#chip-4", left: 1450, top: 380 },
+        { sel: "#chip-5", left: 180, top: 660 },
+        { sel: "#chip-6", left: 1370, top: 640 },
+        { sel: "#chip-7", left: 770, top: 860 },
+      ].map((c) => {
+        const dx = CENTER_X - (c.left + CHIP_W / 2);
+        const dy = CENTER_Y - (c.top + 60);
+        return { ...c, dx, dy };
+      });
+
+      /* Claim every entrance's collapsed state at t=0 so frame 0 is never a stale
+         fully-formed frame under parallel seek. */
+      tl.set("#hub", { scale: 0.86, opacity: 0 }, 0);
+      tl.set(".chip", { scale: 0.82, opacity: 0, y: 22 }, 0);
+
+      /* 1 · the person lands first */
+      tl.fromTo(
+        "#hub",
+        { scale: 0.86, opacity: 0 },
+        { scale: 1, opacity: 1, duration: 0.6, ease: "power3.out" },
+        0.1,
+      );
+
+      /* 2 · the work piles on, one item at a time */
+      CHIPS.forEach((c, i) => {
+        tl.fromTo(
+          c.sel,
+          { scale: 0.82, opacity: 0, y: 22 },
+          { scale: 1, opacity: 1, y: 0, duration: 0.52, ease: "power3.out" },
+          CHIPS_AT + i * STAGGER,
+        );
+      });
+
+      /* 3 · everything creeps inward — the frame gets tighter, not busier */
+      CHIPS.forEach((c) => {
+        tl.to(
+          c.sel,
+          { x: c.dx * 0.27, y: c.dy * 0.27, duration: 2.4, ease: "sine.inOut" },
+          CROWD_AT,
+        );
+      });
+
+      /* 4 · it all closes in and swallows the frame */
+      CHIPS.forEach((c) => {
+        tl.to(
+          c.sel,
+          {
+            x: c.dx * 0.72,
+            y: c.dy * 0.72,
+            scale: 0.5,
+            opacity: 0,
+            duration: 0.8,
+            ease: "power2.in",
+          },
+          COLLAPSE_AT,
+        );
+      });
+      tl.to("#hub", { scale: 0.9, duration: 0.8, ease: "power2.in" }, COLLAPSE_AT);
+
+      /* 5 · pressure reads in the backdrop too */
+      tl.set("#bg-glow", { opacity: 0.12 }, 0);
+      tl.to("#bg-glow", { opacity: 1, duration: 3.4, ease: "sine.in" }, CHIPS_AT);
+
+      window.__timelines["main"] = tl;
+    </script>
+  </body>
+</html>

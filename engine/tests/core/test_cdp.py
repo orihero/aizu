@@ -5,8 +5,14 @@ hinted JSON traffic sets the canary BEFORE classification, non-hinted/non-JSON
 responses are ignored, ``_classify`` is the only routing hook, and the seed-source
 walk drains the reel queue and scrolls when it's dry.
 """
-from reelradar.core.cdp import CDPBaseConfig, CDPFeedBase, PlaywrightTimeout
-from reelradar.core.feed import Reel
+import threading
+import time as _time
+
+import pytest
+
+from aizu.core.cdp import CDPBaseConfig, CDPFeedBase, PlaywrightTimeout
+from aizu.core.feed import Reel
+from aizu.engines.base import HaltSession
 
 
 class FakeResponse:
@@ -285,6 +291,32 @@ def test_click_centermost_returns_false_on_evaluate_timeout():
     assert feed._click_centermost(_TimeoutPage(), "() => []") is False
 
 
+class _DriverClosedPage:
+    """A page whose wheel AND evaluate raise a NON-timeout error — models the
+    'Connection closed while reading from the driver' hiccup when Chrome's network
+    service crashes and restarts. A scroll must degrade, never crash the run."""
+
+    class _Mouse:
+        def wheel(self, dx, dy):
+            raise RuntimeError("Connection closed while reading from the driver")
+
+    def __init__(self):
+        self.mouse = self._Mouse()
+
+    def evaluate(self, *a, **k):
+        raise RuntimeError("Connection closed while reading from the driver")
+
+
+def test_wheel_once_degrades_on_non_timeout_driver_error():
+    feed = _RecordingFeed()
+    feed._wheel_once(_DriverClosedPage(), 900)   # must NOT raise
+
+
+def test_scroll_degrades_on_non_timeout_driver_error():
+    feed = _RecordingFeed()
+    feed._scroll(_DriverClosedPage())            # must NOT raise (whole scroll path)
+
+
 def test_attach_sets_page_default_timeouts_from_config():
     cfg = CDPBaseConfig(js_timeout_ms=15000, nav_timeout_ms=20000)
     feed = _RecordingFeed(cfg)
@@ -300,7 +332,7 @@ def test_attach_sets_page_default_timeouts_from_config():
         def stop(self):
             pass
 
-    import reelradar.core.cdp as cdpmod
+    import aizu.core.cdp as cdpmod
     orig_start = cdpmod.sync_playwright
     orig_flag = cdpmod.PLAYWRIGHT_AVAILABLE
     cdpmod.sync_playwright = lambda: type("S", (), {"start": staticmethod(lambda: _FakePW())})()
@@ -323,3 +355,121 @@ def test_ensure_ipage_sets_default_timeouts_from_config():
     # CRITICAL: mouse.* on the interaction page rely SOLELY on this page default.
     assert ipage.default_timeout_ms == 15000
     assert ipage.default_nav_timeout_ms == 20000
+
+
+# ---- hang-prevention fix #1: a call Playwright's OWN timeout does not bound
+# (the confirmed real hang — no exception at all, ever) must still return
+# control via _call_bounded's real wall-clock deadline. -----------------------
+
+class _HangingPage:
+    """A page whose mouse.wheel/mouse.click/evaluate never return at all — no
+    exception, no timeout from Playwright itself — modeling the confirmed live
+    root cause (a frozen CDP command once the tab redirected to a login wall)."""
+
+    def __init__(self, evaluate_hangs: bool = False):
+        self._evaluate_hangs = evaluate_hangs
+
+        class _Mouse:
+            def wheel(self, dx, dy):
+                threading.Event().wait()
+
+            def click(self, x, y):
+                threading.Event().wait()
+
+        self.mouse = _Mouse()
+
+    def evaluate(self, *a, **k):
+        if self._evaluate_hangs:
+            threading.Event().wait()
+        return None
+
+
+def test_wheel_once_degrades_when_mouse_wheel_hangs_forever():
+    cfg = CDPBaseConfig(js_timeout_ms=150)   # short deadline so the test stays fast
+    feed = _RecordingFeed(cfg)
+    page = _HangingPage()
+    t0 = _time.monotonic()
+    feed._wheel_once(page, 900)   # must not hang: mouse.wheel hangs → JS fallback runs
+    assert _time.monotonic() - t0 < 2.0
+
+
+def test_wheel_once_degrades_when_both_wheel_and_evaluate_fallback_hang_forever():
+    cfg = CDPBaseConfig(js_timeout_ms=150)
+    feed = _RecordingFeed(cfg)
+    page = _HangingPage(evaluate_hangs=True)
+    t0 = _time.monotonic()
+    feed._wheel_once(page, 900)   # both hang → still returns, no crash
+    assert _time.monotonic() - t0 < 2.0
+
+
+def test_click_centermost_returns_false_when_mouse_click_hangs_forever():
+    cfg = CDPBaseConfig(js_timeout_ms=150)
+    feed = _RecordingFeed(cfg)
+
+    class _ClickPage(_HangingPage):
+        def evaluate(self, *a, **k):
+            return {"x": 10, "y": 20}   # locate succeeds fast; only the click hangs
+
+    t0 = _time.monotonic()
+    assert feed._click_centermost(_ClickPage(), "() => []") is False
+    assert _time.monotonic() - t0 < 2.0
+
+
+# ---- hang-prevention fix #2: mid-run login/challenge-wall detection ---------
+
+class _LoginWallFeed(_RecordingFeed):
+    """A feed whose single source always lands on a fixed URL (no real nav), so
+    ``_login_wall_reason`` can be exercised deterministically through walk()."""
+
+    def __init__(self, landed_url, cfg=None):
+        super().__init__(cfg)
+        self._landed_url_value = landed_url
+
+    def _sources(self):
+        return ["https://example.test/feed"]
+
+    def _navigate(self, url):
+        pass   # no real page — walk() only needs _landed_url() below
+
+    def _landed_url(self):
+        return self._landed_url_value
+
+    def _login_wall_reason(self, landed_url):
+        if "/accounts/login/" in landed_url:
+            return "instagram_login_required", "login"
+        if "/challenge/" in landed_url:
+            return "instagram_challenge_required", "checkpoint"
+        return None
+
+
+def test_walk_raises_halt_session_on_login_wall():
+    cfg = CDPBaseConfig(settle_seconds=0, nav_settle_seconds=0)
+    feed = _LoginWallFeed("https://www.instagram.com/accounts/login/", cfg)
+    with pytest.raises(HaltSession) as exc_info:
+        list(feed.walk())
+    assert exc_info.value.kind == "login"
+    assert exc_info.value.reason == "instagram_login_required"
+
+
+def test_walk_raises_halt_session_on_challenge_wall():
+    cfg = CDPBaseConfig(settle_seconds=0, nav_settle_seconds=0)
+    feed = _LoginWallFeed("https://www.instagram.com/challenge/action/", cfg)
+    with pytest.raises(HaltSession) as exc_info:
+        list(feed.walk())
+    assert exc_info.value.kind == "checkpoint"
+
+
+def test_walk_proceeds_normally_when_no_login_wall():
+    cfg = CDPBaseConfig(per_source_reels=1, settle_seconds=0, nav_settle_seconds=0)
+    feed = _LoginWallFeed("https://www.instagram.com/reels/", cfg)
+    feed._reel_queue = [Reel(reel_id="a")]
+    feed._seen_reel_ids = {"a"}
+    walked = [r.reel_id for r in feed.walk()]
+    assert walked == ["a"]
+
+
+def test_login_wall_reason_base_default_never_fires():
+    # CDPFeedBase itself (no platform override) must never halt on ANY landed
+    # URL — a platform with no known login-wall signature is unaffected.
+    feed = _RecordingFeed()
+    assert feed._login_wall_reason("https://example.test/accounts/login/") is None

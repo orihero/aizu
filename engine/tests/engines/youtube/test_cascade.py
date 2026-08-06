@@ -4,10 +4,10 @@ The Data API exposes no frames, so the cascade must NEVER call classify_image an
 must use the video (title+description) as comment context with a YouTube-shaped
 scaffold ("VIDEO BEING COMMENTED ON").
 """
-from reelradar.core.config import campaign_from_brief
-from reelradar.core.feed import Comment, Reel
-from reelradar.core.router import Decision
-from reelradar.engines.youtube.cascade import YouTubeCascade, _comment_content
+from aizu.core.config import campaign_from_brief
+from aizu.core.feed import Comment, Reel
+from aizu.core.router import Decision
+from aizu.engines.youtube.cascade import YouTubeCascade, _comment_content
 
 
 class SpyRouter:

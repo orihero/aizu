@@ -19,16 +19,19 @@ const EXPECTED: Record<Action, Role[]> = {
   view_reports: ['owner', 'admin', 'viewer'],
   view_settings: ['owner', 'admin'],
   view_team: ['owner', 'admin'],
+  view_billing: ['owner', 'admin'],
   edit_campaigns: ['owner', 'admin'],
   run_campaigns: ['owner', 'admin'],
   edit_leads: ['owner', 'admin', 'member'],
   bulk_edit_leads: ['owner', 'admin'],
   edit_settings: ['owner', 'admin'],
   toggle_integration: ['owner', 'admin'],
+  manage_billing: ['owner', 'admin'],
   invite_member: ['owner', 'admin'],
   manage_member: ['owner', 'admin'],
   manage_admin: ['owner'],
   transfer_ownership: ['owner'],
+  fix_agent: ['owner', 'admin'],
 };
 
 describe('can() matrix', () => {

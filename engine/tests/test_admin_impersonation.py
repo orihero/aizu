@@ -11,12 +11,12 @@ from pathlib import Path
 
 import pytest
 
-from reelradar import admin_auth
-from reelradar.admin_auth import ADMIN_IP_ALLOWLIST_ENV
-from reelradar.auth import hash_password
-from reelradar.core.store import Store
-from reelradar.secrets import SECRET_KEY_ENV, SecretCipher
-from reelradar.server import serve
+from aizu import admin_auth
+from aizu.admin_auth import ADMIN_IP_ALLOWLIST_ENV
+from aizu.auth import hash_password
+from aizu.core.store import Store
+from aizu.secrets import SECRET_KEY_ENV, SecretCipher
+from aizu.server import serve
 
 ROOT = Path(__file__).resolve().parents[1]
 CONFIG = ROOT / "config"

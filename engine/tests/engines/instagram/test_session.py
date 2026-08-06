@@ -11,18 +11,18 @@ import sqlite3
 import tempfile
 from datetime import datetime
 
-from reelradar.core.config import campaign_from_brief
-from reelradar.core.feed import Comment, FakeFeed, Reel
-from reelradar.core.mock_router import MockRouter
-from reelradar.core.pacing import Pacer, PacingConfig
-from reelradar.engines.instagram.session import (
+from aizu.core.config import campaign_from_brief
+from aizu.core.feed import Comment, FakeFeed, Reel
+from aizu.core.mock_router import MockRouter
+from aizu.core.pacing import Pacer, PacingConfig
+from aizu.engines.instagram.session import (
     PROGRESS_EVENT_INTERVAL_SEC, HaltSession, Session, SessionConfig)
 
 
 def _store():
     fd, path = tempfile.mkstemp(suffix=".db")
     os.close(fd)
-    from reelradar.core.store import Store
+    from aizu.core.store import Store
     return Store(path), path
 
 
@@ -146,7 +146,7 @@ def _irrelevant_reels(n: int):
 
 
 def _progress_events(path, run_id):
-    from reelradar.core.store import Store
+    from aizu.core.store import Store
     store = Store(path)
     return [e for e in store.fetch_run_events(run_id)
             if e["phase"] == "feed_walk" and "Scanning" in e["message"]]

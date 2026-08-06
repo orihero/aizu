@@ -1,0 +1,451 @@
+<!doctype html>
+<html lang="en" data-resolution="landscape">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=1920, height=1080" />
+    <title>AIZU — Scene 02 · Variant A — Ad Spend Burn</title>
+    <script src="https://cdn.jsdelivr.net/npm/gsap@3.14.2/dist/gsap.min.js"></script>
+    <style>
+      @font-face {
+        font-family: "Sora";
+        font-style: normal;
+        font-weight: 100 900;
+        font-display: block;
+        src: url("assets/fonts/sora-latin.woff2") format("woff2");
+        unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA,
+          U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193,
+          U+2212, U+2215, U+FEFF, U+FFFD;
+      }
+      @font-face {
+        font-family: "Sora";
+        font-style: normal;
+        font-weight: 100 900;
+        font-display: block;
+        src: url("assets/fonts/sora-latin-ext.woff2") format("woff2");
+        unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF,
+          U+0304, U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020,
+          U+20A0-20AB, U+20AD-20C0, U+2113, U+2C60-2C7F, U+A720-A7FF;
+      }
+
+      :root {
+        --bg: #eef0f3;
+        --surface: #ffffff;
+        --surface-2: #f4f5f9;
+        --border: #e6e8ee;
+        --text: #16161a;
+        --muted: #5b5e6b;
+        --faint: #747680;
+        --brand: #16161a;
+        --brand-deep: #34343d;
+        --accent: #d9f24f;
+        --on-accent: #16161a;
+        --on-brand: #ffffff;
+        --danger: #dc2626;
+        /* Small text needs a deeper red than the display number does — #dc2626 is
+           only ~4.2:1 at 21px over the soft tint and fails AA. */
+        --danger-deep: #9d1414;
+        --danger-soft: rgb(220 38 38 / 0.09);
+        --r-tile: 23px;
+        --r-card: 17px;
+        --shadow-card: 0 24px 60px rgba(22, 22, 26, 0.1), 0 4px 12px rgba(22, 22, 26, 0.05);
+        --shadow-chip: 0 12px 28px rgba(22, 22, 26, 0.1), 0 2px 6px rgba(22, 22, 26, 0.05);
+      }
+
+      * {
+        margin: 0;
+        padding: 0;
+        box-sizing: border-box;
+      }
+      html,
+      body {
+        width: 1920px;
+        height: 1080px;
+        overflow: hidden;
+      }
+      body {
+        font-family: Inter, system-ui, sans-serif;
+        color: var(--text);
+      }
+      #root {
+        position: relative;
+        width: 1920px;
+        height: 1080px;
+        overflow: hidden;
+      }
+
+      #bg {
+        position: absolute;
+        inset: 0;
+        background: var(--bg);
+      }
+      #bg-dots {
+        position: absolute;
+        inset: 0;
+        background-image: radial-gradient(circle, rgba(22, 22, 26, 0.07) 1.5px, transparent 1.5px);
+        background-size: 46px 46px;
+      }
+      #bg-glow {
+        position: absolute;
+        left: 210px;
+        top: 60px;
+        width: 1500px;
+        height: 1060px;
+        border-radius: 50%;
+        background: radial-gradient(circle, rgba(220, 38, 38, 0.2), rgba(220, 38, 38, 0) 70%);
+        filter: blur(60px);
+      }
+
+      #scene {
+        position: absolute;
+        inset: 0;
+        perspective: 1700px;
+      }
+      #camera {
+        position: absolute;
+        inset: 0;
+        transform-style: preserve-3d;
+      }
+
+      /* ---------- campaign card ---------- */
+      #slot-card {
+        position: absolute;
+        left: 430px;
+        top: 158px;
+        width: 1060px;
+        height: 764px;
+      }
+      /* Entrance elements start hidden in CSS. A zero-duration tl.set at t=0 is not
+         reliably applied when the renderer seeks to exactly 0, so opacity is authored
+         here and the tween takes ownership from its first frame. Opacity only —
+         a CSS `transform` would collide with the GSAP scale tween. */
+      #card,
+      .plat,
+      .fill {
+        opacity: 0;
+      }
+      #card {
+        width: 100%;
+        height: 100%;
+        padding: 44px 48px;
+        display: flex;
+        flex-direction: column;
+        background: var(--surface);
+        border: 1px solid var(--border);
+        border-radius: var(--r-tile);
+        box-shadow: var(--shadow-card);
+      }
+
+      .card-head {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+      }
+      .card-title {
+        font-family: Sora, Inter, sans-serif;
+        font-weight: 600;
+        font-size: 34px;
+        letter-spacing: -0.01em;
+      }
+      .card-status {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        padding: 10px 22px;
+        border-radius: 999px;
+        background: var(--danger-soft);
+        color: var(--danger-deep);
+        font-family: Sora, Inter, sans-serif;
+        font-weight: 600;
+        font-size: 21px;
+      }
+      .status-dot {
+        display: block;
+        width: 13px;
+        height: 13px;
+        border-radius: 50%;
+        background: var(--danger);
+      }
+
+      .plat-row {
+        display: flex;
+        gap: 13px;
+        margin-top: 26px;
+        padding-bottom: 30px;
+        border-bottom: 1px solid var(--border);
+      }
+      .plat {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        width: 62px;
+        height: 62px;
+        border-radius: var(--r-card);
+        background: var(--surface-2);
+        border: 1px solid var(--border);
+      }
+      .plat img {
+        display: block;
+        width: 32px;
+        height: 32px;
+        object-fit: contain;
+      }
+
+      .metric {
+        margin-top: 26px;
+      }
+      .metric-top {
+        display: flex;
+        align-items: baseline;
+        justify-content: space-between;
+      }
+      .metric-label {
+        font-size: 24px;
+        color: var(--muted);
+      }
+      .metric-val {
+        font-family: Sora, Inter, sans-serif;
+        font-weight: 700;
+        font-size: 52px;
+        letter-spacing: -0.02em;
+        font-variant-numeric: tabular-nums;
+      }
+      .track {
+        margin-top: 14px;
+        height: 14px;
+        border-radius: 999px;
+        background: var(--surface-2);
+        border: 1px solid var(--border);
+        overflow: hidden;
+      }
+      .fill {
+        display: block;
+        width: 100%;
+        height: 100%;
+        border-radius: 999px;
+        transform-origin: 0% 50%;
+      }
+      #fill-spent {
+        background: var(--danger);
+      }
+      #fill-replies,
+      #fill-leads {
+        background: var(--brand);
+      }
+
+      /* ---------- cost per lead ---------- */
+      #cpl {
+        margin-top: auto;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        padding: 26px 34px;
+        border-radius: var(--r-tile);
+        background: var(--danger-soft);
+      }
+      .cpl-copy {
+        display: flex;
+        flex-direction: column;
+        gap: 6px;
+      }
+      .cpl-label {
+        font-family: Sora, Inter, sans-serif;
+        font-weight: 600;
+        font-size: 27px;
+      }
+      .cpl-note {
+        font-size: 20px;
+        color: var(--muted);
+      }
+      #v-cpl {
+        display: block;
+        font-family: Sora, Inter, sans-serif;
+        font-weight: 700;
+        font-size: 84px;
+        line-height: 1;
+        letter-spacing: -0.03em;
+        color: var(--danger);
+        font-variant-numeric: tabular-nums;
+      }
+    </style>
+  </head>
+  <body>
+    <div
+      id="root"
+      data-composition-id="main"
+      data-start="0"
+      data-width="1920"
+      data-height="1080"
+      data-duration="5.5"
+    >
+      <div id="bg" class="clip" data-start="0" data-duration="5.5" data-track-index="0">
+        <div id="bg-dots"></div>
+        <div id="bg-glow"></div>
+      </div>
+
+      <div id="scene" class="clip" data-start="0" data-duration="5.5" data-track-index="1">
+        <div id="camera">
+          <div id="slot-card">
+            <div id="card">
+              <div class="card-head">
+                <div class="card-title">Campaign · Q3 Prospecting</div>
+                <div class="card-status"><span class="status-dot"></span>Running</div>
+              </div>
+
+              <div class="plat-row">
+                <div class="plat"><img src=".media/images/logo_002.svg" alt="Instagram" /></div>
+                <div class="plat"><img src=".media/images/logo_001.svg" alt="Telegram" /></div>
+                <div class="plat"><img src=".media/images/logo_006.svg" alt="YouTube" /></div>
+                <div class="plat"><img src=".media/images/logo_004.svg" alt="LinkedIn" /></div>
+                <div class="plat"><img src=".media/images/logo_008.svg" alt="Reddit" /></div>
+                <div class="plat"><img src=".media/images/logo_010.svg" alt="X" /></div>
+              </div>
+
+              <div class="metric">
+                <div class="metric-top">
+                  <div class="metric-label">Budget spent</div>
+                  <div class="metric-val" id="v-spent">$0</div>
+                </div>
+                <div class="track"><span class="fill" id="fill-spent"></span></div>
+              </div>
+
+              <div class="metric">
+                <div class="metric-top">
+                  <div class="metric-label">Replies</div>
+                  <div class="metric-val" id="v-replies">0</div>
+                </div>
+                <div class="track"><span class="fill" id="fill-replies"></span></div>
+              </div>
+
+              <div class="metric">
+                <div class="metric-top">
+                  <div class="metric-label">Actually worth calling</div>
+                  <div class="metric-val" id="v-leads">0</div>
+                </div>
+                <div class="track"><span class="fill" id="fill-leads"></span></div>
+              </div>
+
+              <div id="cpl">
+                <div class="cpl-copy">
+                  <div class="cpl-label">Cost per qualified lead</div>
+                  <div class="cpl-note">industry average · $180</div>
+                </div>
+                <span id="v-cpl">$180</span>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <script>
+      window.__timelines = window.__timelines || {};
+      const tl = gsap.timeline({ paused: true });
+
+      /* deterministic thousands separator — no toLocaleString (locale-dependent) */
+      function comma(n) {
+        return String(Math.round(n)).replace(/\B(?=(\d{3})+(?!\d))/g, ",");
+      }
+      /* counters are driven by a proxy object so every frame is a pure function of time */
+      function count(sel, from, to, at, dur, ease, fmt) {
+        const el = document.querySelector(sel);
+        const o = { v: from };
+        tl.to(
+          o,
+          {
+            v: to,
+            duration: dur,
+            ease: ease,
+            onUpdate: () => {
+              el.textContent = fmt(o.v);
+            },
+          },
+          at,
+        );
+      }
+
+      const CARD_IN = 0.15;
+      const RACE_AT = 0.95;
+      const LAND_AT = 3.45;
+      const SCENE_END = 5.5;
+
+      /* Claim every entrance's collapsed state at t=0. Without this the renderer can
+         sample frame 0 before a later fromTo has applied its from-values, and the
+         element flashes in fully formed. */
+      tl.set("#card", { scale: 0.94, opacity: 0, y: 34 }, 0);
+      tl.set(".plat", { scale: 0, opacity: 0 }, 0);
+      tl.set(["#fill-spent", "#fill-replies", "#fill-leads"], { scaleX: 0 }, 0);
+
+      /* 1 · the campaign card arrives */
+      tl.fromTo(
+        "#card",
+        { scale: 0.94, opacity: 0, y: 34 },
+        { scale: 1, opacity: 1, y: 0, duration: 0.7, ease: "power3.out" },
+        CARD_IN,
+      );
+
+      /* 2 · the six platforms it is buying on */
+      gsap.utils.toArray(".plat").forEach((el, i) => {
+        tl.fromTo(
+          el,
+          { scale: 0, opacity: 0 },
+          { scale: 1, opacity: 1, duration: 0.45, ease: "power3.out" },
+          0.55 + i * 0.06,
+        );
+      });
+
+      /* 3 · spend races away… */
+      tl.fromTo(
+        "#fill-spent",
+        { scaleX: 0, opacity: 1 },
+        { scaleX: 0.92, duration: 2.4, ease: "power2.out" },
+        RACE_AT,
+      );
+      count("#v-spent", 0, 4820, RACE_AT, 2.4, "power2.out", (v) => "$" + comma(v));
+
+      /* …what comes back drops off a cliff: replies are thin, and almost none
+         of those are worth a call. The two bars stepping down carry the line. */
+      tl.fromTo(
+        "#fill-replies",
+        { scaleX: 0, opacity: 1 },
+        { scaleX: 0.26, duration: 2.4, ease: "power2.out" },
+        RACE_AT + 0.1,
+      );
+      count("#v-replies", 0, 38, RACE_AT + 0.1, 2.4, "power2.out", (v) => comma(v));
+
+      tl.fromTo(
+        "#fill-leads",
+        { scaleX: 0, opacity: 1 },
+        { scaleX: 0.028, duration: 2.5, ease: "power2.out" },
+        RACE_AT + 0.2,
+      );
+      count("#v-leads", 0, 3, RACE_AT + 0.2, 2.5, "power2.out", (v) => comma(v));
+
+      /* 4 · cost per lead climbs slowly, then runs away and lands hard */
+      count("#v-cpl", 180, 1606, RACE_AT, 2.5, "power3.in", (v) => "$" + comma(v));
+      tl.fromTo(
+        "#v-cpl",
+        { scale: 1.16 },
+        { scale: 1, duration: 0.55, ease: "power3.out" },
+        LAND_AT,
+      );
+      tl.fromTo(
+        "#cpl",
+        { backgroundColor: "rgba(220,38,38,0.09)" },
+        { backgroundColor: "rgba(220,38,38,0.18)", duration: 0.45, ease: "power2.out" },
+        LAND_AT,
+      );
+
+      /* 5 · slow settle over the hold */
+      tl.set("#bg-glow", { opacity: 0.2 }, 0);
+      tl.to("#bg-glow", { opacity: 1, duration: 2.2, ease: "sine.inOut" }, RACE_AT + 0.6);
+      tl.fromTo(
+        "#camera",
+        { scale: 1 },
+        { scale: 1.022, duration: SCENE_END - LAND_AT, ease: "sine.inOut" },
+        LAND_AT,
+      );
+
+      window.__timelines["main"] = tl;
+    </script>
+  </body>
+</html>

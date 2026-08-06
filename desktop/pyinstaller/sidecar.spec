@@ -8,10 +8,10 @@
 # toolchain — freezing Playwright + cryptography + keyring reliably almost always requires
 # adjusting these lists once the frozen binary is exercised on each target OS.
 #
-# What it builds: a single-binary `reelradar-worker` whose entry point is
-# `reelradar.worker.sidecar:main` — the SAME console-script target declared in
-# engine/pyproject.toml ([project.scripts] reelradar-worker). The Tauri app supervises this
-# binary as a managed child (C3 option A). It NEVER runs reelradar.cli and NEVER RunManager.
+# What it builds: a single-binary `aizu-worker` whose entry point is
+# `aizu.worker.sidecar:main` — the SAME console-script target declared in
+# engine/pyproject.toml ([project.scripts] aizu-worker). The Tauri app supervises this
+# binary as a managed child (C3 option A). It NEVER runs aizu.cli and NEVER RunManager.
 #
 # Run from the repo root with the engine's venv active, e.g.:
 #   cd engine && pyinstaller --clean ../desktop/pyinstaller/sidecar.spec
@@ -99,8 +99,8 @@ hiddenimports = [
 
 # The engine imports several submodules LAZILY (dispatch.build_feed → engines.*, the
 # per-platform CDP engines, core.*), which PyInstaller's static analysis misses. Collect the
-# whole reelradar + playwright trees so a real job's lazy imports resolve in the frozen binary.
-hiddenimports += collect_submodules("reelradar")
+# whole aizu + playwright trees so a real job's lazy imports resolve in the frozen binary.
+hiddenimports += collect_submodules("aizu")
 hiddenimports += collect_submodules("playwright")
 
 
@@ -130,13 +130,13 @@ pyz = PYZ(a.pure, a.zipped_data, cipher=block_cipher)
 # to the executable instead of being packed into one file. This avoids the multi-second
 # per-launch self-extraction of onefile (the 59MB Playwright-bearing bundle unpacked on
 # EVERY start ≈ 20s cold start) — a onedir app launches near-instantly. The Tauri bundle
-# ships the whole dist/reelradar-worker/ folder as a resource.
+# ships the whole dist/aizu-worker/ folder as a resource.
 exe = EXE(
     pyz,
     a.scripts,
     [],
     exclude_binaries=True,
-    name="reelradar-worker",
+    name="aizu-worker",
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
@@ -155,5 +155,5 @@ coll = COLLECT(
     a.datas,
     strip=False,
     upx=False,
-    name="reelradar-worker",   # → dist/reelradar-worker/ (executable + _internal/)
+    name="aizu-worker",   # → dist/aizu-worker/ (executable + _internal/)
 )

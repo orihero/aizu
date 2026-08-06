@@ -1,6 +1,6 @@
 """CDPFeed.close() must release the Playwright driver (so a back-to-back session can
 re-attach in the same process) WITHOUT closing the externally-warmed Chrome."""
-from reelradar.engines.instagram.cdp import CDPFeed
+from aizu.engines.instagram.cdp import CDPFeed
 
 
 def test_close_stops_driver_but_keeps_warmed_chrome():

@@ -5,8 +5,8 @@ from pathlib import Path
 
 import pytest
 
-from reelradar.secrets import SecretCipher
-from reelradar.worker.config import WorkerConfig
+from aizu.secrets import SecretCipher
+from aizu.worker.config import WorkerConfig
 
 
 @pytest.fixture

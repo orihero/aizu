@@ -18,5 +18,5 @@ into this directory, matching the paths declared in `tauri.conf.json`.
 
 ## Brand
 
-Product name is **AIZU Worker** (rebranded ReelRadar → AIZU, 合図 / "signal to act").
+Product name is **AIZU Worker** (rebranded Aizu → AIZU, 合図 / "signal to act").
 Use the AIZU "ping" mark on the "Ink × Lime" palette to stay consistent with the web panel.

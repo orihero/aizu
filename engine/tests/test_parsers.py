@@ -7,9 +7,9 @@ shape-driven detection without depending on exact endpoint IDs.
 import json
 from pathlib import Path
 
-from reelradar.core.parsers import (looks_like_comment_response,
+from aizu.core.parsers import (looks_like_comment_response,
                                looks_like_reel_response, media_pk_codes,
-                               parse_comments, parse_reels)
+                               media_urls_by_pk, parse_comments, parse_reels)
 
 FIXTURES = Path(__file__).parent / "fixtures"
 
@@ -154,6 +154,56 @@ def test_media_pk_codes_maps_pk_and_compound_id_to_shortcode():
     mapping = media_pk_codes(REALISTIC_MEDIA)
     assert mapping["3621447163753077123"] == "DXcBq4RiC7y"
     assert mapping["3621447163753077123_55"] == "DXcBq4RiC7y"
+
+
+def test_media_urls_by_pk_maps_pk_and_compound_id_to_video_versions_url():
+    mapping = media_urls_by_pk(REALISTIC_MEDIA)
+    assert mapping["3621447163753077123"] == "x"
+    assert mapping["3621447163753077123_55"] == "x"           # compound id split, same as media_pk_codes
+
+
+def test_media_urls_by_pk_falls_back_to_top_level_video_url():
+    body = {"items": [{
+        "pk": "4001", "code": "Cvurl1", "media_type": 2,
+        "user": {"username": "acme"}, "caption": {"text": "hi"},
+        "video_url": "https://cdn.example/4001.mp4",
+    }]}
+    assert media_urls_by_pk(body) == {"4001": "https://cdn.example/4001.mp4"}
+
+
+def test_media_urls_by_pk_prefers_video_versions_over_top_level_video_url():
+    body = {"items": [{
+        "pk": "4002", "code": "Cvurl2", "media_type": 2,
+        "user": {"username": "acme"}, "caption": {"text": "hi"},
+        "video_versions": [{"url": "https://cdn.example/best.mp4"}],
+        "video_url": "https://cdn.example/fallback.mp4",
+    }]}
+    assert media_urls_by_pk(body) == {"4002": "https://cdn.example/best.mp4"}
+
+
+def test_media_urls_by_pk_skips_media_with_no_video_field():
+    # CLIPS_FEED's first item has no video_versions/video_url at all — must be
+    # absent from the map, not mapped to None/empty string.
+    mapping = media_urls_by_pk(CLIPS_FEED)
+    assert "3001" not in mapping
+    assert mapping["3002"] == "x"                              # second item has video_versions
+
+
+def test_media_urls_by_pk_tolerates_malformed_video_versions_shapes():
+    # video_versions present but not a usable [{"url": ...}] shape must degrade
+    # to "no url known" (absent from the map), never raise.
+    for bad_vv in ([], [{}], [{"url": ""}], [{"url": 123}], ["not-a-dict"], None):
+        body = {"items": [{
+            "pk": "5001", "code": "Cbad1", "media_type": 2,
+            "user": {"username": "acme"}, "caption": {"text": "hi"},
+            "video_versions": bad_vv,
+        }]}
+        assert media_urls_by_pk(body) == {}
+
+
+def test_media_urls_by_pk_on_garbage_bodies_is_safe():
+    for junk in [None, 42, "string", [], {}, {"random": "noise"}]:
+        assert media_urls_by_pk(junk) == {}
 
 
 def test_media_without_shortcode_is_skipped():

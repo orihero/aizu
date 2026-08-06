@@ -9,10 +9,10 @@ import os
 import sqlite3
 import tempfile
 
-from reelradar.core.config import campaign_from_brief
-from reelradar.core.router import Decision
-from reelradar.engines.youtube.feed import YouTubeFeed, YtComment, YtVideo
-from reelradar.engines.youtube.session import run_session
+from aizu.core.config import campaign_from_brief
+from aizu.core.router import Decision
+from aizu.engines.youtube.feed import YouTubeFeed, YtComment, YtVideo
+from aizu.engines.youtube.session import run_session
 
 
 class SpyRouter:
@@ -57,7 +57,7 @@ class FakeYouTubeApi:
 def _store():
     fd, path = tempfile.mkstemp(suffix=".db")
     os.close(fd)
-    from reelradar.core.store import Store
+    from aizu.core.store import Store
     return Store(path), path
 
 

@@ -1,0 +1,204 @@
+<!doctype html>
+<html lang="en" data-resolution="landscape">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=1920, height=1080" />
+    <title>AIZU — Scene 06 · The AI Campaign Creator</title>
+    <script src="https://cdn.jsdelivr.net/npm/gsap@3.14.2/dist/gsap.min.js"></script>
+    <style>
+      @font-face {
+        font-family: "Sora";
+        font-style: normal;
+        font-weight: 100 900;
+        font-display: block;
+        src: url("assets/fonts/sora-latin.woff2") format("woff2");
+        unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA,
+          U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193,
+          U+2212, U+2215, U+FEFF, U+FFFD;
+      }
+
+      :root {
+        --bg: #0e0f14;
+        --surface: #181a22;
+        --border: #282c38;
+        --text: #f1f2f6;
+        --muted: #a2a7b6;
+        --lime: #d9f24f;
+        --on-lime: #16161a;
+        --r-tile: 23px;
+      }
+
+      * {
+        margin: 0;
+        padding: 0;
+        box-sizing: border-box;
+      }
+      html,
+      body {
+        width: 1920px;
+        height: 1080px;
+        overflow: hidden;
+      }
+      body {
+        font-family: Inter, system-ui, sans-serif;
+        color: var(--text);
+      }
+      #root {
+        position: relative;
+        width: 1920px;
+        height: 1080px;
+        overflow: hidden;
+      }
+
+      #bg {
+        position: absolute;
+        inset: 0;
+        background: var(--bg);
+      }
+      #bg-glow {
+        position: absolute;
+        left: 260px;
+        top: 120px;
+        width: 1400px;
+        height: 1000px;
+        border-radius: 50%;
+        background: radial-gradient(circle, rgba(217, 242, 79, 0.13), rgba(217, 242, 79, 0) 70%);
+        filter: blur(70px);
+      }
+
+      /* ---------- persistent header ---------- */
+      #head {
+        position: absolute;
+        left: 0;
+        right: 0;
+        top: 104px;
+        display: flex;
+        justify-content: center;
+      }
+      #head-chip {
+        display: flex;
+        align-items: center;
+        gap: 16px;
+        padding: 20px 38px;
+        background: var(--surface);
+        border: 1px solid var(--border);
+        border-radius: var(--r-tile);
+        box-shadow: 0 18px 40px rgba(0, 0, 0, 0.45);
+        font-family: Sora, Inter, sans-serif;
+        font-weight: 600;
+        font-size: 34px;
+        letter-spacing: -0.01em;
+        white-space: nowrap;
+        opacity: 0;
+      }
+      #head-chip svg {
+        display: block;
+        width: 34px;
+        height: 34px;
+      }
+
+      /* Every beat occupies the same frame, so only the content changes. `#stage` is
+         UNTIMED — it is the only thing GSAP touches. The videos themselves are the
+         clips: media may not be nested in a timed wrapper, and a `.clip` element's
+         visibility belongs to HyperFrames, so the beat swaps are hard cuts by design. */
+      /* 1440×810 is the native size of the cropped captures — shown 1:1 so the panel's
+         own type stays crisp instead of being downscaled into mush. */
+      #stage {
+        position: absolute;
+        left: 240px;
+        top: 206px;
+        width: 1440px;
+        height: 810px;
+      }
+      .shot {
+        position: absolute;
+        inset: 0;
+        display: block;
+        width: 100%;
+        height: 100%;
+        object-fit: cover;
+        border-radius: var(--r-tile);
+        border: 1px solid var(--border);
+        box-shadow: 0 40px 100px rgba(0, 0, 0, 0.6), 0 8px 24px rgba(0, 0, 0, 0.4);
+      }
+    </style>
+  </head>
+  <body>
+    <div
+      id="root"
+      data-composition-id="main"
+      data-start="0"
+      data-width="1920"
+      data-height="1080"
+      data-duration="7.1"
+    >
+      <div id="bg" class="clip" data-start="0" data-duration="7.1" data-track-index="0">
+        <div id="bg-glow"></div>
+      </div>
+
+      <!-- beats share track 1: each video replaces the last in the same frame -->
+      <div id="stage">
+        <video
+          id="vid-brief"
+          class="shot clip"
+          src="assets/capture/campaign-brief.mp4"
+          data-start="0.15"
+          data-duration="2.55"
+          data-track-index="1"
+          muted
+          playsinline
+        ></video>
+        <video
+          id="vid-questions"
+          class="shot clip"
+          src="assets/capture/campaign-questions.mp4"
+          data-start="2.7"
+          data-duration="1.85"
+          data-track-index="1"
+          muted
+          playsinline
+        ></video>
+        <video
+          id="vid-drafted"
+          class="shot clip"
+          src="assets/capture/campaign-drafted.mp4"
+          data-start="4.55"
+          data-duration="2.55"
+          data-track-index="1"
+          muted
+          playsinline
+        ></video>
+      </div>
+
+      <div id="head" class="clip" data-start="0" data-duration="7.1" data-track-index="2">
+        <div id="head-chip">
+          <svg viewBox="0 0 24 24" fill="none" stroke="#d9f24f" stroke-width="2">
+            <path
+              d="M12 3l1.9 4.9L19 9.8l-4.2 3.2.7 5.2-4.5-2.7-4.5 2.7.7-5.2L3 9.8l5.1-1.9z"
+              stroke-linejoin="round"
+            />
+          </svg>
+          AI campaign creator
+        </div>
+      </div>
+    </div>
+
+    <script>
+      window.__timelines = window.__timelines || {};
+      const tl = gsap.timeline({ paused: true });
+
+      tl.fromTo(
+        "#head-chip",
+        { opacity: 0, scale: 0.9, y: -20 },
+        { opacity: 1, scale: 1, y: 0, duration: 0.55, ease: "power3.out" },
+        0.05,
+      );
+
+      /* a slow push across the whole scene keeps the frame alive through three cuts —
+         applied to the untimed #stage, never to the timed <video> elements */
+      tl.fromTo("#stage", { scale: 1 }, { scale: 1.025, duration: 6.9, ease: "sine.inOut" }, 0.15);
+
+      window.__timelines["main"] = tl;
+    </script>
+  </body>
+</html>

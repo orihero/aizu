@@ -179,6 +179,21 @@ export function useResumeRun() {
   });
 }
 
+/** POST /api/agent/launch-login — spawn/attach Chrome and open a login tab (the
+ * banner's "Launch login browser" button, owner/admin only). Re-syncs the shared
+ * readiness query with the response's freshly re-checked snapshot rather than just
+ * invalidating, so the banner updates immediately without a second round-trip. */
+export function useLaunchAgentLogin() {
+  const repository = usePanelRepository();
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async () => unwrap(await repository.launchAgentLogin()),
+    onSuccess: (result) => {
+      queryClient.setQueryData(queryKeys.agentReadiness, result.readiness);
+    },
+  });
+}
+
 export function useUpdateSettings() {
   const repository = usePanelRepository();
   const invalidate = useInvalidate();

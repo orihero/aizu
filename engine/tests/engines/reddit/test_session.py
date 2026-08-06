@@ -10,10 +10,10 @@ import os
 import sqlite3
 import tempfile
 
-from reelradar.core.config import campaign_from_brief
-from reelradar.core.router import Decision
-from reelradar.engines.reddit.feed import RedditComment, RedditFeed, RedditSubmission
-from reelradar.engines.reddit.session import run_session
+from aizu.core.config import campaign_from_brief
+from aizu.core.router import Decision
+from aizu.engines.reddit.feed import RedditComment, RedditFeed, RedditSubmission
+from aizu.engines.reddit.session import run_session
 
 
 class SpyRouter:
@@ -58,7 +58,7 @@ class FakeRedditApi:
 def _store():
     fd, path = tempfile.mkstemp(suffix=".db")
     os.close(fd)
-    from reelradar.core.store import Store
+    from aizu.core.store import Store
     return Store(path), path
 
 

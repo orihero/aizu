@@ -3,7 +3,7 @@
 
   Self-contained: NO external fonts / CDN (the app CSP forbids remote origins) — system
   font stack only. Dark "Ink × Lime" design system. Status color tokens are named
-  `warn` / `danger` (NEVER `warning` — see memory/feedback_ui_mistakes.md). `--brand`
+  `warn` / `danger` (NEVER `warning` — see memory/feedback-ui-mistakes.md). `--brand`
   (lime) = LIVE data ink; `--success` (green) = healthy/connectivity. The two greens are
   deliberately distinct so "healthy" never masquerades as "live."
 

@@ -3,13 +3,13 @@
 # dev.sh — start every app for local development with one command.
 #
 # Launches, with prefixed/interleaved logs, and tears all of them down on Ctrl+C:
-#   1. bridge  — the engine's JSON API (reelradar) on 127.0.0.1:8765, via
-#                scripts/dev_panel.py (auto-restarts on engine/reelradar/*.py edits)
+#   1. bridge  — the engine's JSON API (aizu) on 127.0.0.1:8765, via
+#                scripts/dev_panel.py (auto-restarts on engine/aizu/*.py edits)
 #   2. panel   — the admin-panel Vite dev server on http://localhost:5173,
 #                which proxies /api -> the bridge
 #
 # The engine *run* itself (the live Instagram crawl) is NOT started here — it is
-# launched from the panel's Run button or `reelradar.cli ... run`. This script
+# launched from the panel's Run button or `aizu.cli ... run`. This script
 # only brings up the two long-lived dev servers you need to use the panel.
 #
 # Usage:
@@ -28,7 +28,7 @@ VENV_PYTHON="$ENGINE_DIR/.venv/bin/python"
 BRIDGE_PORT="${BRIDGE_PORT:-8765}"
 BRIDGE_HOST="${BRIDGE_HOST:-127.0.0.1}"
 PANEL_PORT="${PANEL_PORT:-5173}"
-DB="${DB:-reelradar.db}"
+DB="${DB:-aizu.db}"
 
 # --- Output helpers ----------------------------------------------------------
 COLOR_BRIDGE='\033[0;36m'  # cyan

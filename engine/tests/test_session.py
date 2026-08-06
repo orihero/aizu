@@ -2,13 +2,13 @@ import os
 import tempfile
 from pathlib import Path
 
-from reelradar.engines.instagram.actions import ActionPolicy
-from reelradar.core.config import campaign_from_brief, load_campaign, load_soul
-from reelradar.core.feed import Comment, FakeFeed, Reel
-from reelradar.core.mock_router import MockRouter
-from reelradar.core.pacing import PacingConfig, Pacer
-from reelradar.engines.instagram.session import HaltSession, Session, SessionConfig
-from reelradar.core.store import Store
+from aizu.engines.instagram.actions import ActionPolicy
+from aizu.core.config import campaign_from_brief, load_campaign, load_soul
+from aizu.core.feed import Comment, FakeFeed, Reel
+from aizu.core.mock_router import MockRouter
+from aizu.core.pacing import PacingConfig, Pacer
+from aizu.engines.instagram.session import HaltSession, Session, SessionConfig
+from aizu.core.store import Store
 
 CONFIG = Path(__file__).resolve().parents[1] / "config"
 

@@ -5,11 +5,11 @@
 > The toolchain was installed (Rust via rustup, `@tauri-apps/cli` 2.11.4, PyInstaller 6.21)
 > and the **macOS build now compiles, bundles, and ad-hoc-signs cleanly**:
 >
-> - `reelradar-worker` PyInstaller binary (59 MB) — **built + smoke-verified booting**
+> - `aizu-worker` PyInstaller binary (59 MB) — **built + smoke-verified booting**
 >   (configures logging, writes machine-id, runs the register path, exits cleanly).
 > - `AIZU Worker.app` + `AIZU Worker_0.1.0_aarch64.dmg` — **built, ad-hoc signed**
 >   (`Signature=adhoc`, id `com.aizu.workerdesktop`), sidecar bundled at
->   `Contents/Resources/sidecar/reelradar-worker`. Gatekeeper reports `rejected` (expected:
+>   `Contents/Resources/sidecar/aizu-worker`. Gatekeeper reports `rejected` (expected:
 >   ad-hoc ≠ notarized — strip quarantine or distribute out-of-band on the managed fleet).
 >
 > **Fixes applied to the original scaffold to make it build** (already in the tree):
@@ -24,7 +24,7 @@
 >    on `Envelope<T>` requires `T: Default`).
 > 5. `run_sidecar.py` — added a package-import shim as the PyInstaller entry (running
 >    `sidecar.py` directly broke its `from ..` relative imports); spec collects
->    `reelradar`/`playwright` submodules for the lazy engine imports.
+>    `aizu`/`playwright` submodules for the lazy engine imports.
 > 6. Icons generated via `tauri icon` from a brand PNG (Ink × Lime "ping").
 >
 > **Still uncompiled here (needs a Windows host):** the `.exe`/`.msi`/NSIS bundles — build
@@ -39,7 +39,7 @@
 > (near-instant cold start — onefile re-extracted its 59MB every launch ≈ 20s). Tauri's
 > `bundle.resources` copier FAILS on the onedir tree (`_internal/Python` is a Mach-O →
 > "Not a directory"), so the script builds the app WITHOUT a sidecar resource, copies the
-> onedir folder into `Contents/Resources/sidecar/reelradar-worker/`, then re-`codesign
+> onedir folder into `Contents/Resources/sidecar/aizu-worker/`, then re-`codesign
 > --force --deep --sign -` the whole bundle (Apple Silicon needs every embedded Mach-O
 > ad-hoc-signed). `sidecar_supervisor::resolve_binary` looks there.
 >
@@ -51,7 +51,7 @@
 > local⇄cloud at runtime — writes config.toml + a 0600 token file, then relaunches. Default
 > control port is 8788 (NOT 8799 — avoids the dev-panel clash).
 >
-> **Token backend note:** `keyring` is now an installed dep, but `REELRADAR_TOKEN_BACKEND`
+> **Token backend note:** `keyring` is now an installed dep, but `AIZU_TOKEN_BACKEND`
 > defaults to `auto` = **Fernet file** (keyring is OPT-IN via `=keyring` only), so an
 > unattended box never risks a blocking Keychain unlock prompt at startup.
 
@@ -63,24 +63,24 @@ residual gaps.
 
 ## 0. Architecture recap (why the app is thin)
 
-The desktop app supervises the Python **`reelradar-worker`** sidecar binary as a managed
+The desktop app supervises the Python **`aizu-worker`** sidecar binary as a managed
 child process (BUILD-PLAN Phase 6, **C3 option A**): restart-on-crash watchdog +
 run-at-login. It feeds the child env vars only.
 
-- **No RunManager, no CLI subprocess.** The sidecar (`reelradar.worker.sidecar:main`)
+- **No RunManager, no CLI subprocess.** The sidecar (`aizu.worker.sidecar:main`)
   bypasses `RunManager` and runs each leased job in a killable child process
-  (`reelradar.worker.job_child`).
+  (`aizu.worker.job_child`).
 - **Mid-run hard-stop already exists at the Python layer.** A `halt` SIGTERM→SIGKILLs the
   job child. So the app's "Stop current job" is a `stopCurrentJob` command to the control
   surface — it does NOT kill the sidecar. Killing the sidecar is only for app-exit /
   crash-restart.
-- **The UI's truth is the control surface, not logs.** `reelradar.worker.control_surface`
+- **The UI's truth is the control surface, not logs.** `aizu.worker.control_surface`
   is a loopback-only (`127.0.0.1`) stdlib HTTP server, enabled via
-  `REELRADAR_CONTROL_SURFACE=1` + `REELRADAR_CONTROL_TOKEN=<token>` +
-  `REELRADAR_CONTROL_PORT` (default `8799`). The app polls `GET /status` and POSTs
+  `AIZU_CONTROL_SURFACE=1` + `AIZU_CONTROL_TOKEN=<token>` +
+  `AIZU_CONTROL_PORT` (default `8799`). The app polls `GET /status` and POSTs
   `POST /command`. The app generates the control token per spawn and injects it into the
   child's env.
-- **Managed Chrome** mirrors `engine/scripts/warm_chrome.sh` / `reelradar.worker.chrome_manager`:
+- **Managed Chrome** mirrors `engine/scripts/warm_chrome.sh` / `aizu.worker.chrome_manager`:
   resolve Playwright's Chrome-for-Testing via the venv python, launch with
   `--remote-debugging-port` + a dedicated `--user-data-dir` + `--no-first-run`
   `--no-default-browser-check`, detect an existing attachable Chrome via a **real
@@ -119,10 +119,10 @@ run the engine server on `127.0.0.1:8765`).
    loop, set `cdp_port = 9333`, and a dedicated `chrome_profile_dir`.
 
 4. **`cargo tauri dev` against the real dispatch** — do NOT freeze the sidecar yet. For dev,
-   set `sidecar_binary_path` to the `reelradar-worker` console script from the editable
+   set `sidecar_binary_path` to the `aizu-worker` console script from the editable
    install (`cd engine && pip install -e .` puts it on the venv PATH), and export the
-   secrets the child needs (`REELRADAR_WORKER_BOOTSTRAP_TOKEN`, `OPENROUTER_API_KEY`, …) and
-   `REELRADAR_VENV_PYTHON=<engine>/.venv/bin/python` so the Chrome CDP probe works:
+   secrets the child needs (`AIZU_WORKER_BOOTSTRAP_TOKEN`, `OPENROUTER_API_KEY`, …) and
+   `AIZU_VENV_PYTHON=<engine>/.venv/bin/python` so the Chrome CDP probe works:
    ```bash
    cd desktop/src-tauri && cargo tauri dev
    ```
@@ -137,10 +137,10 @@ run the engine server on `127.0.0.1:8765`).
    pip install -r ../desktop/pyinstaller/requirements-build.txt
    pyinstaller --clean ../desktop/pyinstaller/sidecar.spec
    ```
-   Iterate on `hiddenimports` / `datas` until the frozen `dist/reelradar-worker` actually
+   Iterate on `hiddenimports` / `datas` until the frozen `dist/aizu-worker` actually
    runs a job on each target OS (Playwright driver, cryptography OpenSSL backend, and the
    correct per-OS `keyring` backend are the usual misses). Then point
-   `sidecar_binary_path` (or the `tauri.conf.json` `bundle.resources`) at `dist/reelradar-worker`.
+   `sidecar_binary_path` (or the `tauri.conf.json` `bundle.resources`) at `dist/aizu-worker`.
 
 6. **`cargo tauri build`** to produce the installers (`app`/`dmg`/`msi`/`nsis`). Unsigned
    builds work locally; distribution needs the signing setup in §2.
@@ -170,13 +170,13 @@ dispatch_base_url  = "https://cloud.aizu.example"   # outbound HTTPS job channel
 cdp_port           = 9333                            # live-proven port (NOT 9222)
 chrome_profile_dir = "/Users/you/.aizu-cft-profile"  # DEDICATED, non-default profile
 sidecar_binary_path = ""                             # empty → resolve from app resources
-state_dir          = "/Users/you/.aizu-worker-state" # REELRADAR_WORKER_STATE
-db_path            = "/Users/you/.aizu-worker.db"    # REELRADAR_DB
+state_dir          = "/Users/you/.aizu-worker-state" # AIZU_WORKER_STATE
+db_path            = "/Users/you/.aizu-worker.db"    # AIZU_DB
 control_port       = 8799                            # loopback control surface (default)
 ```
 
 **Secrets are NOT here.** The control-surface token is generated per spawn and injected as
-`REELRADAR_CONTROL_TOKEN`; `REELRADAR_WORKER_BOOTSTRAP_TOKEN` and provider keys come from
+`AIZU_CONTROL_TOKEN`; `AIZU_WORKER_BOOTSTRAP_TOKEN` and provider keys come from
 env/keychain at spawn time.
 
 ---
@@ -221,3 +221,12 @@ Tailscale dependency and must not gain one):
   does not yet expose a `setCapacity` control-surface action; it is presentational until
   that lands. One-live-job-per-(org,platform,account) is still enforced by single-flight.
 - **Keychain secret delivery** (see blocker #6) — dev relies on env vars.
+- **ffmpeg is not bundled for the packaged sidecar.** The engine's optional gated Uzbek-STT
+  tier (Instagram only — see `docs/architecture/engines.md` §1) shells out to `ffmpeg` on
+  `PATH` (`core/transcribe.py::extract_audio_wav`) to extract a WAV from a reel's video
+  before transcription. That's confirmed present on the dev machine's `PATH` only; it is
+  **not** bundled into the PyInstaller onedir tree by `sidecar.spec`, and the frozen
+  `aizu-worker` binary does not inherit the dev machine's `PATH`. Until ffmpeg is bundled
+  (or a static binary path is wired into the frozen app's env), the STT tier fails soft on
+  any packaged worker — `extract_audio_wav` just returns `False` (no transcript, no
+  crash) — this is a silently-degraded feature there, not a build blocker.

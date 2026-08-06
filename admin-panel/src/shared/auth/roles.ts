@@ -1,6 +1,6 @@
 /**
  * Role-based access control policy — the frontend mirror of the engine's
- * `engine/reelradar/rbac.py`. Keep the two in lockstep: the matrices MUST match.
+ * `engine/aizu/rbac.py`. Keep the two in lockstep: the matrices MUST match.
  * The server is the real gate; this drives UX (hiding/disabling controls) only.
  *
  * The four roles are NOT a linear rank: a `member` can edit leads (a `viewer`
@@ -33,6 +33,7 @@ export type Action =
   | 'manage_member'
   | 'manage_admin'
   | 'transfer_ownership'
+  | 'fix_agent'
 
 /** action → roles allowed to perform it (mirror of rbac.PERMISSIONS). */
 export const PERMISSIONS: Record<Action, readonly Role[]> = {
@@ -54,6 +55,10 @@ export const PERMISSIONS: Record<Action, readonly Role[]> = {
   manage_member: ['owner', 'admin'],
   manage_admin: ['owner'],
   transfer_ownership: ['owner'],
+  // Launch/relaunch the warmed Chrome login for the Instagram harvest agent, and the
+  // actionable variant of the "agent not ready" banner — owner/admin only (mirrors the
+  // team-management writes: a member/viewer only ever sees the informational banner).
+  fix_agent: ['owner', 'admin'],
 }
 
 export function isValidRole(role: unknown): role is Role {

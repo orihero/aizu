@@ -40,7 +40,7 @@ function renderSettingsAs(role: Role, route = '/settings/workspace') {
   const repository = new FakePanelRepository(buildPanelState());
   repository.currentUser = {
     id: 1,
-    email: 'user@reelradar.test',
+    email: 'user@aizu.test',
     role,
     orgId: 1,
     org: { id: 1, name: 'Test Co', logo: null, description: null },

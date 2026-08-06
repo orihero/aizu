@@ -15,9 +15,9 @@ from pathlib import Path
 
 import pytest
 
-from reelradar.server import (WORKER_BOOTSTRAP_ENV, serve)
-from reelradar.admin_auth import ADMIN_IP_ALLOWLIST_ENV
-from reelradar.core.store import Store, hash_session_token
+from aizu.server import (WORKER_BOOTSTRAP_ENV, serve)
+from aizu.admin_auth import ADMIN_IP_ALLOWLIST_ENV
+from aizu.core.store import Store, hash_session_token
 from ._admin import admin_cookie, set_admin_env
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -180,7 +180,7 @@ def test_register_returns_token_exactly_once_and_rotates(srv, monkeypatch):
 
 def test_register_token_not_logged(srv, monkeypatch):
     monkeypatch.setenv(WORKER_BOOTSTRAP_ENV, BOOTSTRAP)
-    logger = logging.getLogger("reelradar.server")
+    logger = logging.getLogger("aizu.server")
     buf = io.StringIO()
     handler = logging.StreamHandler(buf)
     handler.setLevel(logging.DEBUG)

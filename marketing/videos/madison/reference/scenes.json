@@ -1,0 +1,19 @@
+[
+  { "id": "s01", "name": "search-discovery",    "start": 0.0,   "end": 9.5,   "title": "Search & Discovery" },
+  { "id": "s02", "name": "owner-overwhelm",     "start": 9.5,   "end": 13.6,  "title": "Owner Overwhelm" },
+  { "id": "s03", "name": "agency-invoice",      "start": 13.6,  "end": 17.3,  "title": "Expensive Agency Invoice" },
+  { "id": "s04", "name": "logo-reveal",         "start": 17.3,  "end": 23.8,  "title": "Madison Logo Reveal" },
+  { "id": "s05", "name": "product-pillars",     "start": 23.8,  "end": 29.0,  "title": "Product Pillars + Price" },
+  { "id": "s06", "name": "how-do-they-do-it",   "start": 29.0,  "end": 32.8,  "title": "How Do They Do It?" },
+  { "id": "s07", "name": "connect-accounts",    "start": 32.8,  "end": 37.8,  "title": "Connect Your Accounts" },
+  { "id": "s08", "name": "google-rank-gbp",     "start": 37.8,  "end": 45.6,  "title": "Rank Higher on Google" },
+  { "id": "s09", "name": "review-responses",    "start": 45.6,  "end": 57.5,  "title": "AI Review Responses" },
+  { "id": "s10", "name": "review-requests",     "start": 57.5,  "end": 67.0,  "title": "Review Requests Funnel" },
+  { "id": "s11", "name": "social-growth",       "start": 67.0,  "end": 70.8,  "title": "Social Growth Counters" },
+  { "id": "s12", "name": "campaign-approval",   "start": 70.8,  "end": 80.5,  "title": "Campaign Email Approval" },
+  { "id": "s13", "name": "campaign-generator",  "start": 80.5,  "end": 88.5,  "title": "Tell Madison / Generator" },
+  { "id": "s14", "name": "reports-analytics",   "start": 88.5,  "end": 96.8,  "title": "Reports & Analytics" },
+  { "id": "s15", "name": "ask-madison-chat",    "start": 96.8,  "end": 103.2, "title": "Ask Madison (Chat)" },
+  { "id": "s16", "name": "customer-swarm",      "start": 103.2, "end": 107.6, "title": "New Customers Swarm" },
+  { "id": "s17", "name": "end-card",            "start": 107.6, "end": 113.08,"title": "End Card / CTA" }
+]

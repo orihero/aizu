@@ -7,11 +7,11 @@ from http.client import HTTPConnection
 
 import pytest
 
-from reelradar.worker.chrome_probe import cdp_status
-from reelradar.worker.control_state import (AccountHealth, ChromeStatusView,
+from aizu.worker.chrome_probe import cdp_status
+from aizu.worker.control_state import (AccountHealth, ChromeStatusView,
                                             CurrentJobInfo, StatusSnapshot,
                                             status_to_wire, validate_command)
-from reelradar.worker.control_surface import (ControlSurfaceConfig,
+from aizu.worker.control_surface import (ControlSurfaceConfig,
                                               start_control_surface)
 
 

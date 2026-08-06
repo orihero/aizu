@@ -1,0 +1,189 @@
+<!doctype html>
+<html lang="en" data-resolution="landscape">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=1920, height=1080" />
+    <title>AIZU — Scene 10 · Centralized, Visualized</title>
+    <script src="https://cdn.jsdelivr.net/npm/gsap@3.14.2/dist/gsap.min.js"></script>
+    <style>
+      @font-face {
+        font-family: "Sora";
+        font-style: normal;
+        font-weight: 100 900;
+        font-display: block;
+        src: url("assets/fonts/sora-latin.woff2") format("woff2");
+        unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA,
+          U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193,
+          U+2212, U+2215, U+FEFF, U+FFFD;
+      }
+
+      :root {
+        --bg: #0e0f14;
+        --surface: #181a22;
+        --border: #282c38;
+        --text: #f1f2f6;
+        --lime: #d9f24f;
+        --r-tile: 23px;
+      }
+
+      * {
+        margin: 0;
+        padding: 0;
+        box-sizing: border-box;
+      }
+      html,
+      body {
+        width: 1920px;
+        height: 1080px;
+        overflow: hidden;
+      }
+      body {
+        font-family: Inter, system-ui, sans-serif;
+        color: var(--text);
+      }
+      #root {
+        position: relative;
+        width: 1920px;
+        height: 1080px;
+        overflow: hidden;
+      }
+
+      #bg {
+        position: absolute;
+        inset: 0;
+        background: var(--bg);
+      }
+      #bg-glow {
+        position: absolute;
+        left: 320px;
+        top: 140px;
+        width: 1280px;
+        height: 940px;
+        border-radius: 50%;
+        background: radial-gradient(circle, rgba(217, 242, 79, 0.12), rgba(217, 242, 79, 0) 70%);
+        filter: blur(70px);
+      }
+
+      .cap {
+        position: absolute;
+        left: 0;
+        right: 0;
+        top: 92px;
+        display: flex;
+        justify-content: center;
+      }
+      .cap-inner {
+        display: flex;
+        align-items: center;
+        gap: 16px;
+        padding: 18px 36px;
+        background: var(--surface);
+        border: 1px solid var(--border);
+        border-radius: var(--r-tile);
+        box-shadow: 0 18px 40px rgba(0, 0, 0, 0.45);
+        font-family: Sora, Inter, sans-serif;
+        font-weight: 600;
+        font-size: 33px;
+        letter-spacing: -0.01em;
+        white-space: nowrap;
+        opacity: 0;
+      }
+      .cap-inner svg {
+        display: block;
+        width: 31px;
+        height: 31px;
+      }
+
+      /* both crops are authored at 1440×810, shown 1:1 */
+      .shot {
+        position: absolute;
+        left: 240px;
+        top: 196px;
+        width: 1440px;
+        height: 810px;
+        border-radius: var(--r-tile);
+        border: 1px solid var(--border);
+        object-fit: cover;
+        box-shadow: 0 40px 100px rgba(0, 0, 0, 0.6);
+      }
+    </style>
+  </head>
+  <body>
+    <div
+      id="root"
+      data-composition-id="main"
+      data-start="0"
+      data-width="1920"
+      data-height="1080"
+      data-duration="6"
+    >
+      <div id="bg" class="clip" data-start="0" data-duration="6" data-track-index="0">
+        <div id="bg-glow"></div>
+      </div>
+
+      <img
+        id="shot-dash"
+        class="shot clip"
+        src="assets/capture/dash-crop.png"
+        data-start="0.15"
+        data-duration="2.8"
+        data-track-index="1"
+        alt="AIZU dashboard"
+      />
+      <img
+        id="shot-reports"
+        class="shot clip"
+        src="assets/capture/reports-crop.png"
+        data-start="3.0"
+        data-duration="3.0"
+        data-track-index="1"
+        alt="AIZU reports"
+      />
+
+      <div id="cap-1" class="cap clip" data-start="0.15" data-duration="2.8" data-track-index="2">
+        <div class="cap-inner">
+          <svg viewBox="0 0 24 24" fill="none" stroke="#d9f24f" stroke-width="2">
+            <rect x="3" y="3" width="8" height="8" rx="2" />
+            <rect x="13" y="3" width="8" height="8" rx="2" />
+            <rect x="3" y="13" width="8" height="8" rx="2" />
+            <rect x="13" y="13" width="8" height="8" rx="2" />
+          </svg>
+          every channel in one place
+        </div>
+      </div>
+
+      <div id="cap-2" class="cap clip" data-start="3.0" data-duration="3.0" data-track-index="2">
+        <div class="cap-inner">
+          <svg viewBox="0 0 24 24" fill="none" stroke="#d9f24f" stroke-width="2">
+            <path d="M4 19V5" stroke-linecap="round" />
+            <path d="M4 19h16" stroke-linecap="round" />
+            <path d="m7 15 4-5 3 3 5-7" stroke-linecap="round" stroke-linejoin="round" />
+          </svg>
+          and the answers already drawn
+        </div>
+      </div>
+    </div>
+
+    <script>
+      window.__timelines = window.__timelines || {};
+      const tl = gsap.timeline({ paused: true });
+
+      /* The shots are .clip elements — HyperFrames owns their visibility, so the beat
+         change is a cut. Only the caption interiors animate. */
+      tl.fromTo(
+        "#cap-1 .cap-inner",
+        { opacity: 0, scale: 0.92, y: -18 },
+        { opacity: 1, scale: 1, y: 0, duration: 0.5, ease: "power3.out" },
+        0.2,
+      );
+      tl.fromTo(
+        "#cap-2 .cap-inner",
+        { opacity: 0, scale: 0.92, y: -18 },
+        { opacity: 1, scale: 1, y: 0, duration: 0.5, ease: "power3.out" },
+        3.05,
+      );
+
+      window.__timelines["main"] = tl;
+    </script>
+  </body>
+</html>

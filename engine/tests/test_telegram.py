@@ -4,7 +4,7 @@ Telethon is isolated behind TelegramClientPort, so the message→Reel /
 reply→Comment mapping and the forward-only reply cursor are tested with a fake
 client — no Telethon install, no live session.
 """
-from reelradar.engines.telegram.feed import TelegramFeed, TgMessage
+from aizu.engines.telegram.feed import TelegramFeed, TgMessage
 
 
 class FakeTelegramClient:
@@ -76,7 +76,7 @@ def test_healthy_reflects_client_connection():
 
 def test_read_only_engagement_is_noop():
     feed = TelegramFeed(client=FakeTelegramClient({}, {}), channels=["c"])
-    from reelradar.core.feed import Reel
+    from aizu.core.feed import Reel
     reel = Reel(reel_id="c/1")
     assert feed.like_reel(reel) is False
     assert feed.follow_author(reel) is False
@@ -87,7 +87,7 @@ def test_read_only_engagement_is_noop():
 def test_bot_client_buckets_posts_and_replies_from_updates():
     """The Bot API adapter drains getUpdates once and buckets channel posts vs
     discussion replies, fulfilling the TelegramClientPort the feed expects."""
-    from reelradar.engines.telegram.feed import TelegramBotClient
+    from aizu.engines.telegram.feed import TelegramBotClient
 
     pages = iter([
         {"ok": True, "result": [
@@ -118,7 +118,7 @@ def test_bot_client_buckets_posts_and_replies_from_updates():
 
 
 def test_bot_client_normalizes_at_prefix_and_filters_min_id():
-    from reelradar.engines.telegram.feed import TelegramBotClient
+    from aizu.engines.telegram.feed import TelegramBotClient
 
     body = {"ok": True, "result": [
         {"update_id": 1, "message": {
@@ -142,11 +142,11 @@ def test_session_runs_end_to_end_on_telegram(tmp_path):
     import os
     import tempfile
 
-    from reelradar.core.config import load_campaign, load_soul
-    from reelradar.core.mock_router import MockRouter
-    from reelradar.core.pacing import PacingConfig, Pacer
-    from reelradar.engines.instagram.session import Session, SessionConfig
-    from reelradar.core.store import Store
+    from aizu.core.config import load_campaign, load_soul
+    from aizu.core.mock_router import MockRouter
+    from aizu.core.pacing import PacingConfig, Pacer
+    from aizu.engines.instagram.session import Session, SessionConfig
+    from aizu.core.store import Store
 
     campaign_md = tmp_path / "campaign.md"
     campaign_md.write_text(

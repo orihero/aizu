@@ -38,7 +38,7 @@
     ],
     "category": "Utility",
     "shortDescription": "AIZU Worker",
-    "longDescription": "AIZU Worker — supervises the reelradar-worker sidecar and its warmed Chrome.",
+    "longDescription": "AIZU Worker — supervises the aizu-worker sidecar and its warmed Chrome.",
     "macOS": {
       "signingIdentity": "-",
       "minimumSystemVersion": "11.0",

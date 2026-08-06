@@ -19,7 +19,7 @@ The PRD is directionally right (PULL model, ship-the-engine, local CDP). It is w
 - **Feed must be released between sessions.** `_close_feed` is guarded — it no-ops on a FakeFeed and swallows teardown errors so cleanup never masks the run result (`cli.py:325-336`). A second live `sync_playwright().start()` while the first is live crashes; **every sidecar job builds a fresh feed and tears it down in `finally`.**
 - **run_events streaming already exists**, keyed on `run_id`, emitted only when `run_id` is set (`engines/instagram/session.py:102-127`). The sidecar gets the activity feed for free by generating a `run_id` and passing it through dispatch — visible in the existing `/api/run/activity` drawer.
 - **Migrations are additive + self-healing** — `CREATE TABLE IF NOT EXISTS` in the SCHEMA block + `_add_column_if_missing`; crash-safe replay keyed on legacy-table existence (`core/store.py:611-720`). New tables follow this pattern with no bespoke migration.
-- **Secrets via Fernet** keyed on `REELRADAR_SECRET_KEY`; tokens hashed at rest (`core/secrets.py`, `auth.hash_session_token`, `core/store.py` auth_sessions). Per-worker bearer tokens reuse this exactly.
+- **Secrets via Fernet** keyed on `AIZU_SECRET_KEY`; tokens hashed at rest (`core/secrets.py`, `auth.hash_session_token`, `core/store.py` auth_sessions). Per-worker bearer tokens reuse this exactly.
 - **HTTP layer is declarative route-dispatch** with a two-layer gate (`server.py:1068-1099`), `{ok,data,error}` envelope, per-route body caps, BOLA-safe 404-not-403 via `_campaign_in_org` (`server.py:1164-1167`). New `worker_routes`/`admin_routes` dicts slot in beside `auth_routes`/`protected_routes`.
 
 ### 1.2 CONTRADICTED by the code — corrections that change the build
@@ -34,7 +34,7 @@ The PRD is directionally right (PULL model, ship-the-engine, local CDP). It is w
 
 **C5 — `soul` is loaded from a file, and the sidecar must prove it exists (HIGH).** `_run_one` does `soul = load_soul(cfg_dir / "soul.md")` (`cli.py:502`). dispatch **requires** `soul`. **Decision (recommended): bake `soul` into the job `spec` as a string at enqueue time** so a missing/file-drifted soul fails fast in the cloud, not at runtime on a customer box. Phase 1 supports both paths behind one resolver (`job_runner._resolve_soul`).
 
-**C6 — Pause-file is per-`run_id`, not per-job (HIGH/MEDIUM).** `RunManager._pause_path` keys the sentinel on `run_id` only — `run-{run_id}.pause` (`runner.py:288-296`), polled via `REELRADAR_PAUSE_FILE` (`core/pause.py:20-31`). A requeued job gets a NEW `run_id`, so a stale file won't carry over but an orphan poisons the next run. **Correction:** control truth lives in **heartbeat-response flags** (`drain`/`halt`); the pause-file is ONLY the engine's cooperative checkpoint, owned by the sidecar (created on demand, deleted in `finally`), and **swept on startup in Phase 1** (not deferred to Phase 4).
+**C6 — Pause-file is per-`run_id`, not per-job (HIGH/MEDIUM).** `RunManager._pause_path` keys the sentinel on `run_id` only — `run-{run_id}.pause` (`runner.py:288-296`), polled via `AIZU_PAUSE_FILE` (`core/pause.py:20-31`). A requeued job gets a NEW `run_id`, so a stale file won't carry over but an orphan poisons the next run. **Correction:** control truth lives in **heartbeat-response flags** (`drain`/`halt`); the pause-file is ONLY the engine's cooperative checkpoint, owned by the sidecar (created on demand, deleted in `finally`), and **swept on startup in Phase 1** (not deferred to Phase 4).
 
 **C7 — Daytime guard cannot be pre-filtered at lease time (CRITICAL, review #3).** Daytime is enforced inside the engine loop against the account timezone. The warming kill-switch is checked **before** `_build_run_io` (`cli.py:294`), but **harvest attaches Chrome before any daytime check**. **Correction:** let the engine halt naturally with `halt_reason='daytime'`; the sidecar nacks with a **`retry_after_at` timestamp** (engine returns "try again at"), and the lease/queue scan skips jobs whose `retry_after_at` is in the future. For *warming*, pre-filter via the existing kill-switch before leasing.
 
@@ -46,14 +46,14 @@ SQLite, WAL, single writer, 30s busy_timeout. Leasing is correct via `BEGIN IMME
 
 ## 2. Phase 1 — Worker engine sidecar + local pull loop (against a STUB dispatch)
 
-> **STATUS: SHIPPED 2026-06-30** — `engine/reelradar/worker/` (config, job_runner, lease_client, single_flight, token_store, sidecar) + `engine/tools/stub_dispatch.py` + `engine/tests/worker/` (65 tests; full suite 1075 green). Adversarially reviewed (code + security); all HIGH/MEDIUM/LOW findings folded in. **As-built deviations from the plan below:** (a) `job_runner` REUSES `cli._run_session_loop` rather than re-cloning `_run_one` (DRY; inherits future engine fixes); (b) single-flight uses an atomic `O_CREAT|O_EXCL` lock, no `filelock` dep; (c) **in-process halt limitation** — a leased run can't be force-killed mid-session, so `halt`/`drain` are honored at the JOB BOUNDARY bounded by the per-job duration cap; true mid-run hard-stop needs the supervised-subprocess model (deferred). **Not yet verified:** the live exit gate (a real `target_leads=1` run on a warmed Chrome) — needs a worker box; the real-HTTP stub integration test covers only the register→lease→ack wire contract.
+> **STATUS: SHIPPED 2026-06-30** — `engine/aizu/worker/` (config, job_runner, lease_client, single_flight, token_store, sidecar) + `engine/tools/stub_dispatch.py` + `engine/tests/worker/` (65 tests; full suite 1075 green). Adversarially reviewed (code + security); all HIGH/MEDIUM/LOW findings folded in. **As-built deviations from the plan below:** (a) `job_runner` REUSES `cli._run_session_loop` rather than re-cloning `_run_one` (DRY; inherits future engine fixes); (b) single-flight uses an atomic `O_CREAT|O_EXCL` lock, no `filelock` dep; (c) **in-process halt limitation** — a leased run can't be force-killed mid-session, so `halt`/`drain` are honored at the JOB BOUNDARY bounded by the per-job duration cap; true mid-run hard-stop needs the supervised-subprocess model (deferred). **Not yet verified:** the live exit gate (a real `target_leads=1` run on a warmed Chrome) — needs a worker box; the real-HTTP stub integration test covers only the register→lease→ack wire contract.
 
 **Goal:** prove the shipped engine runs off-cloud, drives local Chrome, and completes a leased job round-trip *before* any desktop shell, real jobs table, or registry. Cloud-side is a stub. **Exit criterion:** one live job (`target_leads=1`) on a warmed local Chrome produces leads + run_events in the existing panel drawer, with zero remote-CDP traffic (PRD success metric 1).
 
 ### 2.1 New files
 
 ```
-engine/reelradar/worker/
+engine/aizu/worker/
   __init__.py
   sidecar.py            # the pull loop + orphan sweep + heartbeat thread
   lease_client.py       # tolerant HTTP client → typed Result, never raises
@@ -77,8 +77,8 @@ Does exactly what `cli._run_one` (`cli.py:277-322`) does, minus argparse and min
 
 1. **Resolve campaign** — `campaign = resolve_campaign(store, cfg_dir, job_spec.campaign_id)` (`core.config`, called like `cli.py:509`). **`if campaign is None: raise CampaignNotFound(job_spec.campaign_id)`** — caught by the loop as a hard nack `reason='campaign_not_found'` (C4). A `ValueError` from a malformed brief → nack `reason='campaign_malformed'`.
 2. **Resolve soul** — `soul = job_runner._resolve_soul(job_spec, cfg_dir)`: prefer `job_spec.soul_text` (baked at enqueue, C5); else `load_soul(cfg_dir / "soul.md")` (`cli.py:502`); raise `SoulMissing` if neither → hard nack.
-3. **Generate `run_id = uuid4().hex[:12]`**; set `os.environ["REELRADAR_RUN_ID"] = run_id` **before** the call so `Session._emit` routes to `store.emit_run_event` (`session.py:102-127`).
-4. **Pause-file** — derive `pause_path = log_dir / f"run-{run_id}.pause"` (mirror `runner.py:296`); set `os.environ["REELRADAR_PAUSE_FILE"] = str(pause_path)` (`core/pause.py`). Do NOT create it; the engine/sidecar create it only on a `halt`/`pause` flag.
+3. **Generate `run_id = uuid4().hex[:12]`**; set `os.environ["AIZU_RUN_ID"] = run_id` **before** the call so `Session._emit` routes to `store.emit_run_event` (`session.py:102-127`).
+4. **Pause-file** — derive `pause_path = log_dir / f"run-{run_id}.pause"` (mirror `runner.py:296`); set `os.environ["AIZU_PAUSE_FILE"] = str(pause_path)` (`core/pause.py`). Do NOT create it; the engine/sidecar create it only on a `halt`/`pause` flag.
 5. **Build IO** — `router, feed, pacer = cli._build_run_io(campaign, store, dry_run, base_args, engine_mode)` (`cli.py:92-123`). Reused verbatim — this is the seam.
 6. **Run** — `summary = dispatch.run_engine_session(campaign=campaign, store=store, router=router, feed=feed, soul=soul, pacer=pacer, run_id=run_id, lead_target=job_spec.target_leads, engine_mode=job_spec.engine_mode)` (`dispatch.py:171`). Halts fold into `summary['halt_reason']`/`halt_kind`; dispatch never raises for a halt.
 7. **`finally:`** `cli._close_feed(feed)` (C-confirmed guarded teardown, `cli.py:325-336`) **and** best-effort `pause_path.unlink(missing_ok=True)` (C6). Both run even if step 6 raises.
@@ -95,7 +95,7 @@ Does exactly what `cli._run_one` (`cli.py:277-322`) does, minus argparse and min
 
 ### 2.4 `token_store.py` (review #2 C2 — NOT deferred)
 
-- macOS Keychain / Windows Credential Manager / Linux secret-service when available; else a **Fernet-encrypted file, mode `0600`** in a locked dir (reuse `core/secrets.py` Fernet, keyed on `REELRADAR_SECRET_KEY`). Never plaintext, never logged.
+- macOS Keychain / Windows Credential Manager / Linux secret-service when available; else a **Fernet-encrypted file, mode `0600`** in a locked dir (reuse `core/secrets.py` Fernet, keyed on `AIZU_SECRET_KEY`). Never plaintext, never logged.
 - Phase 1 ships the encrypted-file backend at minimum; keychain backends land in Phase 6 packaging. Token recovery after a sidecar crash is tested here.
 
 ### 2.5 `tools/stub_dispatch.py` — endpoint contracts (review #1 MEDIUMs)
@@ -151,7 +151,7 @@ loop while not draining:
 - **`test_token_store`**: round-trip persist/read; recovery after simulated crash; file mode `0600`.
 - **`test_sidecar_loop`** (integration): `stub_dispatch` on an ephemeral port, one seeded **dry-run** job → assert register→lease→run→heartbeat≥1→ack sequence in the stub call log; a `sessions` row + `run_events` land in the test DB; loop sleep honors the returned `heartbeatIntervalSec`.
 - **`test_sidecar_loop::orphan_pause_swept`**: pre-create a stale `run-*.pause`, start sidecar → asserted gone before first lease.
-- **Manual live smoke** (`pytest -m live_smoke --live`, off-CI): conftest skips unless `--live`; requires `REELRADAR_SECRET_KEY`, warmed Chrome on `:9222`, test DB. One live job, `target_leads=1` → leads + run_events in the panel. **This is the Phase 1 exit gate.**
+- **Manual live smoke** (`pytest -m live_smoke --live`, off-CI): conftest skips unless `--live`; requires `AIZU_SECRET_KEY`, warmed Chrome on `:9222`, test DB. One live job, `target_leads=1` → leads + run_events in the panel. **This is the Phase 1 exit gate.**
 
 ---
 
@@ -159,7 +159,7 @@ loop while not draining:
 
 ### Phase 2 — Registry + heartbeat + presence
 
-> **STATUS: SHIPPED 2026-06-30** — `workers` table at **v14** (v13 = billing) + store methods, the bearer-gated worker plane (`POST /api/worker/register`, `POST /api/worker/heartbeat`) and `GET /api/admin/fleet` in `server.py`, plus a worker-level presence-heartbeat thread in the sidecar. Adversarially reviewed (code + security); fixes folded. **Full suite 1124 green (+49).** **As-built notes:** (a) the Phase-2 worker heartbeat is **worker-level presence** (`/api/worker/heartbeat`) — the job-scoped `/api/worker/jobs/{id}/heartbeat` + run_events buffering stay Phase 3 (no jobs table yet); (b) **derived status** resolves the PRD §6-vs-§8 inconsistency toward §8 (`online ≤2×`, `stale ≤6×`, `offline >6×` of a 20s interval = 2-min offline), not the §6 `>8×`; (c) `/api/admin/fleet` uses an **interim fail-closed `REELRADAR_PLATFORM_ADMINS` env allowlist** — Phase 5 replaces it with the real platform_admins plane + MFA + audit; (d) worker tokens issued once at register, hashed at rest via `auth.hash_session_token`, request-time revocation/expiry check.
+> **STATUS: SHIPPED 2026-06-30** — `workers` table at **v14** (v13 = billing) + store methods, the bearer-gated worker plane (`POST /api/worker/register`, `POST /api/worker/heartbeat`) and `GET /api/admin/fleet` in `server.py`, plus a worker-level presence-heartbeat thread in the sidecar. Adversarially reviewed (code + security); fixes folded. **Full suite 1124 green (+49).** **As-built notes:** (a) the Phase-2 worker heartbeat is **worker-level presence** (`/api/worker/heartbeat`) — the job-scoped `/api/worker/jobs/{id}/heartbeat` + run_events buffering stay Phase 3 (no jobs table yet); (b) **derived status** resolves the PRD §6-vs-§8 inconsistency toward §8 (`online ≤2×`, `stale ≤6×`, `offline >6×` of a 20s interval = 2-min offline), not the §6 `>8×`; (c) `/api/admin/fleet` uses an **interim fail-closed `AIZU_PLATFORM_ADMINS` env allowlist** — Phase 5 replaces it with the real platform_admins plane + MFA + audit; (d) worker tokens issued once at register, hashed at rest via `auth.hash_session_token`, request-time revocation/expiry check.
 
 - v14 `workers` table (§5). `store.register_worker`, `store.touch_worker_heartbeat`, `store.list_workers`.
 - `worker_routes` dict in `server.py` beside `auth_routes` (`:1068`); **bearer-token gate** `_request_worker()` mirroring `_current_user` (`:1137`): parse `Authorization: Bearer`, hash, look up `worker_token_hash`, **reject if `revoked_at IS NOT NULL` or expired** (review #2 HIGH — revocation is checked at request time, not learned only at next heartbeat).
@@ -268,7 +268,7 @@ loop while not draining:
 >   gate (`warming_control.warming_kill_reason` layer 3, defense in depth).
 > - **Token lifetime + version gate + revoke:** register now stamps a 1-year TTL
 >   (`WORKER_TOKEN_TTL_SEC`; revocation, not expiry, is the real off-switch — PRD §7);
->   `REELRADAR_MIN_AGENT_VERSION` gate sets `updateRequired` in both heartbeats
+>   `AIZU_MIN_AGENT_VERSION` gate sets `updateRequired` in both heartbeats
 >   (`_agent_version_below`); interim-gated `POST /api/admin/workers/revoke`.
 > - **Atomic offline→interrupted→requeue:** `jobs.pinned_worker_id` column (additive self-
 >   heal) + `store.reclaim_offline_jobs` under `_tx_immediate` (reclaims ONLY expired-lease
@@ -282,7 +282,7 @@ loop while not draining:
 >   needs the Phase-6 supervised-subprocess model — halt is honored at the job boundary).
 >   (b) A permanently-dead box's pinned job stays queued (never dead-letters via reclaim, as
 >   reclaim only touches leased/running) — surfaced by the >5-min alert for manual reassign.
->   (c) Phase 5 still owns replacing the interim `REELRADAR_PLATFORM_ADMINS` gate on the new
+>   (c) Phase 5 still owns replacing the interim `AIZU_PLATFORM_ADMINS` gate on the new
 >   admin routes with the real platform-admin plane + audit.
 
 - Heartbeat-response **control flags** (`drain`, `halt`, `update_required`) as control source of truth (C6). `control_flags` storable per scope (`global|org|platform|worker`). `halt` → immediate engine/feed teardown + pause-file delete; `drain` → finish current, stop leasing.
@@ -302,13 +302,13 @@ loop while not draining:
 >   `server._campaign_in_org` + the raw request-boundary `org_for_campaign` uses now route
 >   through it. Behaviour-preserving for org users; the seam impersonation threads the
 >   effective org through.
-> - **5b — admin auth plane:** new `reelradar/admin_auth.py` (stdlib TOTP RFC-6238 +
+> - **5b — admin auth plane:** new `aizu/admin_auth.py` (stdlib TOTP RFC-6238 +
 >   IP-allowlist fail-closed + admin session TTL); v15 `platform_admins` +
 >   `platform_admin_sessions` + `admin_audit_log` + `admin_login_throttle` +
 >   `admin_totp_used`; a SEPARATE `_current_admin` gate (IP-allowlist FIRST, then admin
 >   cookie `rr_admin_session`) resolved before the org gate; `/api/admin/{login,logout,
 >   whoami}`; PBKDF2 reuse + mandatory TOTP + DB-backed throttle; `python -m
->   reelradar.admin_bootstrap` seeds the first admin (MFA secret Fernet-encrypted).
+>   aizu.admin_bootstrap` seeds the first admin (MFA secret Fernet-encrypted).
 > - **5c — impersonation + audit:** `/api/admin/impersonate{,/end}` stamp the effective
 >   principal on the admin session; `_current_user` falls back to `_impersonated_user`
 >   ONLY when a real org session is absent AND an effective principal is set — so existing
@@ -317,7 +317,7 @@ loop while not draining:
 >   SHA-256 hash-chained `admin_audit_log`; `GET /api/admin/audit{,/verify}`.
 > - **5d — cross-org reads + real gate:** `GET /api/admin/orgs` + `/api/admin/orgs/{id}/
 >   {campaigns,leads}` (read-only, reuse the org builders with the target org). The interim
->   `REELRADAR_PLATFORM_ADMINS` env allowlist gate on fleet/enqueue/control-flags/revoke is
+>   `AIZU_PLATFORM_ADMINS` env allowlist gate on fleet/enqueue/control-flags/revoke is
 >   REPLACED by the real `_require_admin`; the dead `_is_platform_admin` was removed.
 > - **Security hardening (from review):** TOTP anti-replay (`claim_totp_counter` consumes
 >   the matched step counter); `append_admin_audit` uses `_tx_immediate` (no forked chain
@@ -386,7 +386,7 @@ loop while not draining:
 >   alert) is dead-lettered + alerted (never un-pinned/failed-over — the one-account↔one-box
 >   invariant holds). Closes the forever-queued case.
 > - **E · Trusted-proxy XFF:** `admin_auth.effective_client_ip` honours X-Forwarded-For
->   ONLY when the peer is a configured `REELRADAR_TRUSTED_PROXIES` proxy (rightmost
+>   ONLY when the peer is a configured `AIZU_TRUSTED_PROXIES` proxy (rightmost
 >   non-proxy hop); default (unset) ignores XFF = the prior transport-peer behaviour.
 > - **F · Impersonation cross-plane hand-off:** `/api/auth/me` now reports
 >   `impersonated:true` under an active impersonation (`_shape_user`; `id` may be null for
@@ -408,7 +408,7 @@ loop while not draining:
 > was 1322). What shipped, TDD'd + adversarially reviewed (11 findings, all fixed incl. one
 > CRITICAL):
 > - **6-core-A · True mid-run hard-stop (supervised subprocess).** Each leased job now runs in a
->   KILLABLE child (`reelradar.worker.job_child`, `python -m …`) supervised by the new
+>   KILLABLE child (`aizu.worker.job_child`, `python -m …`) supervised by the new
 >   `job_runner.run_one_job`: it writes a 0600 spec file, spawns the child, polls the shared
 >   `Controls.halt` Event + a wall-clock deadline, and does SIGTERM→grace→SIGKILL — closing the
 >   old "halt only at the job boundary" gap. `_execute_job` is the old in-process body verbatim
@@ -423,22 +423,22 @@ loop while not draining:
 >   (macOS real; Win/Linux stubs). Fully DI — no real Chrome in tests. Port policy (9222 vs
 >   live 9333) left to the wiring layer.
 > - **6-core-C · Loopback-only control surface** (`worker/control_surface.py` + `control_state.py`
->   + `chrome_probe.py`): opt-in (`REELRADAR_CONTROL_SURFACE=1` + `REELRADAR_CONTROL_TOKEN`),
+>   + `chrome_probe.py`): opt-in (`AIZU_CONTROL_SURFACE=1` + `AIZU_CONTROL_TOKEN`),
 >   127.0.0.1-only, Bearer-gated `GET /status` + `POST /command` (pause/resume/stopCurrentJob/
 >   focusWarmedChrome). `stopCurrentJob` now = a REAL hard-stop (feeds `controls.halt`). Sidecar
 >   gained lock-guarded `current_job` + `pause/resume`. Leak-safe wire DTO.
-> - **6-core-D · Per-job logs**: fell out of 6-core-A — the child gets `REELRADAR_RUN_ID` so the
+> - **6-core-D · Per-job logs**: fell out of 6-core-A — the child gets `AIZU_RUN_ID` so the
 >   existing spawned-run `run-<run_id>.log` fires; added `logsetup.run_log_path` + an orphan-file
 >   sweep. RedactingFilter now scrubs tracebacks (`exc_info`/`stack_info`) too.
 > - **6-core-E · Keychain tokens**: `TokenStore` is a façade over a pluggable Fernet-file +
 >   OPTIONAL `keyring` backend (`token_backends.py`, guarded import like Playwright);
 >   `KeyringBackendError` subclasses `SecretCipherError` so sidecar needs ZERO change; env
->   `REELRADAR_TOKEN_BACKEND=keyring|file|auto`.
+>   `AIZU_TOKEN_BACKEND=keyring|file|auto`.
 >
 > **SCAFFOLDED, NOT COMPILED (no Rust/tauri-cli/pyinstaller in the dev sandbox):** `desktop/`
-> (Tauri 2.x `src-tauri/` supervising the `reelradar-worker` console-script binary + managed
+> (Tauri 2.x `src-tauri/` supervising the `aizu-worker` console-script binary + managed
 > Chrome + a thin UI talking to the control surface), `desktop/pyinstaller/sidecar.spec`,
-> `pyproject.toml` `reelradar-worker` entry point, `docs/ops/desktop-packaging.md` (build steps +
+> `pyproject.toml` `aizu-worker` entry point, `docs/ops/desktop-packaging.md` (build steps +
 > blocker list). First step for a toolchained engineer: `cargo check` + `pyinstaller --clean`.
 >
 > **STILL genuinely blocked (toolchain/account/hardware):** code-signing/notarization (Apple
@@ -448,7 +448,7 @@ loop while not draining:
 
 - **Tauri** (Rust + system webview — not Electron/bundled Chromium; the app *manages* a separate warmed Chrome via CDP) supervising the Phase-1 sidecar as a managed **child process** (C3 option A): restart-on-crash watchdog, run-at-login. **No RunManager, no CLI subprocess.**
 - **Managed Chrome lifecycle** (review #3 LOW): Tauri starts a Chrome on launch; sidecar connects via CDP `:9222`; on app exit Tauri kills Chrome; on sidecar restart it reconnects to the existing Chrome (never spawns a second). Tested on macOS + Windows.
-- Engine packaged as a sidecar binary (PyInstaller/pex, pinned runtime) reusing `reelradar.cli`/`dispatch`/`core/cdp`; **`soul.md` bundled** if not baked into job specs (C5).
+- Engine packaged as a sidecar binary (PyInstaller/pex, pinned runtime) reusing `aizu.cli`/`dispatch`/`core/cdp`; **`soul.md` bundled** if not baked into job specs (C5).
 - Local UI: per-account health, **checkpoint/2FA/captcha button that focuses the warmed Chrome window**, start/stop/pause, live log tail (per-job log files keyed on `job_id`/`run_id` — review #1 LOW on interleaved logs), proxy/connection status, capacity override.
 - Token storage promoted to OS keychain backends (`token_store` from Phase 1).
 - Signed + notarized **Mac (Developer ID + notarization)** and **Windows (Authenticode/EV)** installers; built-in Tauri updater pulling signed builds; `agent_version` wired to the Phase-4 update gate.

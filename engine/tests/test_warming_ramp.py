@@ -4,7 +4,7 @@ Per-action probabilities + per-day caps for like/save/follow/share layered onto
 the shipped P0 dwell-only budget. The `observe` stage stays read_only with every
 cap at 0; Instagram caps clamp the stage values by `_PLATFORM_CAPS`.
 """
-from reelradar.engines.warming.ramp import ActionBudget, budget_for_day
+from aizu.engines.warming.ramp import ActionBudget, budget_for_day
 
 
 # ---- P0 fields untouched (additive guarantee) ----

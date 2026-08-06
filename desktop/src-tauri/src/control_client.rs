@@ -1,7 +1,7 @@
 //! Loopback control-surface client (Phase 6 SCAFFOLD, UNCOMPILED).
 //!
 //! A small `reqwest` client for the sidecar's loopback-only control surface
-//! (`reelradar.worker.control_surface`, a stdlib HTTP server bound to 127.0.0.1). This is
+//! (`aizu.worker.control_surface`, a stdlib HTTP server bound to 127.0.0.1). This is
 //! the **single source of truth** for worker/job/Chrome state in the UI:
 //!
 //!   - `GET  /status`  → the full `StatusDto` (worker id, per-account health, current job
@@ -13,7 +13,7 @@
 //! this DTO reports, not a newest-mtime guess.
 //!
 //! Every request carries `Authorization: Bearer <control_token>` — the same per-spawn token
-//! the shell generated and injected into the child's env as `REELRADAR_CONTROL_TOKEN`. The
+//! the shell generated and injected into the child's env as `AIZU_CONTROL_TOKEN`. The
 //! token lives only in memory here; it is never logged or surfaced to the UI.
 //!
 //! The DTO field names are camelCase to match `control_state.status_to_wire` verbatim.
@@ -198,7 +198,7 @@ impl ControlClient {
 }
 
 /// Generate a fresh 256-bit hex control-surface token for this app run. Passed to the
-/// child as `REELRADAR_CONTROL_TOKEN` and used as the Bearer for every control call. Held
+/// child as `AIZU_CONTROL_TOKEN` and used as the Bearer for every control call. Held
 /// in memory only — never persisted, never logged.
 pub fn generate_token() -> String {
     let mut bytes = [0u8; 32];

@@ -6,7 +6,7 @@ import tempfile
 
 import pytest
 
-from reelradar.core.store import SCHEMA_VERSION, Store
+from aizu.core.store import SCHEMA_VERSION, Store
 
 
 def _tmp() -> str:

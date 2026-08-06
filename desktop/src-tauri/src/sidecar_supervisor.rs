@@ -1,9 +1,9 @@
-//! Supervised `reelradar-worker` child process (Phase 6 SCAFFOLD, UNCOMPILED).
+//! Supervised `aizu-worker` child process (Phase 6 SCAFFOLD, UNCOMPILED).
 //!
 //! BUILD-PLAN Phase 6, **C3 option A**: the desktop app supervises the Python sidecar
 //! binary as a managed child — restart-on-crash watchdog + run-at-login. It spawns
-//! **`reelradar-worker`** (= `reelradar.worker.sidecar:main`), feeding it `REELRADAR_*`
-//! env vars only. It NEVER shells to `reelradar.cli` and NEVER starts a `RunManager`.
+//! **`aizu-worker`** (= `aizu.worker.sidecar:main`), feeding it `AIZU_*`
+//! env vars only. It NEVER shells to `aizu.cli` and NEVER starts a `RunManager`.
 //!
 //! # Restart policy (mirrors sidecar.py `_backoff`)
 //! On an unexpected child exit we relaunch with a jittered exponential backoff — base
@@ -43,8 +43,8 @@ const MIN_HEALTHY_UPTIME_SEC: u64 = 60;
 /// Grace between SIGTERM/CTRL_BREAK and SIGKILL on `stop_gracefully`.
 const STOP_GRACE_SEC: u64 = 8;
 
-/// The console-script entry point name (matches `[project.scripts] reelradar-worker`).
-const SIDECAR_BINARY_NAME: &str = "reelradar-worker";
+/// The console-script entry point name (matches `[project.scripts] aizu-worker`).
+const SIDECAR_BINARY_NAME: &str = "aizu-worker";
 
 /// Immutable snapshot of the supervised child's lifecycle, pushed to the UI.
 #[derive(Debug, Clone, Serialize)]
@@ -74,7 +74,7 @@ impl SidecarStatus {
 
 pub struct SidecarSupervisor {
     config: SharedConfig,
-    /// The per-spawn control-surface token, injected as `REELRADAR_CONTROL_TOKEN`.
+    /// The per-spawn control-surface token, injected as `AIZU_CONTROL_TOKEN`.
     control_token: Arc<String>,
     app: AppHandle,
     child: Option<Child>,
@@ -142,33 +142,33 @@ impl SidecarSupervisor {
         }
     }
 
-    /// Build the child `Command` with the full `REELRADAR_*` env and spawn it.
+    /// Build the child `Command` with the full `AIZU_*` env and spawn it.
     fn spawn_child(&mut self) -> Result<(), DesktopError> {
         let binary = self.resolve_binary()?;
         let mut cmd = Command::new(&binary);
 
         // --- Env vars only. NO CLI args, NO RunManager. -----------------------------
         // Non-secret wiring from config:
-        cmd.env("REELRADAR_DISPATCH_URL", &self.config.dispatch_base_url);
-        cmd.env("REELRADAR_CDP_URL", self.config.cdp_url()); // matches the Chrome we launched
-        cmd.env("REELRADAR_WORKER_STATE", &self.config.state_dir);
-        cmd.env("REELRADAR_DB", &self.config.db_path);
+        cmd.env("AIZU_DISPATCH_URL", &self.config.dispatch_base_url);
+        cmd.env("AIZU_CDP_URL", self.config.cdp_url()); // matches the Chrome we launched
+        cmd.env("AIZU_WORKER_STATE", &self.config.state_dir);
+        cmd.env("AIZU_DB", &self.config.db_path);
         // Capability declaration: which platforms this box advertises it can run. Without
         // it the worker registers with NO capabilities and the fleet dispatch rejects every
         // run as "no capable worker". "all" → every supported platform, pool-wide.
-        cmd.env("REELRADAR_WORKER_PLATFORMS", &self.config.worker_platforms);
+        cmd.env("AIZU_WORKER_PLATFORMS", &self.config.worker_platforms);
         // Control surface: enable it, pass the generated token + the port.
-        cmd.env("REELRADAR_CONTROL_SURFACE", "1");
-        cmd.env("REELRADAR_CONTROL_TOKEN", self.control_token.as_str());
-        cmd.env("REELRADAR_CONTROL_PORT", self.config.control_port.to_string());
+        cmd.env("AIZU_CONTROL_SURFACE", "1");
+        cmd.env("AIZU_CONTROL_TOKEN", self.control_token.as_str());
+        cmd.env("AIZU_CONTROL_PORT", self.config.control_port.to_string());
 
         // The worker bootstrap token (a SECRET, never in config.toml) comes from the 0600
         // token file the dev menu writes; pass it to the child as the register bearer.
         if let Some(token) = crate::config::read_bootstrap_token(&self.app) {
-            cmd.env("REELRADAR_WORKER_BOOTSTRAP_TOKEN", token);
+            cmd.env("AIZU_WORKER_BOOTSTRAP_TOKEN", token);
         }
 
-        // Engine/provider secrets (OPENROUTER_API_KEY, REELRADAR_SECRET_KEY, model/platform
+        // Engine/provider secrets (OPENROUTER_API_KEY, AIZU_SECRET_KEY, model/platform
         // overrides, …) from the 0600 worker-secrets.env file. A Finder-launched GUI worker
         // inherits only a minimal launchd environment, so these can NOT be assumed present —
         // without OPENROUTER_API_KEY every live run dies at the engine's `_build_run_io`
@@ -209,7 +209,7 @@ impl SidecarSupervisor {
             )));
         }
         // 2. Bundled resource (packaged app). The onedir PyInstaller build ships as
-        //    <resource_dir>/sidecar/reelradar-worker/reelradar-worker (folder + executable).
+        //    <resource_dir>/sidecar/aizu-worker/aizu-worker (folder + executable).
         //    Fall back to a flat layout in case the resource copy flattened it.
         if let Ok(rd) = self.app.path().resource_dir() {
             let nested = rd.join("sidecar").join(SIDECAR_BINARY_NAME).join(SIDECAR_BINARY_NAME);

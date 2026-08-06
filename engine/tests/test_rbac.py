@@ -1,6 +1,6 @@
 """RBAC policy matrix — exhaustive role × action coverage and the owner/admin
 asymmetry (admins may ADD admins but not EDIT them)."""
-from reelradar import rbac
+from aizu import rbac
 
 
 # The authoritative capability matrix (mirrors the approved plan + roles.ts).

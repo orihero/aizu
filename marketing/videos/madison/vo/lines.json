@@ -1,0 +1,64 @@
+{
+  "_comment": [
+    "Per-scene narration. `text` is what the video says; `speak` is what TTS is fed —",
+    "they differ only where the synthesiser needs help (numerals, acronyms, the brand name).",
+    "The brand is spelled AIZU everywhere on screen; only the spoken form is respelled."
+  ],
+  "lines": [
+    {
+      "id": "scene01",
+      "text": "In today's world, the best source to find clients and leads is the internet. So having a strong online presence is crucial.",
+      "speak": "In today's world, the best source to find clients and leads is the internet. So having a strong online presence is crucial."
+    },
+    {
+      "id": "scene02",
+      "text": "So you run ads. They're expensive — and most of what comes back isn't worth calling.",
+      "speak": "So you run ads. They're expensive, and most of what comes back isn't worth calling."
+    },
+    {
+      "id": "scene03",
+      "text": "Managing them yourself is a full-time job. Hiring someone to do it is another headache.",
+      "speak": "Managing them yourself is a full-time job. Hiring someone to do it is another headache."
+    },
+    {
+      "id": "scene04",
+      "text": "Until now. Meet AIZU — your new sales expert.",
+      "speak": "Until now. Meet Aizoo, your new sales expert."
+    },
+    {
+      "id": "scene05",
+      "text": "Find leads, manage them, and uncover actionable insights — for as low as $9 a month.",
+      "speak": "Find leads, manage them, and uncover actionable insights, for as low as nine dollars a month."
+    },
+    {
+      "id": "scene06",
+      "text": "It's simple. Just create a campaign with our AI-powered campaign creator,",
+      "speak": "It's simple. Just create a campaign with our A.I. powered campaign creator."
+    },
+    {
+      "id": "scene07",
+      "text": "…and AIZU finds you relevant hot leads across six social media platforms —",
+      "speak": "And Aizoo finds you relevant hot leads across six social media platforms."
+    },
+    {
+      "id": "scene08",
+      "text": "— by filtering out the accounts that reacted to posts similar to your product or service.",
+      "speak": "By filtering out the accounts that reacted to posts similar to your product or service."
+    },
+    {
+      "id": "scene09",
+      "text": "Over time AIZU learns your ICP and improves the lead quality.",
+      "speak": "Over time, Aizoo learns your ideal customer profile, and improves the lead quality."
+    },
+    {
+      "id": "scene10",
+      "text": "AIZU also uncovers actionable insights by centralizing and visualizing key analytics.",
+      "speak": "Aizoo also uncovers actionable insights, by centralizing and visualizing key analytics."
+    },
+    {
+      "id": "scene11",
+      "text": "Ready to acquire new customers without headaches and crazy cost? Go to AIZU.UZ",
+      "speak": "Ready to acquire new customers without headaches and crazy cost? Go to Aizoo dot U Z."
+    }
+  ]
+}

@@ -22,6 +22,8 @@ import type {
 } from '@/shared/schemas/admin';
 import type {
   AddLeadNoteInput,
+  AgentReadiness,
+  AgentReadinessOptions,
   ArchiveCampaignInput,
   AuthUser,
   BillingPortal,
@@ -40,6 +42,7 @@ import type {
   Integration,
   InterviewRequest,
   InterviewResponse,
+  LaunchAgentLoginResult,
   LeadNote,
   LeadsPayload,
   LeadsQuery,
@@ -63,11 +66,11 @@ import type {
   UpdateRoleInput,
   WorkspaceSettingsInput,
 } from '@/shared/types/domain';
-import { buildBilling, paginateLeads } from './fixtures';
+import { buildAgentReadiness, buildBilling, paginateLeads } from './fixtures';
 
 const DEFAULT_ORG = { id: 1, name: 'Test Co', logo: null, description: null };
 const DEFAULT_USER: AuthUser = {
-  id: 1, email: 'tester@reelradar.test', role: 'owner', orgId: 1, org: DEFAULT_ORG,
+  id: 1, email: 'tester@aizu.test', role: 'owner', orgId: 1, org: DEFAULT_ORG,
 };
 
 interface TeamOp {
@@ -113,6 +116,11 @@ export class FakePanelRepository implements PanelRepository {
   interviewResults: InterviewResponse[] = [];
   interviewFailure: 'keyMissing' | 'unbuildable' | 'network' | null = null;
   readonly runRequests: RunInput[] = [];
+  /** When set, the next runCampaign() rejects with the 409 agent-not-ready gate
+   * instead of succeeding — drives the run-start error-handling tests. */
+  runStartFailure: 'agent_not_ready' | null = null;
+  /** The `detail` message the simulated agent-not-ready 409 carries. */
+  runStartAgentNotReadyDetail = 'Instagram session logged out — relaunch the login browser.';
   /** How many times stopRun() was called (the Stop button). */
   stopRequests = 0;
   /** How many times pauseRun()/resumeRun() were called. */
@@ -216,7 +224,25 @@ export class FakePanelRepository implements PanelRepository {
   /** When set, the next admin write/read rejects with this {message,status}. */
   failNextAdmin: { message: string; status: number } | null = null;
 
-  constructor(private state: PanelState) {}
+  // ---- agent readiness seam (fix-agent gate) ----
+  /** Served by getAgentReadiness(); tests mutate to drive the banner's states.
+   * Defaults to the healthy state so a test must opt INTO "not ready" explicitly. */
+  agentReadiness: AgentReadiness = buildAgentReadiness();
+  /** Every getAgentReadiness() call's options, in order (asserts refresh:true on Re-check). */
+  readonly agentReadinessFetches: AgentReadinessOptions[] = [];
+  /** How many times launchAgentLogin() was called (the "Launch login browser" button). */
+  launchAgentLoginCalls = 0;
+  /** When set, the next launchAgentLogin() call rejects with this {message,status}. */
+  failNextAgentLaunch: { message: string; status: number } | null = null;
+  /** When true, a successful launchAgentLogin() flips `agentReadiness` to fully ready
+   * (simulates the operator completing the login in the opened browser). Default false
+   * so a test can assert the banner still shows actionable until an explicit re-check. */
+  launchMakesReady = false;
+
+  // `protected` (not `private`) so demo-capture mode's DemoPanelRepository can
+  // subclass this and read/mutate the shared fixture state directly (e.g. after
+  // createCampaign/runCampaign) instead of re-implementing every read method.
+  constructor(protected state: PanelState) {}
 
   signup(credentials: SignupCredentials): Promise<Result<AuthUser>> {
     this.signupAttempts.push(credentials);
@@ -425,6 +451,11 @@ export class FakePanelRepository implements PanelRepository {
   nextRunStart: RunStartResult = { runId: null, backend: null };
 
   runCampaign(input: RunInput): Promise<Result<RunStartResult>> {
+    if (this.runStartFailure === 'agent_not_ready') {
+      return Promise.resolve(
+        err(appError('http', this.runStartAgentNotReadyDetail, 409, 'agent_not_ready')),
+      );
+    }
     if (this.takeFailure()) return this.simulatedFailure();
     this.runRequests.push(input);
     return Promise.resolve(ok(this.nextRunStart));
@@ -458,6 +489,26 @@ export class FakePanelRepository implements PanelRepository {
         ? this.runActivity(runId, afterSeq)
         : this.runActivity;
     return Promise.resolve(ok(activity));
+  }
+
+  getAgentReadiness(opts?: AgentReadinessOptions): Promise<Result<AgentReadiness>> {
+    this.agentReadinessFetches.push(opts ?? {});
+    return Promise.resolve(ok(this.agentReadiness));
+  }
+
+  launchAgentLogin(): Promise<Result<LaunchAgentLoginResult>> {
+    this.launchAgentLoginCalls += 1;
+    if (this.failNextAgentLaunch) {
+      const { message, status } = this.failNextAgentLaunch;
+      this.failNextAgentLaunch = null;
+      return Promise.resolve(err(appError('http', message, status)));
+    }
+    if (this.launchMakesReady) {
+      this.agentReadiness = {
+        ...this.agentReadiness, ready: true, cdp: 'ok', instagram: 'logged_in', detail: null,
+      };
+    }
+    return Promise.resolve(ok({ launched: true, readiness: this.agentReadiness }));
   }
 
   updateSettings(input: WorkspaceSettingsInput): Promise<Result<void>> {

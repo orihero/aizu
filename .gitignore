@@ -4,6 +4,9 @@
 .env
 .env.*
 !.env.example
+# Demo-capture flag only (VITE_DEMO_CAPTURE=1) — no secrets, must be checked in
+# so `npm run dev:demo` works for every contributor. See admin-panel/.env.demo.
+!admin-panel/.env.demo
 
 # Encryption keys / credentials
 *.pem
@@ -61,7 +64,7 @@ pnpm-debug.log*
 # =============================================================================
 # Runtime / app data
 # =============================================================================
-# SQLite databases (see REELRADAR_DB)
+# SQLite databases (see AIZU_DB)
 *.db
 *.db.bak*
 *.db-journal
@@ -70,7 +73,7 @@ pnpm-debug.log*
 *.sqlite
 *.sqlite3
 
-# Worker state (see REELRADAR_WORKER_STATE)
+# Worker state (see AIZU_WORKER_STATE)
 .worker-state/
 
 # Logs
@@ -98,3 +101,42 @@ Thumbs.db
 *~
 .idea/
 .vscode/
+
+# =============================================================================
+# Marketing video projects (marketing/videos/*)
+# =============================================================================
+# Regenerable build/tool output. Rebuild with each project's own package.json
+# scripts (npm run dev / check / render). Applies to every project under
+# marketing/videos/, so a new one is safe by default. See marketing/videos/README.md.
+marketing/videos/*/out/
+marketing/videos/*/renders/
+marketing/videos/*/snapshots/
+marketing/videos/*/.thumbnails/
+marketing/videos/*/.hyperframes/
+marketing/videos/*/agent/skills/
+marketing/videos/*/.agents/skills/
+
+# Third-party reference footage and everything derived from it (clips, extracted
+# frames, contact sheets, audio, downloader metadata). Re-downloadable from the
+# source URL; too large and not ours to distribute. The small hand-made analysis
+# that lives beside it — scenes.json, scenes_raw.txt, subtitles, key frames — IS
+# tracked, since that is our own work.
+marketing/videos/*/reference/clips/
+marketing/videos/*/reference/frames/
+marketing/videos/*/reference/sheets/
+marketing/videos/*/reference/*.mp4
+marketing/videos/*/reference/*.mp3
+marketing/videos/*/reference/*.webp
+marketing/videos/*/reference/*.info.json
+
+# =============================================================================
+# AI-agent tooling (repo root)
+# =============================================================================
+# Vendored skill packages, regenerated from the tracked skills-lock.json.
+# .claude/skills/ are OS symlinks into .agents/skills/ — never git-add them:
+# this checkout has core.symlinks=false, so git would flatten each one into a
+# text file containing its absolute target path.
+/.agents/skills/
+/.claude/skills/
+# Per-machine runtime state (a PID + process start time), not shareable.
+/.claude/scheduled_tasks.lock

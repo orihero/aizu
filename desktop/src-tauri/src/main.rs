@@ -8,12 +8,12 @@
 //!
 //! # What this app is (and is NOT)
 //! A thin Tauri shell that runs on a managed worker PC and supervises the Python
-//! **`reelradar-worker`** sidecar binary (= `reelradar.worker.sidecar:main`) as a managed
+//! **`aizu-worker`** sidecar binary (= `aizu.worker.sidecar:main`) as a managed
 //! child process — **BUILD-PLAN Phase 6, C3 option A**: restart-on-crash watchdog +
 //! run-at-login. It feeds the child env vars only.
 //!
 //! It **NEVER**:
-//!   - shells out to `reelradar.cli`,
+//!   - shells out to `aizu.cli`,
 //!   - starts a `RunManager` (there is none on the box — the sidecar bypasses it, C3),
 //!   - scrapes logs to infer state (superseded — the control surface is the source of truth),
 //!   - kills the sidecar to stop a single job (that is a `stopCurrentJob` command; see below),
@@ -25,13 +25,13 @@
 //! 2. **Start Chrome** via `ChromeManager` (`chrome_manager.rs`): reuse an attachable Chrome
 //!    if one is already up (real CDP probe), else launch ONE with a dedicated user-data-dir.
 //!    Default CDP port is **9333** (the live-proven port), NOT 9222.
-//! 3. **Spawn the supervised sidecar** (`sidecar_supervisor.rs`), passing `REELRADAR_*` env:
-//!    - `REELRADAR_DISPATCH_URL` (from config),
-//!    - `REELRADAR_CONTROL_SURFACE=1`,
-//!    - `REELRADAR_CONTROL_TOKEN=<generated-per-spawn token>` (also handed to `control_client`),
-//!    - `REELRADAR_CONTROL_PORT=<config.control_port>`,
-//!    - `REELRADAR_CDP_URL=http://127.0.0.1:<config.cdp_port>` (matches the Chrome we started),
-//!    - `REELRADAR_DB`, `REELRADAR_WORKER_STATE`, `REELRADAR_CONFIG` (paths from config).
+//! 3. **Spawn the supervised sidecar** (`sidecar_supervisor.rs`), passing `AIZU_*` env:
+//!    - `AIZU_DISPATCH_URL` (from config),
+//!    - `AIZU_CONTROL_SURFACE=1`,
+//!    - `AIZU_CONTROL_TOKEN=<generated-per-spawn token>` (also handed to `control_client`),
+//!    - `AIZU_CONTROL_PORT=<config.control_port>`,
+//!    - `AIZU_CDP_URL=http://127.0.0.1:<config.cdp_port>` (matches the Chrome we started),
+//!    - `AIZU_DB`, `AIZU_WORKER_STATE`, `AIZU_CONFIG` (paths from config).
 //!    The worker's own bootstrap token / provider keys come from env or the OS keychain at
 //!    spawn time — never from the TOML.
 //! 4. **Start the /status poller + log tail**: `control_client` polls `GET /status` on an

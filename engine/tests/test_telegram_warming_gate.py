@@ -7,9 +7,9 @@ failure / transport error / missing key.
 """
 from pathlib import Path
 
-from reelradar.core.config import Campaign
-from reelradar.engines.telegram.warming_writes import TgChannel
-from reelradar.engines.warming.tg_relevance import build_relevance_gate
+from aizu.core.config import Campaign
+from aizu.engines.telegram.warming_writes import TgChannel
+from aizu.engines.warming.tg_relevance import build_relevance_gate
 
 
 def _campaign():

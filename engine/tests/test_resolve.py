@@ -6,8 +6,8 @@ from pathlib import Path
 
 import pytest
 
-from reelradar.core.config import load_campaign, resolve_campaign
-from reelradar.core.store import Store
+from aizu.core.config import load_campaign, resolve_campaign
+from aizu.core.store import Store
 
 ROOT = Path(__file__).resolve().parents[1]
 CONFIG = ROOT / "config"

@@ -3,8 +3,8 @@ from __future__ import annotations
 
 import pytest
 
-from reelradar.core.config import SUPPORTED_PLATFORMS
-from reelradar.worker.config import JobSpec, JobSpecError, WorkerConfig
+from aizu.core.config import SUPPORTED_PLATFORMS
+from aizu.worker.config import JobSpec, JobSpecError, WorkerConfig
 
 
 def test_from_payload_accepts_camelcase_and_coerces():
@@ -83,15 +83,15 @@ def test_run_args_applies_duration_safety_cap_when_unbounded(cfg: WorkerConfig):
 
 
 def test_from_env_requires_dispatch_url(monkeypatch):
-    monkeypatch.delenv("REELRADAR_DISPATCH_URL", raising=False)
-    with pytest.raises(ValueError, match="REELRADAR_DISPATCH_URL"):
+    monkeypatch.delenv("AIZU_DISPATCH_URL", raising=False)
+    with pytest.raises(ValueError, match="AIZU_DISPATCH_URL"):
         WorkerConfig.from_env()
 
 
 def _base_env(monkeypatch):
-    monkeypatch.setenv("REELRADAR_DISPATCH_URL", "http://127.0.0.1:8799")
-    monkeypatch.delenv("REELRADAR_WORKER_CAPABILITIES", raising=False)
-    monkeypatch.delenv("REELRADAR_WORKER_PLATFORMS", raising=False)
+    monkeypatch.setenv("AIZU_DISPATCH_URL", "http://127.0.0.1:8799")
+    monkeypatch.delenv("AIZU_WORKER_CAPABILITIES", raising=False)
+    monkeypatch.delenv("AIZU_WORKER_PLATFORMS", raising=False)
 
 
 def test_from_env_no_capabilities_by_default(monkeypatch):
@@ -101,7 +101,7 @@ def test_from_env_no_capabilities_by_default(monkeypatch):
 
 def test_from_env_platforms_all_declares_every_supported_platform(monkeypatch):
     _base_env(monkeypatch)
-    monkeypatch.setenv("REELRADAR_WORKER_PLATFORMS", "all")
+    monkeypatch.setenv("AIZU_WORKER_PLATFORMS", "all")
     caps = WorkerConfig.from_env().capabilities
     plats = {c[1] for c in caps}
     assert plats == set(SUPPORTED_PLATFORMS)
@@ -110,16 +110,16 @@ def test_from_env_platforms_all_declares_every_supported_platform(monkeypatch):
 
 def test_from_env_platforms_list_drops_unknown(monkeypatch):
     _base_env(monkeypatch)
-    monkeypatch.setenv("REELRADAR_WORKER_PLATFORMS", "instagram, x , bogus")
+    monkeypatch.setenv("AIZU_WORKER_PLATFORMS", "instagram, x , bogus")
     assert WorkerConfig.from_env().capabilities == (
         [None, "instagram", None], [None, "x", None])
 
 
 def test_from_env_explicit_json_capabilities_win_and_are_sanitized(monkeypatch):
     _base_env(monkeypatch)
-    monkeypatch.setenv("REELRADAR_WORKER_PLATFORMS", "all")  # ignored when JSON present
+    monkeypatch.setenv("AIZU_WORKER_PLATFORMS", "all")  # ignored when JSON present
     monkeypatch.setenv(
-        "REELRADAR_WORKER_CAPABILITIES",
+        "AIZU_WORKER_CAPABILITIES",
         '[[1,"instagram",null],[null,"x","acct1"],["bad"],[null,"nope",null]]')
     assert WorkerConfig.from_env().capabilities == (
         [1, "instagram", None], [None, "x", "acct1"])
@@ -127,7 +127,7 @@ def test_from_env_explicit_json_capabilities_win_and_are_sanitized(monkeypatch):
 
 def test_from_env_malformed_capabilities_json_does_not_raise(monkeypatch):
     _base_env(monkeypatch)
-    monkeypatch.setenv("REELRADAR_WORKER_CAPABILITIES", "{not json")
+    monkeypatch.setenv("AIZU_WORKER_CAPABILITIES", "{not json")
     assert WorkerConfig.from_env().capabilities == ()
 
 
@@ -137,7 +137,7 @@ def test_machine_id_is_stable_across_calls(cfg: WorkerConfig):
 
 
 def test_rejects_non_positive_duration_and_target():
-    from reelradar.worker.config import JobSpec, JobSpecError
+    from aizu.worker.config import JobSpec, JobSpecError
     import pytest as _pt
     base = dict(id="j", campaignId="c", platform="instagram")
     with _pt.raises(JobSpecError):
@@ -150,7 +150,7 @@ def test_rejects_non_positive_duration_and_target():
 
 
 def test_child_dict_round_trips():
-    from reelradar.worker.config import WorkerConfig
+    from aizu.worker.config import WorkerConfig
     from pathlib import Path
     cfg = WorkerConfig(dispatch_base_url="http://x", cfg_dir=Path("cfg"),
                        db_path="d.db", state_dir=Path("st"), cdp_url="http://127.0.0.1:9333",

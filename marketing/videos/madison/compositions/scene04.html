@@ -1,0 +1,332 @@
+<!doctype html>
+<html lang="en" data-resolution="landscape">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=1920, height=1080" />
+    <title>AIZU — Scene 04 · Variant C — Collapse Into the Dot</title>
+    <script src="https://cdn.jsdelivr.net/npm/gsap@3.14.2/dist/gsap.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/gsap@3.14.2/dist/TextPlugin.min.js"></script>
+    <style>
+      @font-face {
+        font-family: "Sora";
+        font-style: normal;
+        font-weight: 100 900;
+        font-display: block;
+        src: url("assets/fonts/sora-latin.woff2") format("woff2");
+        unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA,
+          U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193,
+          U+2212, U+2215, U+FEFF, U+FFFD;
+      }
+
+      :root {
+        --light-bg: #eef0f3;
+        --bg: #0e0f14;
+        --brand-ink: #16161a;
+        --text: #f1f2f6;
+        --muted: #a2a7b6;
+        --lime: #d9f24f;
+      }
+
+      * {
+        margin: 0;
+        padding: 0;
+        box-sizing: border-box;
+      }
+      html,
+      body {
+        width: 1920px;
+        height: 1080px;
+        overflow: hidden;
+      }
+      body {
+        font-family: Inter, system-ui, sans-serif;
+      }
+      #root {
+        position: relative;
+        width: 1920px;
+        height: 1080px;
+        overflow: hidden;
+      }
+
+      #bg {
+        position: absolute;
+        inset: 0;
+        background: var(--light-bg);
+      }
+      #bg-dots {
+        position: absolute;
+        inset: 0;
+        background-image: radial-gradient(circle, rgba(22, 22, 26, 0.07) 1.5px, transparent 1.5px);
+        background-size: 46px 46px;
+      }
+      /* Identical to scene 03's pressure glow, held at full strength on frame 0 so the
+         cut between the two scenes is invisible. It bleeds away as ink takes over. */
+      #bg-glow {
+        position: absolute;
+        left: 360px;
+        top: 60px;
+        width: 1200px;
+        height: 1000px;
+        border-radius: 50%;
+        background: radial-gradient(circle, rgba(220, 38, 38, 0.22), rgba(220, 38, 38, 0) 70%);
+        filter: blur(60px);
+      }
+
+      #scene {
+        position: absolute;
+        inset: 0;
+      }
+
+      /* Picks up exactly where scene 03 lands: same size, position, gradient and shadow
+         as its #hub, so the two scenes read as one continuous move rather than a cut.
+         Scene 03 leaves it at scale 0.9 — the pinch below starts from that value. */
+      #hub {
+        position: absolute;
+        left: 840px;
+        top: 380px;
+        width: 240px;
+        height: 240px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        border-radius: 50%;
+        background: linear-gradient(140deg, #34343d, var(--brand-ink));
+        box-shadow: 0 24px 60px rgba(22, 22, 26, 0.1), 0 4px 12px rgba(22, 22, 26, 0.05);
+      }
+      #hub svg {
+        display: block;
+        width: 116px;
+        height: 116px;
+      }
+
+      /* …which becomes the thing that swallows the frame. */
+      #ink-slot {
+        position: absolute;
+        left: -240px;
+        top: -660px;
+        width: 2400px;
+        height: 2400px;
+      }
+      #ink {
+        width: 100%;
+        height: 100%;
+        border-radius: 50%;
+        background: var(--bg);
+      }
+
+      /* a single lime spark left at the centre */
+      #spark-slot {
+        position: absolute;
+        left: 928px;
+        top: 508px;
+        width: 64px;
+        height: 64px;
+      }
+      #spark {
+        width: 100%;
+        height: 100%;
+        border-radius: 50%;
+        background: var(--lime);
+      }
+
+      #brand {
+        position: absolute;
+        left: 0;
+        right: 0;
+        top: 396px;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+      }
+      /* The real AIZU mark, inlined so the arc can draw. The icon's ink rounded-square
+         is dropped: the whole frame is already ink, so only the dot and arc are needed. */
+      #lockup {
+        display: flex;
+        align-items: center;
+        gap: 34px;
+      }
+      #mark-icon {
+        flex: 0 0 auto;
+        width: 152px;
+        height: 152px;
+        opacity: 0;
+      }
+      #mark-icon svg {
+        display: block;
+        width: 100%;
+        height: 100%;
+        overflow: visible;
+      }
+      #mark {
+        height: 236px;
+        overflow: hidden;
+        font-family: Sora, Inter, sans-serif;
+        font-weight: 700;
+        font-size: 200px;
+        line-height: 236px;
+        letter-spacing: 0.05em;
+        color: var(--lime);
+      }
+      #mark span {
+        display: inline-block;
+        opacity: 0;
+      }
+      #tagline {
+        display: flex;
+        align-items: center;
+        margin-top: 26px;
+        font-family: Sora, Inter, sans-serif;
+        font-weight: 400;
+        font-size: 46px;
+        letter-spacing: 0.01em;
+        color: var(--muted);
+        white-space: nowrap;
+        opacity: 0;
+      }
+      #caret {
+        display: inline-block;
+        width: 3px;
+        height: 50px;
+        margin-left: 4px;
+        background: var(--muted);
+      }
+    </style>
+  </head>
+  <body>
+    <div
+      id="root"
+      data-composition-id="main"
+      data-start="0"
+      data-width="1920"
+      data-height="1080"
+      data-duration="5"
+    >
+      <div id="bg" class="clip" data-start="0" data-duration="5" data-track-index="0">
+        <div id="bg-dots"></div>
+        <div id="bg-glow"></div>
+      </div>
+
+      <div id="scene" class="clip" data-start="0" data-duration="5" data-track-index="1">
+        <div id="hub">
+          <svg viewBox="0 0 24 24" fill="none" stroke="#ffffff" stroke-width="1.6">
+            <circle cx="12" cy="8" r="4" />
+            <path d="M4 21v-1a8 8 0 0 1 16 0v1" stroke-linecap="round" />
+          </svg>
+        </div>
+
+        <div id="ink-slot"><div id="ink"></div></div>
+        <div id="spark-slot"><div id="spark"></div></div>
+
+        <div id="brand">
+          <div id="lockup">
+          <div id="mark-icon">
+            <svg viewBox="0 0 100 100" role="img" aria-label="AIZU">
+              <circle id="glyph-dot" cx="42" cy="60" r="13" fill="#d9f24f" />
+              <path
+                id="glyph-arc"
+                d="M48 36 A26 26 0 0 1 68 69"
+                fill="none"
+                stroke="#ffffff"
+                stroke-width="7"
+                stroke-linecap="round"
+                pathLength="1"
+                stroke-dasharray="1"
+                stroke-dashoffset="1"
+              />
+            </svg>
+          </div>
+            <div id="mark"><span>A</span><span>I</span><span>Z</span><span>U</span></div>
+          </div>
+          <div id="tagline"><span id="tag-text"></span><span id="caret"></span></div>
+        </div>
+      </div>
+    </div>
+
+    <script>
+      gsap.registerPlugin(TextPlugin);
+      window.__timelines = window.__timelines || {};
+      const tl = gsap.timeline({ paused: true });
+
+      const PINCH_AT = 0;
+      const INK_AT = 0.8;
+      const SPARK_AT = 1.42;
+      const MARK_AT = 1.95;
+      const TAG_AT = 2.85;
+      const TAG_DUR = 1.0;
+      const SCENE_END = 5;
+
+      /* 1 · the figure from scene 03 keeps contracting — starting at 0.9, exactly where
+         scene 03 left it, and beginning at t=0 so frame 0 matches the previous scene's
+         last frame. `power2.in` supplies the held beat before it really moves. */
+      tl.fromTo(
+        "#hub",
+        { scale: 0.9 },
+        { scale: 0.22, duration: 0.87, ease: "power2.in" },
+        PINCH_AT,
+      );
+      tl.to("#hub", { opacity: 0, duration: 0.18, ease: "none" }, INK_AT);
+
+      /* scene 03's red pressure glow bleeds away as ink takes the frame */
+      tl.to("#bg-glow", { opacity: 0, duration: 0.85, ease: "sine.in" }, 0.2);
+
+      /* 2 · …and the ink it was made of takes the whole frame */
+      tl.fromTo("#ink", { scale: 0 }, { scale: 1, duration: 0.9, ease: "power3.inOut" }, INK_AT);
+
+      /* 3 · one lime spark survives the collapse — and it turns out to be the dot in
+         AIZU's own mark. The spark hands off to the real logo, whose arc then draws. */
+      tl.fromTo(
+        "#spark",
+        { scale: 0, opacity: 0 },
+        { scale: 1, opacity: 1, duration: 0.4, ease: "power3.out" },
+        SPARK_AT,
+      );
+      /* the hand-off must COMPLETE before the letters rise — otherwise the centre
+         spark is still fading on top of the wordmark */
+      tl.to("#spark", { opacity: 0, duration: 0.16, ease: "none" }, SPARK_AT + 0.3);
+      tl.fromTo(
+        "#mark-icon",
+        { opacity: 0 },
+        { opacity: 1, duration: 0.26, ease: "none" },
+        SPARK_AT + 0.3,
+      );
+      tl.fromTo(
+        "#glyph-arc",
+        { strokeDashoffset: 1 },
+        { strokeDashoffset: 0, duration: 0.85, ease: "power2.inOut" },
+        SPARK_AT + 0.5,
+      );
+
+      /* 4 · letters land out of the spark's line */
+      gsap.utils.toArray("#mark span").forEach((el, i) => {
+        const at = MARK_AT + i * 0.07;
+        tl.set(el, { opacity: 1 }, at);
+        tl.fromTo(el, { y: 250 }, { y: 0, duration: 0.6, ease: "power3.out" }, at);
+      });
+
+      /* 5 · the promise types in */
+      tl.set("#tag-text", { text: "" }, 0);
+      tl.to("#tagline", { opacity: 1, duration: 0.01, ease: "none" }, TAG_AT - 0.05);
+      tl.to(
+        "#tag-text",
+        { text: { value: "Your new sales expert", delimiter: "" }, duration: TAG_DUR, ease: "none" },
+        TAG_AT,
+      );
+
+      const BLINK = 0.4;
+      const WINDOW = SCENE_END - (TAG_AT + TAG_DUR);
+      tl.to(
+        "#caret",
+        {
+          opacity: 0,
+          duration: BLINK,
+          ease: "steps(1)",
+          repeat: Math.max(0, Math.floor(WINDOW / BLINK) - 1),
+          yoyo: true,
+        },
+        TAG_AT + TAG_DUR,
+      );
+
+      window.__timelines["main"] = tl;
+    </script>
+  </body>
+</html>

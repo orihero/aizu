@@ -1,5 +1,5 @@
 /* ============================================================
-   Admin · Pulse rebuild — Overview sample data (ReelRadar)
+   Admin · Pulse rebuild — Overview sample data (Aizu)
    Real domain semantics from the engine: reels seen, relevant,
    matches, cloud spend, call routing, discovery funnel.
    Same numbers feed BOTH the custom-SVG and Recharts pages.

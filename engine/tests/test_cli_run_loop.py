@@ -5,11 +5,14 @@ target, the wall-clock safety cap, or a halt. `_run_one` is faked so no real ses
 Also covers _run_one's feed teardown: each session must close its feed so the next
 session in a multi-session run can attach a fresh Playwright driver."""
 import argparse
+import os
+import tempfile
 
 import pytest
 
-import reelradar.cli as cli
-from reelradar.core.config import ChannelSpec, campaign_from_brief
+import aizu.cli as cli
+from aizu.core.config import ChannelSpec, campaign_from_brief
+from aizu.core.store import COOLDOWN_MAX_SECONDS, Store
 
 
 def _args(**kw):
@@ -156,6 +159,77 @@ def test_run_one_closes_feed_even_on_error(monkeypatch):
         cli._run_one(campaign=_DummyCampaign(), store=None, soul=None,
                      dry_run=False, args=_args())
     assert closed == [True]   # teardown still ran despite the failure
+
+
+def _cooldown_store():
+    fd, path = tempfile.mkstemp(suffix=".db")
+    os.close(fd)
+    return Store(path)
+
+
+def test_run_one_short_circuits_while_cooling_down(monkeypatch):
+    """Gap #1: a prior SOFT halt (action_block/canary) escalated a cooldown for
+    this (campaign, platform) via Store.record_soft_halt. Recorded "just now" its
+    cooldown_until is ~15 minutes out, so _run_one must short-circuit BEFORE ever
+    touching the browser/account again — no resolve_flag, no human step needed."""
+    store = _cooldown_store()
+    try:
+        store.record_soft_halt("c-test", "instagram", "action_block")
+        built = []
+        monkeypatch.setattr(cli, "_build_run_io",
+                            lambda *a, **k: built.append(1) or (object(), object(), object()))
+        summary = cli._run_one(campaign=_DummyCampaign(), store=store, soul=None,
+                               dry_run=False, args=_args())
+        assert "cooling down" in summary["halt_reason"]
+        assert built == []                 # never reached _build_run_io
+    finally:
+        store.close()
+
+
+def test_run_one_proceeds_normally_once_cooldown_elapses(monkeypatch):
+    """Once cooldown_until is in the past, the SAME campaign resumes automatically
+    on the next attempt — the whole point of the self-healing cooldown."""
+    store = _cooldown_store()
+    try:
+        # Escalate with a `now` far enough in the past that even the capped 6h
+        # backoff has already elapsed relative to the real wall clock.
+        import time
+        stale_now = time.time() - COOLDOWN_MAX_SECONDS - 100
+        store.record_soft_halt("c-test", "instagram", "action_block", now=stale_now)
+
+        class SpyFeed:
+            def close(self):
+                pass
+
+        monkeypatch.setattr(cli, "_build_run_io",
+                            lambda *a, **k: (object(), SpyFeed(), object()))
+        monkeypatch.setattr(cli.dispatch, "run_engine_session",
+                            lambda **_k: {"session_id": "s1", "matches": 0, "spend_usd": 0.0})
+        summary = cli._run_one(campaign=_DummyCampaign(), store=store, soul=None,
+                               dry_run=False, args=_args())
+        assert summary.get("halt_reason") is None
+        assert summary["session_id"] == "s1"
+    finally:
+        store.close()
+
+
+def test_run_one_dry_run_bypasses_cooldown_gate(monkeypatch):
+    """Dry runs use the fake feed (no real anti-bot signal ever fires), so a
+    cooldown recorded for a live run must never block a dry run of the same
+    campaign — mirrors the warming kill-switch's own dry-run bypass."""
+    store = _cooldown_store()
+    try:
+        store.record_soft_halt("c-test", "instagram", "action_block")
+        built = []
+        monkeypatch.setattr(cli, "_build_run_io",
+                            lambda *a, **k: built.append(1) or (object(), object(), object()))
+        monkeypatch.setattr(cli.dispatch, "run_engine_session",
+                            lambda **_k: {"session_id": "s1", "matches": 0, "spend_usd": 0.0})
+        cli._run_one(campaign=_DummyCampaign(), store=store, soul=None,
+                     dry_run=True, args=_args(dry_run=True))
+        assert built == [1]                 # the cooldown never gated a dry run
+    finally:
+        store.close()
 
 
 def test_deterministic_platform_does_single_pass(monkeypatch):

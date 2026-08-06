@@ -12,7 +12,7 @@ from pathlib import Path
 
 import pytest
 
-from reelradar.core.store import MAX_SYNC_LEADS, Store
+from aizu.core.store import MAX_SYNC_LEADS, Store
 
 PLAT = "instagram"
 CAP_IG = [[1, PLAT, "acme_handle"]]

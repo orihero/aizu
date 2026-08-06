@@ -1,4 +1,4 @@
-# ReelRadar
+# Aizu
 
 Brief-driven, multi-platform Reel/post-comment lead-discovery agent plus its
 operator panel. Two apps share one SQLite database:
@@ -9,19 +9,32 @@ operator panel. Two apps share one SQLite database:
 | **panel** | [`admin-panel/`](admin-panel/README.md) | React 19 + Vite operator panel; in dev it runs on `:5173` and proxies `/api` → the bridge |
 
 The live Instagram/YouTube/etc. **run** is a third, on-demand process — you start
-it from the panel's **Run** button or `reelradar.cli ... run`. It is *not* a
+it from the panel's **Run** button or `aizu ... run`. It is *not* a
 long-lived server, so the launcher below does not start it.
+
+## Repo layout
+
+| Folder | What's in it |
+| --- | --- |
+| [`engine/`](engine/README.md) | Python engine + bridge server (the `aizu` and `aizu-worker` CLIs) |
+| [`admin-panel/`](admin-panel/README.md) | React operator panel (pure client; talks to the bridge) |
+| [`desktop/`](desktop/README.md) | Tauri desktop shell that packages the worker |
+| [`docs/`](docs/README.md) | Technical reference: architecture, PRDs, integrations, ops |
+| [`marketing/`](marketing/README.md) | Brand work: the explainer video, landing page, treatments |
+| [`mockups/`](mockups/README.md) | Frozen pre-build UI prototypes (not part of the build) |
+| [`memory/`](memory/README.md) | Bug ledger — real gotchas and their fixes |
 
 ## Run everything (one command)
 
 ```bash
-./dev.sh
+./dev.sh          # macOS / Linux
+.\dev.ps1         # Windows (PowerShell)
 ```
 
 This starts both long-lived dev servers with interleaved, color-prefixed logs and
 tears **both** down on `Ctrl+C`:
 
-- `[bridge]` — engine API on `http://127.0.0.1:8765` (auto-restarts on `engine/reelradar/*.py` edits)
+- `[bridge]` — engine API on `http://127.0.0.1:8765` (auto-restarts on `engine/aizu/*.py` edits)
 - `[panel]`  — Vite dev server; open the `http://localhost:5173` URL it prints
 
 ### First-time setup
@@ -43,7 +56,7 @@ engine/.venv/bin/pip install -e engine
 | --- | --- | --- |
 | `BRIDGE_PORT` | `8765` | Port the engine bridge listens on |
 | `BRIDGE_HOST` | `127.0.0.1` | Host the bridge binds to |
-| `DB` | `reelradar.db` | SQLite file the engine/bridge use |
+| `DB` | `aizu.db` | SQLite file the engine/bridge use |
 
 ```bash
 BRIDGE_PORT=8770 DB=staging.db ./dev.sh
@@ -75,7 +88,7 @@ one process:
 ```bash
 (cd admin-panel && npm run build)                 # bundle -> admin-panel/dist
 cd engine
-.venv/bin/python -m reelradar.cli --db reelradar.db panel \
+.venv/bin/python -m aizu.cli --db aizu.db panel \
     --panel-dir ../admin-panel/dist --config config --port 8765
 # open http://127.0.0.1:8765/
 ```
@@ -92,7 +105,7 @@ Three layers, from quietest to loudest:
    (including tracebacks) to `engine/run-logs/run-<id>-<scope>.log`. This is the
    complete record of a single run; open it to see everything that run did.
 3. **Rotating archive** — all engine/bridge logging is also written, ANSI-free, to
-   `engine/logs/reelradar.log` (rotating, DEBUG level — the fullest archive).
+   `engine/logs/aizu.log` (rotating, DEBUG level — the fullest archive).
 
 ### Full firehose (every incoming/outgoing body)
 
@@ -100,14 +113,14 @@ Run the bridge at `DEBUG` to log every request and response **body** (secrets ar
 scrubbed automatically):
 
 ```bash
-REELRADAR_LOG_LEVEL=DEBUG ./dev.sh
+AIZU_LOG_LEVEL=DEBUG ./dev.sh
 ```
 
 | Variable | Values | Effect |
 | --- | --- | --- |
-| `REELRADAR_LOG_LEVEL` | `DEBUG`/`INFO`/`WARNING`/… | Console verbosity (`DEBUG` = body firehose) |
-| `REELRADAR_LOG_FILE` | path / `off` | Override or disable the rotating archive |
-| `REELRADAR_LOG_COLOR` | `auto`/`always`/`never` | Console color |
+| `AIZU_LOG_LEVEL` | `DEBUG`/`INFO`/`WARNING`/… | Console verbosity (`DEBUG` = body firehose) |
+| `AIZU_LOG_FILE` | path / `off` | Override or disable the rotating archive |
+| `AIZU_LOG_COLOR` | `auto`/`always`/`never` | Console color |
 
 > A run that exits non-zero is summarized on `/api/state` (and the panel's
 > last-run line) with the real exception, not a bare `exit 1`. For the complete
@@ -115,6 +128,10 @@ REELRADAR_LOG_LEVEL=DEBUG ./dev.sh
 
 ## More detail
 
+- **Architecture overview** → [`docs/architecture/overview.md`](docs/architecture/overview.md)
+- **Data model / SQLite schema** → [`docs/architecture/data-model.md`](docs/architecture/data-model.md)
+- **HTTP API reference** (`/api/*`) → [`docs/architecture/api-reference.md`](docs/architecture/api-reference.md)
+- **Platform engines** → [`docs/architecture/engines.md`](docs/architecture/engines.md)
 - Engine internals, CLI, campaigns, platforms → [`engine/README.md`](engine/README.md)
 - Panel architecture, scripts, tests → [`admin-panel/README.md`](admin-panel/README.md)
-- Product docs → [`docs/`](docs/)
+- Product specs & PRDs, integrations, ops → [`docs/`](docs/) (see [`docs/README.md`](docs/README.md) for the index)

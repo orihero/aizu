@@ -8,7 +8,7 @@ classification (``TelegramFloodError`` carrying ``is_hard``/``retry_seconds``).
 """
 import pytest
 
-from reelradar.engines.telegram.warming_writes import (
+from aizu.engines.telegram.warming_writes import (
     TelegramFloodError,
     TgChannel,
 )

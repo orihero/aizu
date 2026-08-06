@@ -10,7 +10,7 @@ from pathlib import Path
 
 import pytest
 
-from reelradar.core.store import (EXECUTION_DISTRIBUTED, EXECUTION_IN_PROCESS,
+from aizu.core.store import (EXECUTION_DISTRIBUTED, EXECUTION_IN_PROCESS,
                                    Store)
 
 

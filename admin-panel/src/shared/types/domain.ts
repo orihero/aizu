@@ -51,8 +51,10 @@ import type {
   topCampaignSchema,
 } from '@/shared/schemas/panelState';
 import type {
+  agentReadinessSchema,
   campaignsPayloadSchema,
   dashboardPayloadSchema,
+  launchAgentLoginResponseSchema,
   leadStatsSchema,
   leadsPayloadSchema,
   reportsPayloadSchema,
@@ -146,6 +148,16 @@ export type LeadStats = z.infer<typeof leadStatsSchema>;
 export type LeadsPayload = z.infer<typeof leadsPayloadSchema>;
 export type ReportsPayload = z.infer<typeof reportsPayloadSchema>;
 export type SettingsPayload = z.infer<typeof settingsPayloadSchema>;
+
+/** GET /api/agent/readiness — whether the Instagram warmed-browser agent can run. */
+export type AgentReadiness = z.infer<typeof agentReadinessSchema>;
+/** POST /api/agent/launch-login result: whether a browser was (re)launched, plus the
+ * freshly re-checked readiness (no separate refetch needed after a launch attempt). */
+export type LaunchAgentLoginResult = z.infer<typeof launchAgentLoginResponseSchema>;
+/** Options for getAgentReadiness: `refresh` forces a live probe past the ≤60s cache. */
+export interface AgentReadinessOptions {
+  readonly refresh?: boolean;
+}
 
 /** Server-side leads query: filters/sort live on the server (org-wide + paginated). */
 export interface LeadsQuery {
@@ -256,7 +268,7 @@ export interface CampaignInput {
   readonly budgetCap?: number;
   readonly goalTarget?: number;
   // The matching brief (camelCase). When present, the bridge persists it and the
-  // campaign becomes runnable via `reelradar run --campaign <id>`.
+  // campaign becomes runnable via `aizu run --campaign <id>`.
   readonly brief?: CampaignBriefForm;
 }
 

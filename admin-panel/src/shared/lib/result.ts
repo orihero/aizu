@@ -12,6 +12,11 @@ export interface AppError {
   readonly message: string;
   /** HTTP status when kind === 'http'. */
   readonly status?: number;
+  /** Optional machine-readable discriminator for a specific server error shape a
+   * caller needs to branch on precisely (e.g. 'agent_not_ready') rather than
+   * guessing from `status`/`message` — orthogonal to `kind`, set only by the call
+   * sites that parse a response carrying its own error code. */
+  readonly code?: string;
 }
 
 export const ok = <T>(value: T): Result<T, never> => ({ ok: true, value });
@@ -22,7 +27,13 @@ export const appError = (
   kind: AppError['kind'],
   message: string,
   status?: number,
-): AppError => (status === undefined ? { kind, message } : { kind, message, status });
+  code?: string,
+): AppError => ({
+  kind,
+  message,
+  ...(status === undefined ? {} : { status }),
+  ...(code === undefined ? {} : { code }),
+});
 
 /**
  * Error thrown by `unwrap`. Carries the original AppError so throwing contexts

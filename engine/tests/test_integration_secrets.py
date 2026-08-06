@@ -2,7 +2,7 @@
 
 Covers the Fernet cipher round-trip, the store CRUD, the v7→v8 migration
 (existing integration rows survive; the new secret table appears), and the
-loud behavior when REELRADAR_SECRET_KEY is absent.
+loud behavior when AIZU_SECRET_KEY is absent.
 """
 import os
 import sqlite3
@@ -10,8 +10,8 @@ import tempfile
 
 import pytest
 
-from reelradar.secrets import SecretCipher, SecretCipherError
-from reelradar.core.store import SCHEMA_VERSION, Store
+from aizu.secrets import SecretCipher, SecretCipherError
+from aizu.core.store import SCHEMA_VERSION, Store
 
 
 def _tmp() -> str:
@@ -34,14 +34,14 @@ def test_cipher_round_trips_a_json_dict():
 
 
 def test_cipher_from_env_requires_the_key(monkeypatch):
-    monkeypatch.delenv("REELRADAR_SECRET_KEY", raising=False)
+    monkeypatch.delenv("AIZU_SECRET_KEY", raising=False)
     with pytest.raises(SecretCipherError):
         SecretCipher.from_env()
 
 
 def test_cipher_from_env_reads_the_key(monkeypatch):
     key = SecretCipher.generate_key()
-    monkeypatch.setenv("REELRADAR_SECRET_KEY", key)
+    monkeypatch.setenv("AIZU_SECRET_KEY", key)
     cipher = SecretCipher.from_env()
     assert cipher.decrypt(cipher.encrypt({"x": 1})) == {"x": 1}
 
@@ -118,7 +118,7 @@ def test_secrets_are_org_scoped():
 
 
 def test_secret_methods_require_a_cipher(monkeypatch):
-    monkeypatch.delenv("REELRADAR_SECRET_KEY", raising=False)
+    monkeypatch.delenv("AIZU_SECRET_KEY", raising=False)
     store = Store(_tmp())     # no cipher injected, no env key
     try:
         with pytest.raises(SecretCipherError):

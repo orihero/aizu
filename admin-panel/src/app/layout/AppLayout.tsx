@@ -1,5 +1,6 @@
 import { Outlet } from 'react-router-dom';
 import { Sidebar } from './Sidebar';
+import { AgentReadinessBanner } from './AgentReadinessBanner';
 import { HaltBanner } from './HaltBanner';
 import { ImpersonationBanner } from './ImpersonationBanner';
 
@@ -11,6 +12,7 @@ export function AppLayout() {
         <div className="mx-auto max-w-[1380px] pb-12">
           <ImpersonationBanner />
           <HaltBanner />
+          <AgentReadinessBanner />
           <Outlet />
         </div>
       </main>

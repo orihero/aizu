@@ -154,6 +154,108 @@ describe('HttpPanelRepository.runCampaign', () => {
     expect(result.ok).toBe(false);
     if (!result.ok) expect(result.error.kind).toBe('network');
   });
+
+  test('surfaces a 409 agent-not-ready gate (its own shape, not the write envelope) tagged with code', async () => {
+    mockFetchOnce({
+      ok: false,
+      status: 409,
+      jsonValue: {
+        error: 'agent_not_ready',
+        detail: 'Chrome (CDP) unreachable — launch the login browser first.',
+        readiness: {
+          ready: false, cdp: 'unreachable', instagram: 'unknown',
+          checkedAt: 1_718_800_000, detail: 'connect ECONNREFUSED 127.0.0.1:9222',
+          cdpUrl: 'http://127.0.0.1:9222',
+        },
+      },
+    });
+    const result = await new HttpPanelRepository().runCampaign(RUN_REQUEST);
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error.status).toBe(409);
+      expect(result.error.code).toBe('agent_not_ready');
+      expect(result.error.message).toContain('Chrome (CDP) unreachable');
+    }
+  });
+});
+
+describe('HttpPanelRepository.getAgentReadiness', () => {
+  const READINESS = {
+    ready: true, cdp: 'ok', instagram: 'logged_in',
+    checkedAt: 1_718_800_000, detail: null, cdpUrl: 'http://127.0.0.1:9222',
+  };
+
+  test('GETs the raw readiness dict (no {ok,data,error} envelope)', async () => {
+    mockFetchOnce({ jsonValue: READINESS });
+    const result = await new HttpPanelRepository().getAgentReadiness();
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(result.value).toEqual(READINESS);
+    expect(vi.mocked(fetch).mock.calls[0]?.[0]).toBe('/api/agent/readiness');
+  });
+
+  test('appends refresh=1 when a live probe is requested', async () => {
+    mockFetchOnce({ jsonValue: READINESS });
+    await new HttpPanelRepository().getAgentReadiness({ refresh: true });
+    expect(vi.mocked(fetch).mock.calls[0]?.[0]).toBe('/api/agent/readiness?refresh=1');
+  });
+
+  test('returns an http error for non-2xx responses', async () => {
+    mockFetchOnce({ ok: false, status: 500, jsonValue: {} });
+    const result = await new HttpPanelRepository().getAgentReadiness();
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error).toMatchObject({ kind: 'http', status: 500 });
+  });
+});
+
+describe('HttpPanelRepository.launchAgentLogin', () => {
+  test('POSTs and returns launched + the re-checked readiness on success', async () => {
+    mockFetchOnce({
+      jsonValue: {
+        launched: true,
+        readiness: {
+          ready: false, cdp: 'ok', instagram: 'logged_out',
+          checkedAt: 1_718_800_000, detail: 'awaiting login', cdpUrl: 'http://127.0.0.1:9222',
+        },
+      },
+    });
+    const result = await new HttpPanelRepository().launchAgentLogin();
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.value.launched).toBe(true);
+      expect(result.value.readiness.instagram).toBe('logged_out');
+    }
+    const [url, init] = vi.mocked(fetch).mock.calls[0] ?? [];
+    expect(url).toBe('/api/agent/launch-login');
+    expect(init?.method).toBe('POST');
+  });
+
+  test('surfaces the 500 launch_failed detail message', async () => {
+    mockFetchOnce({
+      ok: false,
+      status: 500,
+      jsonValue: { error: 'launch_failed', detail: 'Chrome executable not found' },
+    });
+    const result = await new HttpPanelRepository().launchAgentLogin();
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error.status).toBe(500);
+      expect(result.error.message).toBe('Chrome executable not found');
+    }
+  });
+
+  test('falls back to a generic message for a 403 (not owner/admin) with no failure body', async () => {
+    mockFetchOnce({ ok: false, status: 403, jsonValue: { ok: false, error: 'forbidden' } });
+    const result = await new HttpPanelRepository().launchAgentLogin();
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error.status).toBe(403);
+  });
+
+  test('returns a network error instead of throwing when fetch rejects', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new Error('ECONNREFUSED')));
+    const result = await new HttpPanelRepository().launchAgentLogin();
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error.kind).toBe('network');
+  });
 });
 
 describe('HttpPanelRepository.fetchRunActivity', () => {

@@ -7,7 +7,7 @@ integration tests live in test_multitenancy_server.py.
 
 Webhook signing is the #1 silent-failure risk; the verify tests below are
 self-consistent (we sign, then verify) — the REAL Polar sandbox vector must be
-pinned here before production cutover (see docs/billing-polar-integration.md §6).
+pinned here before production cutover (see docs/integrations/billing-polar.md §6).
 """
 import base64
 import json
@@ -17,12 +17,12 @@ import time
 
 import pytest
 
-from reelradar import billing
-from reelradar.billing import (
+from aizu import billing
+from aizu.billing import (
     CanonicalBillingEvent, ParseError, PolarClient, PolarConfig,
     BillingConfigError, tier_lead_cap,
 )
-from reelradar.core.store import SCHEMA_VERSION, Store
+from aizu.core.store import SCHEMA_VERSION, Store
 
 
 # ----- fixtures / helpers -----

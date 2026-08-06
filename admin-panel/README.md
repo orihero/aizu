@@ -1,4 +1,4 @@
-# ReelRadar — Admin Panel (React)
+# Aizu — Admin Panel (React)
 
 Production admin panel for the Instagram Reel-Comment Discovery Agent
 (`../instagram-lead-agent-PRD.md`). React 19 · TypeScript (strict) ·
@@ -18,7 +18,7 @@ writes operator status decisions back (`POST /api/status`, keyed on
 ```bash
 # 1. Engine bridge (serves the API and, in production, this app's build)
 cd ../engine
-./.venv/bin/python -m reelradar.cli --db reelradar.db panel \
+./.venv/bin/python -m aizu.cli --db aizu.db panel \
     --panel-dir ../admin-panel/dist --config config --port 8765
 
 # 2a. Production: open http://127.0.0.1:8765/  (after `npm run build`)

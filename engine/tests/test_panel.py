@@ -3,13 +3,13 @@ import os
 import tempfile
 from pathlib import Path
 
-from reelradar.core.config import load_campaign, load_soul
-from reelradar.core.feed import Comment, FakeFeed, Reel
-from reelradar.core.mock_router import MockRouter
-from reelradar.core.pacing import PacingConfig, Pacer
-from reelradar.panel import build_raw
-from reelradar.engines.instagram.session import Session, SessionConfig
-from reelradar.core.store import Store
+from aizu.core.config import load_campaign, load_soul
+from aizu.core.feed import Comment, FakeFeed, Reel
+from aizu.core.mock_router import MockRouter
+from aizu.core.pacing import PacingConfig, Pacer
+from aizu.panel import build_raw
+from aizu.engines.instagram.session import Session, SessionConfig
+from aizu.core.store import Store
 
 CONFIG = Path(__file__).resolve().parents[1] / "config"
 
@@ -96,9 +96,9 @@ def test_config_and_soul_from_brief():
 
 from datetime import datetime
 
-from reelradar.panel import (_all_campaign_platforms, _brief_form_from_campaign,
+from aizu.panel import (_all_campaign_platforms, _brief_form_from_campaign,
                              _brief_form_from_stored, _draft_campaign)
-from reelradar.core.config import campaign_from_brief
+from aizu.core.config import campaign_from_brief
 
 
 def _bare_store():

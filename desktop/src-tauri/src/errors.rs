@@ -18,7 +18,7 @@ pub enum DesktopError {
     #[error("Chrome CDP attach failed: {0}")]
     ChromeAttachFailed(String),
 
-    /// The `reelradar-worker` sidecar binary could not be spawned (missing binary,
+    /// The `aizu-worker` sidecar binary could not be spawned (missing binary,
     /// permission denied, bad path).
     #[error("sidecar spawn failed: {0}")]
     SidecarSpawnFailed(String),

@@ -12,10 +12,10 @@ from pathlib import Path
 
 import pytest
 
-from reelradar import billing
-from reelradar.billing import CheckoutResult, PolarClient, PolarConfig, PortalResult
-from reelradar.server import serve
-from reelradar.core.store import Store
+from aizu import billing
+from aizu.billing import CheckoutResult, PolarClient, PolarConfig, PortalResult
+from aizu.server import serve
+from aizu.core.store import Store
 
 ROOT = Path(__file__).resolve().parents[1]
 CONFIG = ROOT / "config"

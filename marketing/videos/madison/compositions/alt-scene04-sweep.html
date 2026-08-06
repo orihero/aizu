@@ -1,0 +1,339 @@
+<!doctype html>
+<html lang="en" data-resolution="landscape">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=1920, height=1080" />
+    <title>AIZU — Scene 04 · Variant A — Lime Sweep, Ink Bloom</title>
+    <script src="https://cdn.jsdelivr.net/npm/gsap@3.14.2/dist/gsap.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/gsap@3.14.2/dist/TextPlugin.min.js"></script>
+    <style>
+      @font-face {
+        font-family: "Sora";
+        font-style: normal;
+        font-weight: 100 900;
+        font-display: block;
+        src: url("assets/fonts/sora-latin.woff2") format("woff2");
+        unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA,
+          U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193,
+          U+2212, U+2215, U+FEFF, U+FFFD;
+      }
+
+      /* Ink × Lime — DARK palette. The reveal is where the system flips: lime is
+         promoted from accent to primary fill, exactly as the admin panel does. */
+      :root {
+        --light-bg: #eef0f3;
+        --bg: #0e0f14;
+        --text: #f1f2f6;
+        --muted: #a2a7b6;
+        --lime: #d9f24f;
+        --lime-deep: #c3dd1f;
+      }
+
+      * {
+        margin: 0;
+        padding: 0;
+        box-sizing: border-box;
+      }
+      html,
+      body {
+        width: 1920px;
+        height: 1080px;
+        overflow: hidden;
+      }
+      body {
+        font-family: Inter, system-ui, sans-serif;
+      }
+      #root {
+        position: relative;
+        width: 1920px;
+        height: 1080px;
+        overflow: hidden;
+      }
+
+      #bg {
+        position: absolute;
+        inset: 0;
+        background: var(--light-bg);
+      }
+      #bg-dots {
+        position: absolute;
+        inset: 0;
+        background-image: radial-gradient(circle, rgba(22, 22, 26, 0.07) 1.5px, transparent 1.5px);
+        background-size: 46px 46px;
+      }
+
+      #scene {
+        position: absolute;
+        inset: 0;
+      }
+
+      /* ---------- lime sweeps in from opposite corners ---------- */
+      .blob-slot {
+        position: absolute;
+      }
+      .blob {
+        width: 100%;
+        height: 100%;
+        border-radius: 50%;
+        background: var(--lime);
+      }
+      #blob-a-slot {
+        left: 1250px;
+        top: -350px;
+        width: 900px;
+        height: 900px;
+      }
+      #blob-b-slot {
+        left: -260px;
+        top: 700px;
+        width: 760px;
+        height: 760px;
+      }
+
+      /* ---------- ink blooms out of the centre and takes the frame ---------- */
+      #ink-slot {
+        position: absolute;
+        left: -240px;
+        top: -660px;
+        width: 2400px;
+        height: 2400px;
+      }
+      #ink {
+        width: 100%;
+        height: 100%;
+        border-radius: 50%;
+        background: var(--bg);
+      }
+
+      /* ---------- lime holds the corners once ink owns the frame ---------- */
+      .accent-slot {
+        position: absolute;
+      }
+      .accent {
+        width: 100%;
+        height: 100%;
+        border-radius: 50%;
+        background: var(--lime);
+      }
+      #accent-1 {
+        left: 1640px;
+        top: -190px;
+        width: 520px;
+        height: 520px;
+      }
+      #accent-2 {
+        left: -170px;
+        top: 830px;
+        width: 420px;
+        height: 420px;
+      }
+
+      /* ---------- the brand ---------- */
+      #brand {
+        position: absolute;
+        left: 0;
+        right: 0;
+        top: 396px;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+      }
+      /* The real AIZU mark, inlined so the arc can draw. The icon's ink rounded-square
+         is dropped: the whole frame is already ink, so only the dot and arc are needed. */
+      #lockup {
+        display: flex;
+        align-items: center;
+        gap: 34px;
+      }
+      #mark-icon {
+        flex: 0 0 auto;
+        width: 152px;
+        height: 152px;
+        opacity: 0;
+      }
+      #mark-icon svg {
+        display: block;
+        width: 100%;
+        height: 100%;
+        overflow: visible;
+      }
+      #mark {
+        height: 236px;
+        overflow: hidden;
+        font-family: Sora, Inter, sans-serif;
+        font-weight: 700;
+        font-size: 200px;
+        line-height: 236px;
+        letter-spacing: 0.05em;
+        color: var(--lime);
+      }
+      #mark span {
+        display: inline-block;
+        opacity: 0;
+      }
+      #tagline {
+        display: flex;
+        align-items: center;
+        margin-top: 26px;
+        font-family: Sora, Inter, sans-serif;
+        font-weight: 400;
+        font-size: 46px;
+        letter-spacing: 0.01em;
+        color: var(--muted);
+        white-space: nowrap;
+        /* held off until its own beat — otherwise the bare caret hangs in an empty
+           frame through the whole wipe */
+        opacity: 0;
+      }
+      #caret {
+        display: inline-block;
+        width: 3px;
+        height: 50px;
+        margin-left: 4px;
+        background: var(--muted);
+      }
+    </style>
+  </head>
+  <body>
+    <div
+      id="root"
+      data-composition-id="main"
+      data-start="0"
+      data-width="1920"
+      data-height="1080"
+      data-duration="5"
+    >
+      <div id="bg" class="clip" data-start="0" data-duration="5" data-track-index="0">
+        <div id="bg-dots"></div>
+      </div>
+
+      <div id="scene" class="clip" data-start="0" data-duration="5" data-track-index="1">
+        <div id="blob-a-slot" class="blob-slot"><div id="blob-a" class="blob"></div></div>
+        <div id="blob-b-slot" class="blob-slot"><div id="blob-b" class="blob"></div></div>
+
+        <div id="ink-slot"><div id="ink"></div></div>
+
+        <div id="accent-1" class="accent-slot"><div class="accent"></div></div>
+        <div id="accent-2" class="accent-slot"><div class="accent"></div></div>
+
+        <div id="brand">
+          <div id="lockup">
+          <div id="mark-icon">
+            <svg viewBox="0 0 100 100" role="img" aria-label="AIZU">
+              <circle id="glyph-dot" cx="42" cy="60" r="13" fill="#d9f24f" />
+              <path
+                id="glyph-arc"
+                d="M48 36 A26 26 0 0 1 68 69"
+                fill="none"
+                stroke="#ffffff"
+                stroke-width="7"
+                stroke-linecap="round"
+                pathLength="1"
+                stroke-dasharray="1"
+                stroke-dashoffset="1"
+              />
+            </svg>
+          </div>
+            <div id="mark"><span>A</span><span>I</span><span>Z</span><span>U</span></div>
+          </div>
+          <div id="tagline"><span id="tag-text"></span><span id="caret"></span></div>
+        </div>
+      </div>
+    </div>
+
+    <script>
+      gsap.registerPlugin(TextPlugin);
+      window.__timelines = window.__timelines || {};
+      const tl = gsap.timeline({ paused: true });
+
+      const SWEEP_AT = 0.1;
+      const INK_AT = 0.95;
+      const MARK_AT = 1.85;
+      const TAG_AT = 2.75;
+      const TAG_DUR = 1.0;
+      const SCENE_END = 5;
+
+      /* 1 · lime arrives on the light frame */
+      tl.fromTo(
+        "#blob-a",
+        { x: 460, y: -420, scale: 0.7 },
+        { x: 0, y: 0, scale: 1, duration: 0.85, ease: "power3.out" },
+        SWEEP_AT,
+      );
+      tl.fromTo(
+        "#blob-b",
+        { x: -430, y: 420, scale: 0.7 },
+        { x: 0, y: 0, scale: 1, duration: 0.85, ease: "power3.out" },
+        SWEEP_AT + 0.08,
+      );
+
+      /* 2 · ink blooms out of the centre and swallows the old frame */
+      tl.fromTo(
+        "#ink",
+        { scale: 0 },
+        { scale: 1, duration: 0.85, ease: "power3.inOut" },
+        INK_AT,
+      );
+
+      /* 3 · lime returns at the corners, now on top of ink */
+      tl.fromTo(
+        "#accent-1 .accent",
+        { scale: 0.4, opacity: 0 },
+        { scale: 1, opacity: 1, duration: 0.6, ease: "power3.out" },
+        INK_AT + 0.62,
+      );
+      tl.fromTo(
+        "#accent-2 .accent",
+        { scale: 0.4, opacity: 0 },
+        { scale: 1, opacity: 1, duration: 0.6, ease: "power3.out" },
+        INK_AT + 0.74,
+      );
+
+      /* 4 · the mark lands and its arc draws itself */
+      tl.fromTo(
+        "#mark-icon",
+        { opacity: 0, scale: 0.72 },
+        { opacity: 1, scale: 1, duration: 0.55, ease: "power3.out" },
+        MARK_AT - 0.12,
+      );
+      tl.fromTo(
+        "#glyph-arc",
+        { strokeDashoffset: 1 },
+        { strokeDashoffset: 0, duration: 0.78, ease: "power2.inOut" },
+        MARK_AT + 0.18,
+      );
+
+      /* 5 · the wordmark rises out of its own mask — binary opacity, never a fade */
+      gsap.utils.toArray("#mark span").forEach((el, i) => {
+        const at = MARK_AT + i * 0.075;
+        tl.set(el, { opacity: 1 }, at);
+        tl.fromTo(el, { y: 250 }, { y: 0, duration: 0.62, ease: "power3.out" }, at);
+      });
+
+      /* 5 · the promise types in underneath */
+      tl.set("#tag-text", { text: "" }, 0);
+      tl.to("#tagline", { opacity: 1, duration: 0.01, ease: "none" }, TAG_AT - 0.05);
+      tl.to(
+        "#tag-text",
+        { text: { value: "Your new sales expert", delimiter: "" }, duration: TAG_DUR, ease: "none" },
+        TAG_AT,
+      );
+
+      const BLINK = 0.4;
+      const WINDOW = SCENE_END - (TAG_AT + TAG_DUR);
+      tl.to(
+        "#caret",
+        {
+          opacity: 0,
+          duration: BLINK,
+          ease: "steps(1)",
+          repeat: Math.max(0, Math.floor(WINDOW / BLINK) - 1),
+          yoyo: true,
+        },
+        TAG_AT + TAG_DUR,
+      );
+
+      window.__timelines["main"] = tl;
+    </script>
+  </body>
+</html>

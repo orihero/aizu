@@ -19,10 +19,10 @@ from typing import Optional
 import httpx
 import pytest
 
-from reelradar.worker import job_runner, sidecar
-from reelradar.worker.config import WorkerConfig
-from reelradar.worker.lease_client import LeaseClient, Result
-from reelradar.worker.sidecar import Sidecar
+from aizu.worker import job_runner, sidecar
+from aizu.worker.config import WorkerConfig
+from aizu.worker.lease_client import LeaseClient, Result
+from aizu.worker.sidecar import Sidecar
 
 # Bounded wait so a missed/slow beat fails fast instead of hanging the suite.
 _WAIT_TIMEOUT_SEC = 5.0

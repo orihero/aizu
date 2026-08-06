@@ -23,12 +23,12 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT))
 
-from reelradar.cli import _load_env  # noqa: E402
+from aizu.cli import _load_env  # noqa: E402
 _load_env()
-from reelradar.engines.instagram.cascade import _comment_content  # noqa: E402
-from reelradar.core.config import load_campaign  # noqa: E402
-from reelradar.core.feed import Comment, Reel  # noqa: E402
-from reelradar.core.router import (Decision, OpenRouterRouter, _content_or_none,  # noqa: E402
+from aizu.engines.instagram.cascade import _comment_content  # noqa: E402
+from aizu.core.config import load_campaign  # noqa: E402
+from aizu.core.feed import Comment, Reel  # noqa: E402
+from aizu.core.router import (Decision, OpenRouterRouter, _content_or_none,  # noqa: E402
                               _decision_from_payload, _extract_json)
 
 EVAL_DIR = Path(__file__).resolve().parent

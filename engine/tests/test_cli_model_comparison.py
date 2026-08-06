@@ -8,8 +8,8 @@ import tempfile
 
 import pytest
 
-import reelradar.cli as cli
-from reelradar.core.store import Store
+import aizu.cli as cli
+from aizu.core.store import Store
 
 
 class _Campaign:
@@ -29,7 +29,7 @@ def _args():
 @pytest.fixture(autouse=True)
 def _stub_feed_and_creds(monkeypatch):
     monkeypatch.setattr(cli, "_resolve_platform_credentials", lambda *_a, **_k: None)
-    monkeypatch.setattr("reelradar.dispatch.build_feed", lambda *_a, **_k: object())
+    monkeypatch.setattr("aizu.dispatch.build_feed", lambda *_a, **_k: object())
     monkeypatch.setenv("OPENROUTER_API_KEY", "x")
 
 

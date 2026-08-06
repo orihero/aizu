@@ -7,7 +7,7 @@ injects ``http_get``), so the RPC-result→TgChannel mapping and the Telethon-er
 """
 import pytest
 
-from reelradar.engines.telegram.warming_writes import (
+from aizu.engines.telegram.warming_writes import (
     TelegramFloodError,
     TelethonWarmingClient,
 )

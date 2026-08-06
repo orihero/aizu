@@ -21,6 +21,8 @@ import type {
 } from '@/shared/schemas/admin';
 import type {
   AddLeadNoteInput,
+  AgentReadiness,
+  AgentReadinessOptions,
   ArchiveCampaignInput,
   AuthUser,
   BillingPortal,
@@ -41,6 +43,7 @@ import type {
   InviteCreateInput,
   InviteInfo,
   InviteLink,
+  LaunchAgentLoginResult,
   LeadsPayload,
   LeadsQuery,
   OrganizationInput,
@@ -128,6 +131,14 @@ export interface PanelRepository {
   resumeRun(): Promise<Result<void>>;
   /** Poll a run's live activity feed for events with seq > afterSeq (default 0). */
   fetchRunActivity(runId: string, afterSeq?: number): Promise<Result<RunActivity>>;
+  /** GET /api/agent/readiness — whether the Instagram warmed-browser agent (CDP +
+   * logged-in session) can run a live campaign right now. `refresh: true` forces a
+   * live probe past the server's ≤60s cache. */
+  getAgentReadiness(opts?: AgentReadinessOptions): Promise<Result<AgentReadiness>>;
+  /** POST /api/agent/launch-login — spawn/attach Chrome and open a login tab
+   * (RBAC action `fix_agent`: owner+admin only). Returns whether a browser was
+   * launched plus the freshly re-checked readiness. */
+  launchAgentLogin(): Promise<Result<LaunchAgentLoginResult>>;
   updateSettings(input: WorkspaceSettingsInput): Promise<Result<void>>;
   /** Edit the company profile (owner/admin). */
   updateOrganization(input: OrganizationInput): Promise<Result<void>>;
@@ -152,7 +163,7 @@ export interface PanelRepository {
   /** Finish the Telegram login with the SMS/app code (+ 2FA password if required).
    * Resolves with `needsPassword: true` when 2FA is on and no password was sent. */
   verifyTelegramLogin(input: TelegramVerifyInput): Promise<Result<TelegramVerifyResult>>;
-  // ---- billing (v13; ReelRadar's single Polar account, org = customer) ----
+  // ---- billing (v13; Aizu's single Polar account, org = customer) ----
   /** Open a Polar hosted-checkout for a self-serve tier (lite/starter/pro) at the
    * chosen interval; returns the URL to redirect the browser to. */
   openCheckout(input: CheckoutInput): Promise<Result<CheckoutSession>>;

@@ -22,7 +22,7 @@ import {
  * panelState.ts — the single source of truth for each record shape — so the split adds
  * no duplicated field definitions and can't drift from /api/state.
  *
- * Backend contract: engine/reelradar/panel_org.py. Keep the two in sync.
+ * Backend contract: engine/aizu/panel_org.py. Keep the two in sync.
  */
 
 const EMPTY_RUN = { active: null, recent: [] };
@@ -98,6 +98,49 @@ export const runStartResponseSchema = z.object({
     backend: z.string().nullable().catch(null),
   }).nullable().catch(null),
   error: z.string().nullable(),
+});
+
+/**
+ * GET /api/agent/readiness → whether the Instagram warmed-browser agent (CDP + logged-in
+ * session) can run a live campaign right now. A raw keys dict, not the {ok,data,error}
+ * envelope — same shape as the other per-page GETs above. `ready` is server-computed
+ * (cdp==='ok' && instagram==='logged_in'); the panel never re-derives it.
+ * Backend contract: engine/aizu/server.py (agent readiness gate).
+ */
+export const agentReadinessSchema = z.object({
+  ready: z.boolean(),
+  cdp: z.enum(['ok', 'unreachable']),
+  instagram: z.enum(['logged_in', 'logged_out', 'unknown']),
+  checkedAt: z.number(),
+  detail: z.string().nullable(),
+  cdpUrl: z.string(),
+});
+
+/** POST /api/agent/launch-login → attempted to spawn/attach Chrome and open a login
+ * tab (owner/admin only — RBAC action `fix_agent`). Also a raw dict, not the write
+ * envelope: `launched` is true iff a Chrome was spawned or a login tab was opened. */
+export const launchAgentLoginResponseSchema = z.object({
+  launched: z.boolean(),
+  readiness: agentReadinessSchema,
+});
+
+/** The 500 shape POST /api/agent/launch-login returns when Chrome itself couldn't be
+ * started (as opposed to a successful attempt that still leaves the agent unready). */
+export const agentLaunchFailureSchema = z.object({
+  error: z.string(),
+  detail: z.string(),
+});
+
+/**
+ * The 409 gate POST /api/run returns when the CDP/Instagram readiness check fails —
+ * its own shape (not the {ok,data,error} write envelope every other run-control write
+ * uses), carrying the full readiness snapshot so the caller can explain precisely what
+ * is wrong without a second round-trip.
+ */
+export const agentNotReadyResponseSchema = z.object({
+  error: z.literal('agent_not_ready'),
+  detail: z.string(),
+  readiness: agentReadinessSchema,
 });
 
 /** GET /api/reports → org-wide time series + per-campaign rollup + health. */

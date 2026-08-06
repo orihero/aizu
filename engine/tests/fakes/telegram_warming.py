@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from typing import Optional
 
-from reelradar.engines.telegram.warming_writes import TelegramFloodError, TgChannel
+from aizu.engines.telegram.warming_writes import TelegramFloodError, TgChannel
 
 
 class FakeTelegramWarmingPort:

@@ -1,9 +1,9 @@
 import os
 import tempfile
 
-from reelradar.core.router import (OpenRouterRouter, _content_or_none,
+from aizu.core.router import (OpenRouterRouter, _content_or_none,
                               _extract_json, _decision_from_payload)
-from reelradar.core.store import Store
+from aizu.core.store import Store
 
 
 def test_router_model_resolves_explicit_then_env_then_default(monkeypatch):
@@ -71,7 +71,7 @@ def test_spend_guard_degrades_over_cap():
 
 
 def test_post_retries_malformed_200_then_succeeds(monkeypatch):
-    import reelradar.core.router as R
+    import aizu.core.router as R
 
     class FakeResp:
         def __init__(self, body):
@@ -153,7 +153,7 @@ def test_json_mode_latches_off_so_rejection_is_paid_once(monkeypatch):
     """At the real httpx layer: a model that always 400s on response_format costs
     one double-retry storm on the FIRST call, then JSON mode is latched off so
     every later call is a single clean request (no per-call amplification)."""
-    import reelradar.core.router as R
+    import aizu.core.router as R
 
     class FakeResp:
         def __init__(self, status, body):

@@ -10,7 +10,7 @@ from pathlib import Path
 
 import pytest
 
-from reelradar.core.store import Store
+from aizu.core.store import Store
 
 
 @pytest.fixture

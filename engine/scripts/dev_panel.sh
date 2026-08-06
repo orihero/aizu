@@ -5,7 +5,7 @@
 # up as "disconnected" (register → 401). Sourcing it here keeps ONE source of truth: the
 # dev menu writes dispatch-token.secret, and both the worker AND this server read it.
 #
-#   engine/scripts/dev_panel.sh                 # db=reelradar.db, port=8765
+#   engine/scripts/dev_panel.sh                 # db=aizu.db, port=8765
 #   engine/scripts/dev_panel.sh --port 8770     # any dev_panel.py flag is forwarded
 #
 # To rotate the token: set it once in the worker app's dev menu (which rewrites the secret
@@ -16,8 +16,8 @@ ENGINE_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 SECRET="$HOME/Library/Application Support/com.aizu.workerdesktop/dispatch-token.secret"
 
 if [[ -f "$SECRET" ]]; then
-  REELRADAR_WORKER_BOOTSTRAP_TOKEN="$(cat "$SECRET")"
-  export REELRADAR_WORKER_BOOTSTRAP_TOKEN
+  AIZU_WORKER_BOOTSTRAP_TOKEN="$(cat "$SECRET")"
+  export AIZU_WORKER_BOOTSTRAP_TOKEN
   echo "dev_panel: loaded worker bootstrap token from dispatch-token.secret"
 else
   echo "dev_panel: WARN — $SECRET not found; worker first-register will be rejected (401)." >&2

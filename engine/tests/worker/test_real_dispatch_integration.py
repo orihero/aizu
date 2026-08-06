@@ -15,12 +15,12 @@ from pathlib import Path
 
 import pytest
 
-from reelradar.core.store import Store
-from reelradar.secrets import SecretCipher
-from reelradar.server import serve
-from reelradar.worker import job_runner
-from reelradar.worker.config import WorkerConfig
-from reelradar.worker.sidecar import Sidecar
+from aizu.core.store import Store
+from aizu.secrets import SecretCipher
+from aizu.server import serve
+from aizu.worker import job_runner
+from aizu.worker.config import WorkerConfig
+from aizu.worker.sidecar import Sidecar
 
 ROOT = Path(__file__).resolve().parents[2]
 CONFIG = ROOT / "config"
@@ -34,9 +34,9 @@ CAP = (1, "instagram", ACCOUNT)
 def dispatch(tmp_path: Path, monkeypatch):
     """A real server on an ephemeral port with one job pre-enqueued for the worker's
     capability. Bootstrap registration is enabled so the sidecar can first-register."""
-    monkeypatch.setenv("REELRADAR_WORKER_BOOTSTRAP_TOKEN", BOOTSTRAP)
+    monkeypatch.setenv("AIZU_WORKER_BOOTSTRAP_TOKEN", BOOTSTRAP)
     # The sidecar persists its minted token via TokenStore (Fernet, keyed on this).
-    monkeypatch.setenv("REELRADAR_SECRET_KEY", SecretCipher.generate_key())
+    monkeypatch.setenv("AIZU_SECRET_KEY", SecretCipher.generate_key())
     db_path = str(tmp_path / "dispatch.db")
     panel_dir = tmp_path / "spa"
     panel_dir.mkdir()

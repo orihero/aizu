@@ -65,7 +65,7 @@ WORKER PC  (managed; one per warmed account set)
     dashboard · per-account health · checkpoint/2FA prompt (focuses Chrome) ·
     start/stop/pause · log tail · capacity override · auto-update · run-at-login
    └─ supervises ENGINE SIDECAR (the shipped Python engine):
-        pull loop: lease → run reelradar.cli run → heartbeat → ack/nack
+        pull loop: lease → run aizu.cli run → heartbeat → ack/nack
         dispatch.run_engine_session() drives LOCAL Chrome via core/cdp.py (127.0.0.1)
         emits run_events locally → batches to cloud in heartbeat/ack
         holds warmed profile + pinned sticky proxy + fingerprint
@@ -116,7 +116,7 @@ WORKER PC  (managed; one per warmed account set)
 **Form factor: a full desktop application** (GUI) installed on each Mac/Windows box. The app is the supervisor + UI; the existing Python engine runs as a managed **sidecar process** underneath it.
 
 - **Shell:** recommend **Tauri** over Electron — the app must *manage a separate warmed Chrome* (via CDP), so it should NOT bundle a second Chromium. Tauri (system webview + Rust shell) gives small signed binaries, a built-in updater, and a tray/login-item story on both OSes. (Electron is the fallback if the team prefers an all-JS stack.)
-- **Engine runtime:** the existing engine packaged as a sidecar (PyInstaller/pex or pinned runtime), reusing `reelradar.cli run`, `dispatch.run_engine_session()`, `core/cdp.py connect_over_cdp(127.0.0.1)`. The desktop app spawns/supervises it and restarts on crash.
+- **Engine runtime:** the existing engine packaged as a sidecar (PyInstaller/pex or pinned runtime), reusing `aizu.cli run`, `dispatch.run_engine_session()`, `core/cdp.py connect_over_cdp(127.0.0.1)`. The desktop app spawns/supervises it and restarts on crash.
 - **Pull loop:** app (or sidecar) registers → loop{ lease → run job locally → heartbeat-while-running → ack/nack } honoring `drain`/`halt`/`update_required`.
 - **Local UI (the reason for a desktop app):** per-account health dashboard; **checkpoint/2FA/captcha handling** — when IG demands human interaction, surface a notification and a button that focuses the warmed Chrome window so the operator can solve it; start/stop/pause; live local log tail; connection/proxy status; current job + capacity.
 - **Capacity:** self-measure RAM/cores → `hardware_ceiling`; apply `safety_cap`; report `max_sessions`; only lease what it can run (natural backpressure). Operator can override in the app.
@@ -142,7 +142,7 @@ WORKER PC  (managed; one per warmed account set)
 
 ## 11. Phases (shippable, ordered)
 
-1. **Worker engine sidecar + local pull loop (stub dispatch).** Wrap `reelradar.cli run` in a headless pull-loop sidecar that long-polls a stub `/lease`, runs against local Chrome, posts result. Proves the engine runs off-cloud *before* building the desktop shell. *(reuse dispatch.py, cli.py, core/cdp.py)*
+1. **Worker engine sidecar + local pull loop (stub dispatch).** Wrap `aizu.cli run` in a headless pull-loop sidecar that long-polls a stub `/lease`, runs against local Chrome, posts result. Proves the engine runs off-cloud *before* building the desktop shell. *(reuse dispatch.py, cli.py, core/cdp.py)*
 2. **Registry + heartbeat + presence.** `workers` table (v13), register/heartbeat, derived status, `/api/admin/fleet` snapshot.
 3. **Real dispatch + leasing.** `jobs` table, `SKIP LOCKED` lease, heartbeat-extended visibility, ack/nack + dead-letter, capability-aware routing, `run_events` streamed into the existing feed.
 4. **Lifecycle controls.** Drain, kill-switch (wire to existing), per-worker tokens (Fernet), auto-update gating, offline→interrupted→requeue policy + alerting.

@@ -1,7 +1,7 @@
 """Shared helper for worker-plane server tests to authenticate as a platform admin.
 
 Phase 5d moved the fleet / enqueue / control-flags / worker-revoke routes off the
-interim REELRADAR_PLATFORM_ADMINS env allowlist onto the real admin plane (IP-allowlist
+interim AIZU_PLATFORM_ADMINS env allowlist onto the real admin plane (IP-allowlist
 + TOTP + admin session). These helpers seed an admin and mint an rr_admin_session cookie
 so those tests keep exercising the routes over the wire."""
 from __future__ import annotations
@@ -9,11 +9,11 @@ from __future__ import annotations
 import json
 import urllib.request
 
-from reelradar import admin_auth
-from reelradar.admin_auth import ADMIN_IP_ALLOWLIST_ENV
-from reelradar.auth import hash_password
-from reelradar.core.store import Store
-from reelradar.secrets import SECRET_KEY_ENV, SecretCipher
+from aizu import admin_auth
+from aizu.admin_auth import ADMIN_IP_ALLOWLIST_ENV
+from aizu.auth import hash_password
+from aizu.core.store import Store
+from aizu.secrets import SECRET_KEY_ENV, SecretCipher
 
 # One valid Fernet key shared across the worker-plane test modules (test-only).
 ADMIN_KEY = SecretCipher.generate_key()

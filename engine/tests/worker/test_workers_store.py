@@ -6,8 +6,8 @@ import os
 import sqlite3
 import tempfile
 
-from reelradar.auth import hash_session_token, new_session_token
-from reelradar.core.store import (
+from aizu.auth import hash_session_token, new_session_token
+from aizu.core.store import (
     SCHEMA_VERSION,
     WORKER_HEARTBEAT_INTERVAL_SEC,
     Store,
@@ -181,7 +181,7 @@ def test_heartbeat_interval_constants_agree():
     # The status-derivation cadence (core/store.py) and the worker beat cadence
     # (worker/__init__.py) MUST stay equal; they are duplicated by design (no
     # core→worker import). Catch silent divergence at CI time (code review L).
-    from reelradar.worker import DEFAULT_HEARTBEAT_INTERVAL_SEC
+    from aizu.worker import DEFAULT_HEARTBEAT_INTERVAL_SEC
     assert float(DEFAULT_HEARTBEAT_INTERVAL_SEC) == WORKER_HEARTBEAT_INTERVAL_SEC
 
 

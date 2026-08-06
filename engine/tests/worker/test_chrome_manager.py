@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from reelradar.worker.chrome_manager import (ChromeBinaryNotFoundError,
+from aizu.worker.chrome_manager import (ChromeBinaryNotFoundError,
                                              ChromeLaunchError, ChromeManager,
                                              ChromeManagerConfig, ChromeUnhealthyError,
                                              _build_launch_args, resolve_chrome_binary)

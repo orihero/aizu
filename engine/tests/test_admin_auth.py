@@ -1,6 +1,6 @@
 """Admin-plane auth primitives (Phase 5b): TOTP (RFC 6238) + IP-allowlist.
 
-Password hashing / session tokens are reused from reelradar.auth and covered by
+Password hashing / session tokens are reused from aizu.auth and covered by
 test_auth.py; here we only test the admin-specific additions."""
 import base64
 import hashlib
@@ -10,7 +10,7 @@ import time
 
 import pytest
 
-from reelradar import admin_auth
+from aizu import admin_auth
 
 
 # ----- TOTP -----
@@ -151,5 +151,5 @@ def test_effective_ip_skips_a_malformed_hop():
 
 
 def test_admin_session_ttl_is_shorter_than_org_session():
-    from reelradar.auth import SESSION_TTL_SECONDS
+    from aizu.auth import SESSION_TTL_SECONDS
     assert admin_auth.ADMIN_SESSION_TTL_SECONDS < SESSION_TTL_SECONDS

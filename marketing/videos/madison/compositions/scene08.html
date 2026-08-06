@@ -1,0 +1,206 @@
+<!doctype html>
+<html lang="en" data-resolution="landscape">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=1920, height=1080" />
+    <title>AIZU — Scene 08 · The Proof</title>
+    <script src="https://cdn.jsdelivr.net/npm/gsap@3.14.2/dist/gsap.min.js"></script>
+    <style>
+      @font-face {
+        font-family: "Sora";
+        font-style: normal;
+        font-weight: 100 900;
+        font-display: block;
+        src: url("assets/fonts/sora-latin.woff2") format("woff2");
+        unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA,
+          U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193,
+          U+2212, U+2215, U+FEFF, U+FFFD;
+      }
+
+      :root {
+        --bg: #0e0f14;
+        --surface: #181a22;
+        --border: #282c38;
+        --text: #f1f2f6;
+        --muted: #a2a7b6;
+        --lime: #d9f24f;
+        --r-tile: 23px;
+      }
+
+      * {
+        margin: 0;
+        padding: 0;
+        box-sizing: border-box;
+      }
+      html,
+      body {
+        width: 1920px;
+        height: 1080px;
+        overflow: hidden;
+      }
+      body {
+        font-family: Inter, system-ui, sans-serif;
+        color: var(--text);
+      }
+      #root {
+        position: relative;
+        width: 1920px;
+        height: 1080px;
+        overflow: hidden;
+      }
+
+      #bg {
+        position: absolute;
+        inset: 0;
+        background: var(--bg);
+      }
+      #bg-glow {
+        position: absolute;
+        left: 320px;
+        top: 140px;
+        width: 1280px;
+        height: 940px;
+        border-radius: 50%;
+        background: radial-gradient(circle, rgba(217, 242, 79, 0.12), rgba(217, 242, 79, 0) 70%);
+        filter: blur(70px);
+      }
+
+      .cap {
+        position: absolute;
+        left: 0;
+        right: 0;
+        display: flex;
+        justify-content: center;
+      }
+      .cap-inner {
+        display: flex;
+        align-items: center;
+        gap: 16px;
+        padding: 18px 34px;
+        background: var(--surface);
+        border: 1px solid var(--border);
+        border-radius: var(--r-tile);
+        box-shadow: 0 18px 40px rgba(0, 0, 0, 0.45);
+        font-family: Sora, Inter, sans-serif;
+        font-weight: 600;
+        font-size: 32px;
+        letter-spacing: -0.01em;
+        white-space: nowrap;
+        opacity: 0;
+      }
+      .cap-inner svg {
+        display: block;
+        width: 30px;
+        height: 30px;
+      }
+      #cap-1 {
+        top: 176px;
+      }
+      #cap-2 {
+        top: 96px;
+      }
+
+      /* the run feed is upscaled 2× at cut time, so it is shown at its file size */
+      #feed {
+        position: absolute;
+        left: 520px;
+        top: 286px;
+        width: 880px;
+        height: 660px;
+        border-radius: var(--r-tile);
+        border: 1px solid var(--border);
+        object-fit: cover;
+        box-shadow: 0 40px 100px rgba(0, 0, 0, 0.6);
+      }
+
+      /* the leads board is native 1:1 */
+      #board {
+        position: absolute;
+        left: 240px;
+        top: 196px;
+        width: 1440px;
+        height: 810px;
+        border-radius: var(--r-tile);
+        border: 1px solid var(--border);
+        object-fit: cover;
+        box-shadow: 0 40px 100px rgba(0, 0, 0, 0.6);
+      }
+    </style>
+  </head>
+  <body>
+    <div
+      id="root"
+      data-composition-id="main"
+      data-start="0"
+      data-width="1920"
+      data-height="1080"
+      data-duration="6.9"
+    >
+      <div id="bg" class="clip" data-start="0" data-duration="6.9" data-track-index="0">
+        <div id="bg-glow"></div>
+      </div>
+
+      <video
+        id="feed"
+        class="clip"
+        src="assets/capture/run-feed.mp4"
+        data-start="0.15"
+        data-duration="3.05"
+        data-track-index="1"
+        muted
+        playsinline
+      ></video>
+
+      <video
+        id="board"
+        class="clip"
+        src="assets/capture/leads-board.mp4"
+        data-start="3.3"
+        data-duration="3.45"
+        data-track-index="1"
+        muted
+        playsinline
+      ></video>
+
+      <div id="cap-1" class="cap clip" data-start="0.15" data-duration="3.05" data-track-index="2">
+        <div class="cap-inner">
+          <svg viewBox="0 0 24 24" fill="none" stroke="#d9f24f" stroke-width="2">
+            <path d="M20.8 4.6a5.5 5.5 0 0 0-7.8 0L12 5.7l-1-1.1a5.5 5.5 0 0 0-7.8 7.8l1.1 1L12 21l7.7-7.6 1.1-1a5.5 5.5 0 0 0 0-7.8z" />
+          </svg>
+          accounts that reacted to posts like yours
+        </div>
+      </div>
+
+      <div id="cap-2" class="cap clip" data-start="3.3" data-duration="3.6" data-track-index="2">
+        <div class="cap-inner">
+          <svg viewBox="0 0 24 24" fill="none" stroke="#d9f24f" stroke-width="2">
+            <path d="M4 7h16M4 12h10M4 17h6" stroke-linecap="round" />
+          </svg>
+          scored, ranked, ready to work
+        </div>
+      </div>
+    </div>
+
+    <script>
+      window.__timelines = window.__timelines || {};
+      const tl = gsap.timeline({ paused: true });
+
+      /* Only the caption interiors are animated — the videos are .clip elements whose
+         visibility HyperFrames owns, so the beat change is a straight cut. */
+      tl.fromTo(
+        "#cap-1 .cap-inner",
+        { opacity: 0, scale: 0.92, y: -18 },
+        { opacity: 1, scale: 1, y: 0, duration: 0.5, ease: "power3.out" },
+        0.2,
+      );
+      tl.fromTo(
+        "#cap-2 .cap-inner",
+        { opacity: 0, scale: 0.92, y: -18 },
+        { opacity: 1, scale: 1, y: 0, duration: 0.5, ease: "power3.out" },
+        3.35,
+      );
+
+      window.__timelines["main"] = tl;
+    </script>
+  </body>
+</html>

@@ -6,8 +6,8 @@ continue, and per-channel error isolation. The fake switches on the SYNTHETIC
 campaign's `platform` (set by `_campaign_with_channel` for each channel)."""
 import argparse
 
-import reelradar.cli as cli
-from reelradar.core.config import campaign_from_brief
+import aizu.cli as cli
+from aizu.core.config import campaign_from_brief
 
 
 def _args(**kw):

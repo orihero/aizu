@@ -5,7 +5,7 @@ Grouped by area. Each entry: **Symptom** (what you observe) → **Root cause** �
 **How to avoid / detect**. Add new entries at the top of the relevant section; never delete
 (strike through if superseded).
 
-> Sister docs: [`feedback_ui_mistakes.md`](./feedback_ui_mistakes.md) (UI-specific slip-ups),
+> Sister docs: [`feedback-ui-mistakes.md`](./feedback-ui-mistakes.md) (UI-specific slip-ups),
 > [`docs/ops/desktop-packaging.md`](../docs/ops/desktop-packaging.md) (build steps),
 > [`docs/prd/distributed-workers-BUILD-PLAN.md`](../docs/prd/distributed-workers-BUILD-PLAN.md).
 
@@ -43,12 +43,12 @@ prove where the break is, add a temporary `eprintln!` in the Rust poller — if 
 "already running". Per-job log is 0 bytes. Only happens in the packaged/frozen app, not from
 source.
 **Root cause:** The Phase-6 supervisor spawns each job as
-`[sys.executable, "-m", "reelradar.worker.job_child", "--spec-file", X]`. Under a real Python
+`[sys.executable, "-m", "aizu.worker.job_child", "--spec-file", X]`. Under a real Python
 interpreter `-m` runs the module. But in a **PyInstaller frozen binary `sys.executable` is the
 worker binary itself** and the bootloader IGNORES `-m` — so the "child" booted a SECOND sidecar
 (which competes on the control-surface port and is reaped/killed → SIGKILL = rc=-9).
 **Fix:** The frozen entry shim (`desktop/pyinstaller/run_sidecar.py`) now inspects argv: if it
-starts with `-m reelradar.worker.job_child`, it calls `job_child.main(argv[2:])` instead of the
+starts with `-m aizu.worker.job_child`, it calls `job_child.main(argv[2:])` instead of the
 sidecar. Source mode is unaffected (real `python -m`). Requires a **sidecar rebuild**.
 **How to avoid/detect:** Any `subprocess([sys.executable, "-m", ...])` or `multiprocessing`
 "spawn" is a landmine under PyInstaller — the frozen exe is not a Python. Route all self-re-exec
@@ -57,19 +57,19 @@ source (`<binary> -m the.module --help` should behave like the module, not boot 
 
 ### A3. `tauri build` alone produces a broken app (missing sidecar; broken codesign)
 **Symptom:** After a bare `tauri build`, the app can't spawn the worker
-(`sidecar spawn failed: reelradar-worker: No such file or directory`); or `codesign --verify`
+(`sidecar spawn failed: aizu-worker: No such file or directory`); or `codesign --verify`
 fails with "a sealed resource is missing or invalid".
 **Root cause:** The PyInstaller onedir sidecar is embedded MANUALLY (Tauri's `bundle.resources`
 can't ship the onedir tree — `_internal/…` Mach-O → "Not a directory"). `tauri build` doesn't do
 that copy. Separately, LAUNCHING the app writes runtime files into the bundle and breaks the
 code seal.
 **Fix:** Always build via `desktop/scripts/build_macos.sh` (pyinstaller → tauri build → copy
-sidecar into `Contents/Resources/sidecar/reelradar-worker/` → `codesign --force --deep --sign -`
+sidecar into `Contents/Resources/sidecar/aizu-worker/` → `codesign --force --deep --sign -`
 → install to `/Applications`). If you launched the app then need a valid signature, **re-sign**
 before verifying.
 **How to avoid/detect:** Never ship a bare `tauri build` output. `codesign --verify --deep
---strict "<app>"` before distributing; confirm `Contents/Resources/sidecar/reelradar-worker/
-reelradar-worker` exists.
+--strict "<app>"` before distributing; confirm `Contents/Resources/sidecar/aizu-worker/
+aizu-worker` exists.
 
 ### A4. Frozen sidecar: "no venv python found — cannot CDP-probe" (benign)
 **Symptom:** Log line `[chrome] no venv python found — cannot CDP-probe`.
@@ -102,10 +102,10 @@ had registered with **empty `[]` capabilities** — TWO reasons:
 1. `WorkerConfig.from_env` had no capability source (`capabilities: () ` hardcoded), so any
    env/desktop-launched worker always declared nothing.
 2. The desktop app didn't pass any capabilities to the sidecar.
-**Fix:** `from_env` now parses `REELRADAR_WORKER_CAPABILITIES` (JSON `[[org,platform,handle],…]`)
-or `REELRADAR_WORKER_PLATFORMS` (comma list / `all`) into pool-wide `[null, platform, null]`
+**Fix:** `from_env` now parses `AIZU_WORKER_CAPABILITIES` (JSON `[[org,platform,handle],…]`)
+or `AIZU_WORKER_PLATFORMS` (comma list / `all`) into pool-wide `[null, platform, null]`
 caps. Desktop: `DesktopConfig.worker_platforms` (config.toml, default `"all"`) →
-`sidecar_supervisor` sets `REELRADAR_WORKER_PLATFORMS`.
+`sidecar_supervisor` sets `AIZU_WORKER_PLATFORMS`.
 **How to avoid/detect:** Capabilities are OVERWRITTEN on every re-register, and a worker is only
 dispatchable AFTER it declares them. Check `sqlite3 <db> "SELECT capabilities FROM workers"`. A
 bare `from_env` worker still defaults to `()` — only the desktop path defaults to `all`.
@@ -138,16 +138,16 @@ worker is leasing-and-nacking it (look at WHY it nacks). Terminal states (`done`
 ### B4. Job nacks `campaign_not_found` on a real, existing campaign
 **Symptom:** Worker leases the job, runs the child, then nacks `campaign_not_found` for a
 campaign that clearly exists in the panel.
-**Root cause:** The worker resolves the campaign from ITS OWN DB (`REELRADAR_DB`, default =
-app-data `com.aizu.workerdesktop/reelradar.db`, empty), not the server's `engine/reelradar.db`
+**Root cause:** The worker resolves the campaign from ITS OWN DB (`AIZU_DB`, default =
+app-data `com.aizu.workerdesktop/aizu.db`, empty), not the server's `engine/aizu.db`
 where the brief lives. The job spec does NOT carry the campaign brief.
 **Fix (local dev):** Set `db_path` in the worker's `config.toml` to the absolute
-`engine/reelradar.db` (the documented shared-DB local model).
+`engine/aizu.db` (the documented shared-DB local model).
 **OPEN (real remote):** A worker on a different machine can't share the SQLite file — the brief
 must be BAKED INTO THE JOB SPEC (like soul now is). `JobSpec` currently carries no brief; this is
 a real gap for true multi-machine deployment.
 **How to avoid/detect:** Confirm the worker and server agree on the DB:
-`ps -wwE -p <sidecar_pid> | tr ' ' '\n' | grep REELRADAR_DB` vs the server's `--db`.
+`ps -wwE -p <sidecar_pid> | tr ' ' '\n' | grep AIZU_DB` vs the server's `--db`.
 
 ### B5. Job nacks `soul_missing` (or would, on a remote box)
 **Symptom:** Fleet-dispatched job can't find a soul and nacks; a worker with no local `soul.md`
@@ -180,32 +180,32 @@ is NOT sufficient. Consider surfacing a non-zero `halt_reason` when Chrome can't
 
 ### C1. Worker shows "disconnected" / first-register 401 — bootstrap token mismatch
 **Symptom:** Worker can't first-register (401), or shows disconnected in the Fleet page.
-**Root cause:** The server needs the SAME `REELRADAR_WORKER_BOOTSTRAP_TOKEN` the worker presents
+**Root cause:** The server needs the SAME `AIZU_WORKER_BOOTSTRAP_TOKEN` the worker presents
 (from `~/Library/Application Support/com.aizu.workerdesktop/dispatch-token.secret`, written by
 the app's dev menu).
 **Fix:** Launch the server with `engine/scripts/dev_panel.sh` — it sources the token from that
 same secret file (ONE source of truth). Bare `dev_panel.py` does not set it.
 **How to avoid/detect:** Dispatch and panel are the SAME server (`server.py` serves
 `/api/worker/*` and `/api/admin/*`). Point the worker at the panel port (8765). Worker + server
-share `engine/reelradar.db` in local dev.
+share `engine/aizu.db` in local dev.
 
 ### C2. "unknown endpoint" 404 on a route that exists
 **Symptom:** `/api/worker/register` (or any newer route) returns `{"ok":false,"error":"unknown
 endpoint"}` (HTTP 404) even though the code has it.
 **Root cause:** A STALE server process on that port, predating the route (e.g. an old
-`reelradar.cli panel` on 8799, or a no-reload dev bridge). Requests hit the old code.
+`aizu.cli panel` on 8799, or a no-reload dev bridge). Requests hit the old code.
 **How to avoid/detect:** `lsof -nP -iTCP:<port> -sTCP:LISTEN` and `ps -o lstart,command -p <pid>`
 to spot a stale server; kill it and relaunch. Confirm exactly ONE listener on the port.
 
 ### C3. Stale worker token in Keychain after DB wipe
 **Symptom:** Register says "invalid or revoked token" and the server has no bootstrap token.
-**Root cause:** The worker's persisted token (Keychain `reelradar-worker-token` or the encrypted
+**Root cause:** The worker's persisted token (Keychain `aizu-worker-token` or the encrypted
 `worker-token.enc` file) survived a DB reset that dropped its `workers` row.
 **Fix:** Clear it so the worker first-registers via bootstrap:
-`security delete-generic-password -s reelradar-worker-token` (keychain backend) or delete the
+`security delete-generic-password -s aizu-worker-token` (keychain backend) or delete the
 `worker-token.enc` in the worker state dir.
 **Note:** `auto` token backend resolves to **file** (keyring is opt-in via
-`REELRADAR_TOKEN_BACKEND=keyring`) — an unattended box must never risk a blocking Keychain prompt.
+`AIZU_TOKEN_BACKEND=keyring`) — an unattended box must never risk a blocking Keychain prompt.
 
 ### C4. Direct SQL patches to shared registries are blocked / fragile
 **Symptom:** A quick `UPDATE workers SET capabilities=...` to unblock is denied by the safety
@@ -255,6 +255,14 @@ fine at PRD scale, revisit Postgres only past a measured throughput ceiling.
 
 ## Cross-machine deployment gaps still OPEN (not yet fixed)
 
+- **LinkedIn & X live endpoint capture unverified** (blocker for production; needs warmed
+  accounts). The parsers are shape-based and the loop is proven on fixtures, but nobody has
+  confirmed the live selectors/URLs actually fire interception. Capture real response bodies
+  in DevTools (X: `HomeTimeline` / `SearchTimeline` / `ListLatestTimeline` / `TweetDetail` /
+  Quotes; LinkedIn: Voyager feed + comments), drop them as fixtures, and confirm the parsers.
+  X rotates `doc_id`s every ~2–4 weeks, so also confirm the empty-interception canary trips on
+  drift. Full detail in
+  [`docs/archive/handover-linkedin-x-2026-06-29.md`](../docs/archive/handover-linkedin-x-2026-06-29.md) §2A.
 - **Campaign brief not shipped to remote workers** (B4): works locally via shared DB only. Bake
   the brief into the job spec for true multi-machine deployment.
 - **Live exit gate** (B6): a real `target_leads>=1` run producing leads on a warmed, logged-in

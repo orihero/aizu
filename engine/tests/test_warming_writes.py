@@ -11,15 +11,15 @@ import tempfile
 
 import pytest
 
-from reelradar import dispatch
-from reelradar.core import accounts as accounts_lib
-from reelradar.core.accounts import FLAGGED, warming_sentinel_campaign
-from reelradar.core.config import Campaign
-from reelradar.core.feed import FeedSource, Reel
-from reelradar.core.pacing import Pacer, PacingConfig
-from reelradar.core.store import Store
-from reelradar.engines.base import HaltSession
-from reelradar.engines.warming.session import WarmingSession
+from aizu import dispatch
+from aizu.core import accounts as accounts_lib
+from aizu.core.accounts import FLAGGED, warming_sentinel_campaign
+from aizu.core.config import Campaign
+from aizu.core.feed import FeedSource, Reel
+from aizu.core.pacing import Pacer, PacingConfig
+from aizu.core.store import Store
+from aizu.engines.base import HaltSession
+from aizu.engines.warming.session import WarmingSession
 
 _DAY = 86400.0
 

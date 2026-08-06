@@ -5,7 +5,7 @@ import tempfile
 
 import pytest
 
-from reelradar.core.accounts import (
+from aizu.core.accounts import (
     ACTIVE,
     COOLING,
     FLAGGED,
@@ -15,8 +15,8 @@ from reelradar.core.accounts import (
     WARMING,
     warming_sentinel_campaign,
 )
-from reelradar.core.store import Store
-from reelradar.secrets import SecretCipher
+from aizu.core.store import Store
+from aizu.secrets import SecretCipher
 
 
 def fresh_store(with_cipher=False):

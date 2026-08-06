@@ -5,7 +5,7 @@ from __future__ import annotations
 import httpx
 import pytest
 
-from reelradar.worker.lease_client import LeaseClient, Result
+from aizu.worker.lease_client import LeaseClient, Result
 
 
 def _client(handler) -> LeaseClient:

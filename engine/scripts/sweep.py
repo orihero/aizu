@@ -12,16 +12,16 @@ import time
 import urllib.request
 from pathlib import Path
 
-from reelradar.cli import _load_env
+from aizu.cli import _load_env
 _load_env()
-from reelradar.core.config import load_campaign, load_soul
-from reelradar.engines.instagram.cdp import CDPConfig, CDPFeed
-from reelradar.core.pacing import Pacer, PacingConfig
-from reelradar.core.router import OpenRouterRouter
-from reelradar.engines.instagram.session import HaltSession, Session, SessionConfig
-from reelradar.core.store import Store
+from aizu.core.config import load_campaign, load_soul
+from aizu.engines.instagram.cdp import CDPConfig, CDPFeed
+from aizu.core.pacing import Pacer, PacingConfig
+from aizu.core.router import OpenRouterRouter
+from aizu.engines.instagram.session import HaltSession, Session, SessionConfig
+from aizu.core.store import Store
 
-DB = "reelradar.db"
+DB = "aizu.db"
 CDP_URL = "http://127.0.0.1:9333"
 TARGET_REELS = 100
 REELS_PER_SESSION = 25

@@ -11,7 +11,7 @@ from pathlib import Path
 
 import pytest
 
-from reelradar.core.store import (DEFAULT_JOB_MAX_ATTEMPTS, Store,
+from aizu.core.store import (DEFAULT_JOB_MAX_ATTEMPTS, Store,
                                    WORKER_PINNED_DEAD_LETTER_SEC,
                                    WORKER_RECLAIM_ALERT_SEC,
                                    WORKER_RECLAIM_OFFLINE_SEC,
@@ -194,7 +194,7 @@ def test_reclaim_no_alert_below_threshold(store: Store):
 # ----- ReclaimManager daemon -----------------------------------------------------
 
 def test_reclaim_manager_tick_reclaims(tmp_path: Path):
-    from reelradar.reclaim_manager import ReclaimManager
+    from aizu.reclaim_manager import ReclaimManager
     db = str(tmp_path / "rm.db")
     s = Store(db)
     _worker(s, "w1", "acct", last_hb=1000.0)
@@ -211,7 +211,7 @@ def test_reclaim_manager_tick_reclaims(tmp_path: Path):
 
 
 def test_reclaim_manager_tick_noop_when_nothing_stranded(tmp_path: Path):
-    from reelradar.reclaim_manager import ReclaimManager
+    from aizu.reclaim_manager import ReclaimManager
     db = str(tmp_path / "rm2.db")
     s = Store(db)
     _worker(s, "w1", "acct", last_hb=1000.0)
@@ -295,6 +295,31 @@ def test_reconcile_reclaims_session_of_dead_lettered_job(store: Store):
     n = store.reconcile_orphan_sessions(now=5000.0)
     assert n == 1
     assert store.get_session("s-deadJob")["status"] == "halted"
+
+
+# ----- v20: active_run_ids exclusion (periodic-safe reconcile, SessionWatchdog) --
+
+
+def test_reconcile_excludes_session_of_currently_active_in_process_run(store: Store):
+    # A 'running' session whose run_id is NOT in the jobs table at all (an
+    # in-process RunManager run, never a fleet job) must still be spared when its
+    # run_id is passed as currently active — this is what makes it safe for
+    # SessionWatchdog to call reconcile_orphan_sessions every tick, not just once
+    # at startup.
+    _running_session(store, "s-active", run_id="run-inproc")
+    n = store.reconcile_orphan_sessions(now=5000.0, active_run_ids=frozenset({"run-inproc"}))
+    assert n == 0
+    assert store.get_session("s-active")["status"] == "running"
+
+
+def test_reconcile_reclaims_once_active_run_ids_no_longer_includes_it(store: Store):
+    # The same session, once its run is no longer the active one (e.g. the next
+    # tick after the run finished without closing its session row) — no longer
+    # protected, gets reconciled exactly like any other stale session.
+    _running_session(store, "s-nowstale", run_id="run-inproc")
+    n = store.reconcile_orphan_sessions(now=5000.0, active_run_ids=frozenset())
+    assert n == 1
+    assert store.get_session("s-nowstale")["status"] == "halted"
 
 
 # ----- job-failure paths close the orphaned session (no restart needed) ----------

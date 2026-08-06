@@ -10,10 +10,10 @@ import types
 
 import pytest
 
-from reelradar import cli
-from reelradar.core.config import campaign_from_brief
-from reelradar.secrets import SecretCipher
-from reelradar.core.store import Store
+from aizu import cli
+from aizu.core.config import campaign_from_brief
+from aizu.secrets import SecretCipher
+from aizu.core.store import Store
 
 
 # ----- classifier -----
@@ -65,7 +65,7 @@ def test_run_one_flags_needs_reconnect_on_live_auth_error(monkeypatch):
     # Simulate the feed raising an auth error during construction (invalid key).
     def _boom(*a, **k):
         raise RuntimeError("youtube credentials missing api_key — reconnect")
-    monkeypatch.setattr("reelradar.dispatch.build_feed", _boom)
+    monkeypatch.setattr("aizu.dispatch.build_feed", _boom)
 
     campaign = campaign_from_brief("c1", {"platform": "youtube", "seed_hashtags": ["q"]})
     try:
@@ -85,7 +85,7 @@ def test_run_one_does_not_flag_on_non_auth_error(monkeypatch):
 
     def _boom(*a, **k):
         raise RuntimeError("transient network blip")
-    monkeypatch.setattr("reelradar.dispatch.build_feed", _boom)
+    monkeypatch.setattr("aizu.dispatch.build_feed", _boom)
 
     campaign = campaign_from_brief("c1", {"platform": "youtube", "seed_hashtags": ["q"]})
     try:

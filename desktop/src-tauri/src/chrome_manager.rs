@@ -1,6 +1,6 @@
 //! Managed Chrome lifecycle for the desktop shell (Phase 6 SCAFFOLD, UNCOMPILED).
 //!
-//! Rust mirror of `reelradar.worker.chrome_manager.ChromeManager` and
+//! Rust mirror of `aizu.worker.chrome_manager.ChromeManager` and
 //! `engine/scripts/warm_chrome.sh`. Owns exactly ONE warmed, logged-in Chrome per box:
 //!
 //!   - **`ensure_running`**: reuse an existing attachable Chrome if one is up, else launch
@@ -255,7 +255,7 @@ fn cdp_attaches(cdp_url: &str, timeout_sec: u64) -> bool {
 /// engineer wires the exact relative location at packaging time (the frozen sidecar ships
 /// its own Playwright; for a dev build this points at engine/.venv).
 fn venv_python() -> Option<PathBuf> {
-    if let Ok(explicit) = std::env::var("REELRADAR_VENV_PYTHON") {
+    if let Ok(explicit) = std::env::var("AIZU_VENV_PYTHON") {
         let p = PathBuf::from(explicit);
         if p.exists() {
             return Some(p);

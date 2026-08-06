@@ -6,7 +6,7 @@ import time
 
 import pytest
 
-from reelradar.runner import (RunManager, RunSpec, build_argv, _error_detail,
+from aizu.runner import (RunManager, RunSpec, build_argv, _error_detail,
                               _summarize)
 
 
@@ -18,7 +18,7 @@ def _idx(argv, token):
 
 def test_build_argv_single_dry():
     argv = build_argv(RunSpec("campaign", "c1", "dry"), "py", "/db", "/cfg")
-    assert argv == ["py", "-m", "reelradar.cli", "--db", "/db",
+    assert argv == ["py", "-m", "aizu.cli", "--db", "/db",
                     "run", "--config", "/cfg", "--campaign", "c1", "--dry-run"]
 
 
@@ -235,7 +235,7 @@ def test_pause_resume_round_trip_on_one_path(tmp_path):
     active, _ = mgr.launch(RunSpec("campaign", "ca", "live", org_id=1))
 
     # The env the child got points at exactly the file pause() creates.
-    pause_env = spawner.calls[0]["env"]["REELRADAR_PAUSE_FILE"]
+    pause_env = spawner.calls[0]["env"]["AIZU_PAUSE_FILE"]
     assert mgr.pause(org_id=1) == (True, None)
     assert pause_env == str(mgr._pause_path(active.run_id))
     assert mgr.status(org_id=1)["active"]["paused"] is True
@@ -312,15 +312,15 @@ def test_launch_passes_env_and_argv(tmp_path, monkeypatch):
 
 
 def test_launch_injects_run_id_and_org_into_env(tmp_path):
-    """v10: the engine subprocess gets REELRADAR_RUN_ID (and the launching org) so it
+    """v10: the engine subprocess gets AIZU_RUN_ID (and the launching org) so it
     can correlate its run-activity events back to this run. run_id matches status()."""
     spawner = FakeSpawner()
     mgr = _manager(spawner, tmp_path)
     active, _ = mgr.launch(RunSpec("campaign", "c1", "dry", org_id=7))
     _wait_idle(mgr)
     env = spawner.calls[0]["env"]
-    assert env["REELRADAR_RUN_ID"] == active.run_id
-    assert env["REELRADAR_ORG_ID"] == "7"
+    assert env["AIZU_RUN_ID"] == active.run_id
+    assert env["AIZU_ORG_ID"] == "7"
 
 
 def test_launch_omits_org_env_when_unset(tmp_path):
@@ -329,8 +329,8 @@ def test_launch_omits_org_env_when_unset(tmp_path):
     mgr.launch(RunSpec("all", None, "dry"))   # no org_id
     _wait_idle(mgr)
     env = spawner.calls[0]["env"]
-    assert "REELRADAR_RUN_ID" in env
-    assert "REELRADAR_ORG_ID" not in env
+    assert "AIZU_RUN_ID" in env
+    assert "AIZU_ORG_ID" not in env
 
 
 def test_status_active_includes_run_id(tmp_path):
@@ -393,9 +393,9 @@ def test_stop_is_org_scoped(tmp_path):
 _CDP_TRACEBACK = """\
 Traceback (most recent call last):
   File "<frozen runpy>", line 198, in _run_module_as_main
-  File "/engine/reelradar/cli.py", line 106, in _build_run_io
+  File "/engine/aizu/cli.py", line 106, in _build_run_io
     feed = build_feed(campaign.platform, cdp_url=args.cdp_url)
-  File "/engine/reelradar/cdp.py", line 113, in attach
+  File "/engine/aizu/cdp.py", line 113, in attach
     self._browser = self._pw.chromium.connect_over_cdp(self.cfg.cdp_url)
 playwright._impl._errors.Error: BrowserType.connect_over_cdp: connect ECONNREFUSED 127.0.0.1:9333
 Call log:
