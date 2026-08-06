@@ -83,8 +83,8 @@ the new-campaign wizard should be treated as provisional and re-shot before fina
 
 ### There was an earlier promo-video project
 
-`D:\video\_retired-aizu-video-projects\aizu-demo\` (retired 2026-08-06 and moved out of the Aizu
-repo, but kept on disk) is a separate, earlier **HyperFrames** project — its own
+`D:\video\_retired-aizu-video-projects\aizu-demo\` (retired 2026-08-06 and moved out of the
+Aizu repo, but kept on disk) is a separate, earlier **HyperFrames** project — its own
 `script.md`, `DESIGN.md`, `motion-library.md`, `timing-map.json`, compositions, four renders
 (2026-08-05), and a **Playwright capture harness** (`capture/`, with `node_modules` installed) that
 produced ten 1920×1080/30fps captures in `assets/captures/`:

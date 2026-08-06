@@ -90,8 +90,12 @@ def check(only=None):
     from faster_whisper import WhisperModel
 
     rows = load_lines(only)
-    print("[asr] loading faster-whisper large-v3", flush=True)
-    model = WhisperModel("large-v3", device="cuda", compute_type="float16")
+    # CPU on purpose: ctranslate2 4.8 links against CUDA 12 (cublas64_12.dll) while this
+    # venv's torch is cu130, so the GPU path raises on first use — and because
+    # transcribe() returns a lazy generator, it raises when consumed, not when created.
+    # These are ~5s clips, so int8 on CPU is fast enough to not be worth fixing.
+    print("[asr] loading faster-whisper large-v3 (cpu/int8)", flush=True)
+    model = WhisperModel("large-v3", device="cpu", compute_type="int8")
 
     print()
     print(f"{'line':<10}{'audio':>8}  transcript / notes")

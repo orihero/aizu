@@ -18,7 +18,7 @@
     {
       "id": "scene03",
       "text": "Managing them yourself is a full-time job. Hiring someone to do it is another headache.",
-      "speak": "Managing them yourself is a full-time job. Hiring someone to do it is another headache."
+      "speak": "Managing them yourself is a full-time job. And hiring someone to do it for you is another headache."
     },
     {
       "id": "scene04",
@@ -33,7 +33,7 @@
     {
       "id": "scene06",
       "text": "It's simple. Just create a campaign with our AI-powered campaign creator,",
-      "speak": "It's simple. Just create a campaign with our A.I. powered campaign creator."
+      "speak": "It's simple. Just create a campaign with our AI-powered campaign creator."
     },
     {
       "id": "scene07",
@@ -58,7 +58,7 @@
     {
       "id": "scene11",
       "text": "Ready to acquire new customers without headaches and crazy cost? Go to AIZU.UZ",
-      "speak": "Ready to acquire new customers without headaches and crazy cost? Go to Aizoo dot U Z."
+      "speak": "Ready to acquire new customers without headaches and crazy cost? So go to Aizoo dot U Z today."
     }
   ]
 }
