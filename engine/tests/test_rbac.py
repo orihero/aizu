@@ -24,6 +24,7 @@ EXPECTED = {
     "manage_member":      {"owner", "admin"},
     "manage_admin":       {"owner"},
     "transfer_ownership": {"owner"},
+    "fix_agent":          {"owner", "admin"},
 }
 
 

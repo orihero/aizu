@@ -1,0 +1,154 @@
+name: CI/CD
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+# Never let two deploys race onto the box.
+concurrency:
+  group: ci-cd-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  engine:
+    name: Engine tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+
+      - name: Install engine
+        run: pip install -e "./engine[dev]"
+
+      - name: pytest
+        working-directory: engine
+        run: pytest -q
+
+  panel:
+    name: Panel checks + build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+          cache-dependency-path: admin-panel/package-lock.json
+
+      - name: Install
+        working-directory: admin-panel
+        run: npm ci
+
+      - name: Typecheck
+        working-directory: admin-panel
+        run: npm run typecheck
+
+      - name: Lint
+        working-directory: admin-panel
+        run: npm run lint
+
+      - name: Test
+        working-directory: admin-panel
+        run: npm test
+
+      - name: Build
+        working-directory: admin-panel
+        run: npm run build
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: panel-dist
+          path: admin-panel/dist
+          retention-days: 7
+
+  deploy:
+    name: Deploy to VDS
+    needs: [engine, panel]
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: panel-dist
+          path: admin-panel/dist
+
+      - name: Configure SSH
+        env:
+          DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+          DEPLOY_KNOWN_HOSTS: ${{ secrets.DEPLOY_KNOWN_HOSTS }}
+        run: |
+          mkdir -p ~/.ssh
+          printf '%s\n' "$DEPLOY_SSH_KEY" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          printf '%s\n' "$DEPLOY_KNOWN_HOSTS" > ~/.ssh/known_hosts
+          chmod 644 ~/.ssh/known_hosts
+
+      - name: Ship engine source
+        env:
+          HOST: ${{ secrets.DEPLOY_HOST }}
+          PORT: ${{ secrets.DEPLOY_PORT }}
+          USER: ${{ secrets.DEPLOY_USER }}
+        run: |
+          rsync -az --delete \
+            --exclude='__pycache__/' \
+            --exclude='*.pyc' \
+            --exclude='*.egg-info/' \
+            --exclude='*.db' \
+            --exclude='*.log' \
+            --exclude='run-logs/' \
+            --exclude='.venv/' \
+            -e "ssh -i ~/.ssh/deploy_key -p $PORT -o BatchMode=yes" \
+            engine/ "$USER@$HOST:/opt/aizu/engine/"
+
+      - name: Ship built panel
+        env:
+          HOST: ${{ secrets.DEPLOY_HOST }}
+          PORT: ${{ secrets.DEPLOY_PORT }}
+          USER: ${{ secrets.DEPLOY_USER }}
+        run: |
+          rsync -az --delete \
+            -e "ssh -i ~/.ssh/deploy_key -p $PORT -o BatchMode=yes" \
+            admin-panel/dist/ "$USER@$HOST:/opt/aizu/panel/"
+
+      - name: Sync dependencies and restart
+        env:
+          HOST: ${{ secrets.DEPLOY_HOST }}
+          PORT: ${{ secrets.DEPLOY_PORT }}
+          USER: ${{ secrets.DEPLOY_USER }}
+        run: |
+          ssh -i ~/.ssh/deploy_key -p "$PORT" -o BatchMode=yes "$USER@$HOST" bash -eu <<'REMOTE'
+            # Re-run the editable install so dependency changes in pyproject.toml land.
+            /opt/aizu/venv/bin/pip install --quiet --upgrade-strategy only-if-needed -e /opt/aizu/engine
+            sudo -n /usr/bin/systemctl restart aizu
+          REMOTE
+
+      - name: Health check
+        env:
+          HOST: ${{ secrets.DEPLOY_HOST }}
+          PORT: ${{ secrets.DEPLOY_PORT }}
+          USER: ${{ secrets.DEPLOY_USER }}
+        run: |
+          ssh -i ~/.ssh/deploy_key -p "$PORT" -o BatchMode=yes "$USER@$HOST" bash -eu <<'REMOTE'
+            for i in $(seq 1 20); do
+              code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 5 http://127.0.0.1:8765/ || true)
+              if [ "$code" = "200" ]; then
+                echo "healthy after ${i}s (HTTP $code)"
+                sudo -n /usr/bin/systemctl is-active aizu
+                exit 0
+              fi
+              sleep 1
+            done
+            echo "service did not become healthy; last code=$code" >&2
+            exit 1
+          REMOTE

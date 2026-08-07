@@ -173,7 +173,6 @@ export function ModelPerformancePage() {
                     </thead>
                     <tbody>
                       {recent.map((c, i) => (
-                        // eslint-disable-next-line react/no-array-index-key -- no stable id on a log row
                         <tr key={`${c.campaign_id}-${c.model}-${c.created_at}-${i}`}
                           className="border-b border-border last:border-0">
                           <td className="whitespace-nowrap px-4 py-2.5 text-xs text-text-muted">
