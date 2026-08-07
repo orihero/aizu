@@ -52,7 +52,7 @@ Superadmins are created out-of-band only: `python -m aizu.admin_bootstrap --db <
 
 ## How to test
 
-- Engine: `cd engine && engine/.venv/bin/pytest` (tests under `engine/tests/`; install `.[dev]` first). Marker `slow` covers end-to-end tests that spawn a real subprocess.
+- Engine: `cd engine && engine/.venv/bin/python -m pytest` (tests under `engine/tests/`; install `.[dev]` first). Marker `slow` covers end-to-end tests that spawn a real subprocess. Use `python -m pytest`, not the bare `pytest` script: `test_telegram_warming_*.py` import `tests.fakes.telegram_warming`, and with no `tests/__init__.py` that namespace package only resolves when `engine/` is on `sys.path` — which `python -m` provides and the console script does not.
 - Panel: `cd admin-panel && npm test` (Vitest, one-shot); `npm run test:watch`, `npm run test:coverage`. Also `npm run typecheck` (strict `tsc -b`) and `npm run lint` (`eslint src`). Tests colocate with source under `src/**` and inject a fake repository through the DI seam.
 
 ## Key conventions

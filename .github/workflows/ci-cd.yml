@@ -29,7 +29,11 @@ jobs:
 
       - name: pytest
         working-directory: engine
-        run: pytest -q
+        # `python -m pytest`, not bare `pytest`: test_telegram_warming_*.py import
+        # `tests.fakes.telegram_warming`, and `tests` is only a namespace package
+        # (no tests/__init__.py), so it resolves solely when engine/ is on sys.path.
+        # `python -m` puts the CWD there; the bare console script does not.
+        run: python -m pytest -q
 
   panel:
     name: Panel checks + build
