@@ -40,6 +40,7 @@ Requires Python ≥3.10 and Node. First-time setup:
 - `AIZU_CDP_URL` — CDP attach URL for warmed Chrome (default `http://127.0.0.1:9222`).
 - `AIZU_SECRET_KEY` — Fernet key (32 bytes, urlsafe-base64) for per-org integration secrets and admin TOTP; required for integrations and admin bootstrap/login.
 - `AIZU_ADMIN_IP_ALLOWLIST` — CSV IPs/CIDRs for the superadmin plane; empty/unset = fail-closed (no admin access). `AIZU_TRUSTED_PROXIES` gates `X-Forwarded-For`.
+- `AIZU_ALLOWED_ORIGINS` — CSV of exact `scheme://host[:port]` origins the panel is served from on a hosted deployment (e.g. `https://aizu.uz`). Loopback is always allowed, so local-first runs need this unset; without it a network-served panel gets `403 cross-origin request rejected` on every POST.
 - `AIZU_WARMING_ENABLED` — layer-1 warming hard-stop (default off). `AIZU_IGNORE_DAYTIME` — disable daytime write guard (testing).
 - Worker plane: `AIZU_DISPATCH_URL` (required), `AIZU_WORKER_BOOTSTRAP_TOKEN`, `AIZU_DB` (default `aizu.db`), `AIZU_WORKER_STATE` (default `.worker-state`), `AIZU_SPEND_CAP`, `AIZU_CONTROL_SURFACE`/`AIZU_CONTROL_TOKEN`.
 - Billing (Polar, optional; missing ⇒ billing disabled): `POLAR_ACCESS_TOKEN`, `POLAR_WEBHOOK_SECRET`, `POLAR_SERVER` (default `sandbox`), `POLAR_PRODUCTS`.

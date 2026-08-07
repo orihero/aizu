@@ -18,6 +18,7 @@ from aizu.core.feed import Comment, FakeFeed, Reel
 from aizu.core.mock_router import MockRouter
 from aizu.core.pacing import PacingConfig, Pacer
 from aizu.runner import RunManager
+from aizu import server
 from aizu.server import serve
 from aizu.engines.instagram.session import Session, SessionConfig
 from aizu.core.store import Store
@@ -288,6 +289,65 @@ def test_status_write_local_origin_allowed(panel):
         method="POST")
     with urllib.request.urlopen(req) as resp:
         assert resp.status == 200
+
+
+# --- AIZU_ALLOWED_ORIGINS: hosted deployments serve the panel off-loopback ---
+
+def test_allowed_origin_env_is_opt_in(monkeypatch):
+    """Unset (the local-first default) keeps the loopback-only posture."""
+    monkeypatch.delenv(server.ALLOWED_ORIGINS_ENV, raising=False)
+    assert server._is_allowed_origin("http://127.0.0.1:5173")
+    assert not server._is_allowed_origin("https://aizu.uz")
+
+
+def test_allowed_origin_env_admits_named_origins(monkeypatch):
+    monkeypatch.setenv(server.ALLOWED_ORIGINS_ENV,
+                       "https://aizu.uz, http://192.166.228.52:780")
+    assert server._is_allowed_origin("https://aizu.uz")
+    assert server._is_allowed_origin("http://192.166.228.52:780")
+    assert server._is_allowed_origin("https://AIZU.UZ")       # RFC 6454: case-insensitive
+    assert server._is_allowed_origin("https://aizu.uz/")      # trailing slash trimmed
+    # Loopback still works alongside a configured allowlist.
+    assert server._is_allowed_origin("http://localhost:5173")
+
+
+def test_allowed_origin_env_matches_whole_origin_only(monkeypatch):
+    """A lookalike must never satisfy the guard by prefix/suffix or wrong port."""
+    monkeypatch.setenv(server.ALLOWED_ORIGINS_ENV, "https://aizu.uz")
+    for hostile in ["https://aizu.uz.evil.com", "https://evil.com/https://aizu.uz",
+                    "https://notaizu.uz", "http://aizu.uz", "https://aizu.uz:8443"]:
+        assert not server._is_allowed_origin(hostile), hostile
+
+
+def test_post_from_configured_origin_allowed(panel, monkeypatch):
+    monkeypatch.setenv(server.ALLOWED_ORIGINS_ENV, "https://panel.example")
+    req = urllib.request.Request(
+        panel["base"] + "/api/status",
+        data=json.dumps({"campaignId": _campaign_id(), "commentId": "c1",
+                         "status": "in_progress"}).encode(),
+        headers={"Content-Type": "application/json",
+                 "Origin": "https://panel.example", "Cookie": panel["cookie"]},
+        method="POST")
+    with urllib.request.urlopen(req) as resp:
+        assert resp.status == 200
+        assert resp.headers["Access-Control-Allow-Origin"] == "https://panel.example"
+
+
+def test_post_from_unlisted_origin_still_rejected(panel, monkeypatch):
+    monkeypatch.setenv(server.ALLOWED_ORIGINS_ENV, "https://panel.example")
+    req = urllib.request.Request(
+        panel["base"] + "/api/status",
+        data=json.dumps({"campaignId": _campaign_id(), "commentId": "c1",
+                         "status": "in_progress"}).encode(),
+        headers={"Content-Type": "application/json",
+                 "Origin": "https://evil.example", "Cookie": panel["cookie"]},
+        method="POST")
+    try:
+        with urllib.request.urlopen(req) as resp:
+            code = resp.status
+    except urllib.error.HTTPError as e:
+        code = e.code
+    assert code == 403
 
 
 def test_post_unknown_path_404(panel):

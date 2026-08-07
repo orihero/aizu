@@ -228,9 +228,28 @@ _BULK_MAX = 500
 # can't satisfy a naive startswith and slip past the cross-origin guard.
 _LOCAL_ORIGIN_RE = re.compile(r"^https?://(127\.0\.0\.1|localhost|\[::1\])(:\d+)?$")
 
+# Origins a hosted deployment serves the panel from, beyond loopback. The bridge
+# was built local-first, so a served-over-the-network panel would otherwise have
+# every POST rejected by the cross-origin guard below. Opt-in only: unset (the
+# local-first default) leaves the loopback-only posture exactly as it was.
+# CSV, each entry an exact scheme://host[:port], e.g. "https://aizu.uz".
+ALLOWED_ORIGINS_ENV = "AIZU_ALLOWED_ORIGINS"
+
 
 def _is_local_origin(origin: str) -> bool:
     return bool(_LOCAL_ORIGIN_RE.match(origin))
+
+
+def _is_allowed_origin(origin: str) -> bool:
+    """Loopback, or an origin the operator named in AIZU_ALLOWED_ORIGINS. Matched
+    whole and case-insensitively per RFC 6454 (scheme/host are case-insensitive;
+    a trailing slash is not part of an origin, so it is trimmed on both sides).
+    Never a prefix/suffix test — http://aizu.uz.evil.com must not match."""
+    if _is_local_origin(origin):
+        return True
+    candidate = origin.rstrip("/").lower()
+    return any(allowed.rstrip("/").lower() == candidate
+               for allowed in _parse_csv_env(ALLOWED_ORIGINS_ENV))
 
 
 def _query_int(values: Optional[list[str]], default: int) -> int:
@@ -1523,7 +1542,7 @@ class PanelHandler(SimpleHTTPRequestHandler):
 
     def _send_cors_headers(self) -> None:
         origin = self.headers.get("Origin", "")
-        if origin and _is_local_origin(origin):
+        if origin and _is_allowed_origin(origin):
             self.send_header("Access-Control-Allow-Origin", origin)
             self.send_header("Vary", "Origin")
 
@@ -1597,10 +1616,11 @@ class PanelHandler(SimpleHTTPRequestHandler):
 
     def do_POST(self):  # noqa: N802
         path = urlparse(self.path).path
-        # Same-origin fetches from the panel send no Origin or a local one;
-        # any other website POSTing at 127.0.0.1 sends its own — reject it.
+        # Same-origin fetches from the panel send no Origin or a local one (or,
+        # on a hosted deployment, one named in AIZU_ALLOWED_ORIGINS); any other
+        # website POSTing at the bridge sends its own — reject it.
         origin = self.headers.get("Origin", "")
-        if origin and not _is_local_origin(origin):
+        if origin and not _is_allowed_origin(origin):
             self._send_json(403, False, error="cross-origin request rejected")
             return
         # Logout needs neither a body nor a prior session payload — handle first.
