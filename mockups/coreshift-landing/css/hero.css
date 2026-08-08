@@ -1,0 +1,250 @@
+/* ============================================================
+   CoreShift — hero section
+   All rules scoped under .section--hero / hero- prefixed classes.
+   ============================================================ */
+
+.section--hero {
+  background: var(--white);
+  overflow: hidden;
+}
+
+.hero-inner {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  padding-top: clamp(126px, 15vw, 196px);
+  padding-bottom: clamp(64px, 8vw, 108px);
+}
+
+/* ---------- Node graph ---------- */
+.hero-graph {
+  position: relative;
+  width: 100%;
+  max-width: 1180px;
+  aspect-ratio: 1440 / 420;
+  margin: 0 auto clamp(12px, 1.6vw, 28px);
+}
+
+.hero-connectors {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  overflow: visible;
+}
+
+.hero-line {
+  fill: none;
+  stroke: var(--line);
+  stroke-width: 1;
+}
+
+.hero-dot {
+  fill: var(--violet);
+  transform-box: fill-box;
+  transform-origin: center;
+}
+
+/* Positioning layer — static placement only, never touched by GSAP */
+.hero-tile-pos {
+  position: absolute;
+  left: calc(var(--x) / 1440 * 100%);
+  top: calc(var(--y) / 420 * 100%);
+  width: calc(var(--size) / 1440 * 100%);
+  aspect-ratio: 1 / 1;
+  transform: translate(-50%, -50%);
+}
+
+/* Parallax layer — GSAP quickTo writes x/y here */
+.hero-tile-parallax {
+  width: 100%;
+  height: 100%;
+}
+
+/* Visual layer — GSAP entrance + idle float writes scale/y here */
+.hero-tile {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  border-radius: 26%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  will-change: transform, opacity;
+}
+
+.hero-tile--center {
+  background: linear-gradient(180deg, var(--violet-hi), var(--violet-lo));
+  box-shadow: 0 24px 48px rgba(0, 0, 0, 0.55);
+  overflow: hidden;
+}
+
+.hero-roulette {
+  position: relative;
+  width: 36%;
+  height: 36%;
+  /* the centre tile is a raised ink chip now, so its glyph must be light */
+  color: var(--paper);
+}
+
+.hero-roulette-icon {
+  position: absolute;
+  inset: 0;
+  display: block;
+  opacity: 0;
+}
+
+.hero-roulette-icon svg {
+  width: 100%;
+  height: 100%;
+  display: block;
+}
+
+.hero-roulette-icon svg * {
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.hero-tile--yellow {
+  background: var(--yellow);
+  box-shadow: 0 16px 34px rgba(217, 242, 79, 0.28);
+}
+
+.hero-tile--yellow svg {
+  width: 44%;
+  height: 44%;
+}
+
+.hero-tile--yellow svg * {
+  fill: none;
+  stroke: var(--ground);
+  stroke-width: 1.8;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.hero-tile--yellow svg .hero-ray {
+  fill: var(--ground);
+  stroke: none;
+}
+
+.hero-tile--cyan {
+  background: var(--cyan);
+  box-shadow: 0 16px 34px rgba(0, 0, 0, 0.5);
+}
+
+.hero-tile--cyan svg {
+  width: 46%;
+  height: 46%;
+}
+
+.hero-tile--cyan svg * {
+  fill: none;
+  stroke: var(--paper);
+  stroke-width: 1.6;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.hero-tile--red {
+  background: var(--red);
+  box-shadow: 0 16px 34px rgba(0, 0, 0, 0.5);
+}
+
+.hero-tile--red svg {
+  width: 48%;
+  height: 48%;
+}
+
+.hero-tile--red svg .hero-shield-outline {
+  fill: none;
+  stroke: var(--paper);
+  stroke-width: 1.8;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.hero-tile--red svg .hero-bolt {
+  fill: var(--lime);
+  stroke: none;
+}
+
+.hero-tile--eyes {
+  background: var(--ground-3);
+  box-shadow: 0 14px 30px rgba(0, 0, 0, 0.46);
+}
+
+.hero-tile--eyes svg {
+  width: 66%;
+  height: auto;
+}
+
+.hero-tile--eyes svg ellipse {
+  fill: none;
+  stroke: var(--ink-2);
+  stroke-width: 2.2;
+}
+
+.hero-tile--eyes svg .hero-pupil {
+  fill: var(--ink-2);
+  stroke: none;
+}
+
+.hero-tile--portrait {
+  border-radius: 18px;
+  overflow: hidden;
+  border: 3px solid var(--white);
+  box-shadow: 0 18px 40px rgba(0, 0, 0, 0.5);
+  background: var(--white);
+}
+
+.hero-tile--portrait img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+/* ---------- Headline / copy ---------- */
+.hero-copy {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+
+.hero-heading {
+  max-width: 760px;
+}
+
+.hero-lead {
+  margin-top: 22px;
+  max-width: 460px;
+}
+
+.hero-cta {
+  margin-top: 34px;
+}
+
+/* ---------- Responsive ---------- */
+@media (max-width: 720px) {
+  .hero-graph {
+    max-width: 460px;
+  }
+  .hero-heading {
+    max-width: 90%;
+  }
+}
+
+/* ---------- Reduced motion ---------- */
+@media (prefers-reduced-motion: reduce) {
+  .hero-tile,
+  .hero-tile-parallax,
+  .hero-line,
+  .hero-dot {
+    transition: none !important;
+  }
+}

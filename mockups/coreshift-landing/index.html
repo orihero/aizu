@@ -1,0 +1,765 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AIZU — a signal to act</title>
+<meta name="description" content="Tell AIZU what you sell and who you serve. It returns a short list of qualified, ready-to-buy customers, every week.">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%2316161a'/%3E%3Ccircle cx='14' cy='18' r='4.5' fill='%23d9f24f'/%3E%3Cpath d='M20.5 6.2 A 13.5 13.5 0 0 1 27.8 13.5' fill='none' stroke='%23d9f24f' stroke-width='2.6' stroke-linecap='round'/%3E%3C/svg%3E">
+
+<link rel="stylesheet" href="css/tokens.css">
+<link rel="stylesheet" href="css/base.css">
+<link rel="stylesheet" href="css/nav.css">
+<link rel="stylesheet" href="css/hero.css">
+<link rel="stylesheet" href="css/core-hr.css">
+<link rel="stylesheet" href="css/bento.css">
+<link rel="stylesheet" href="css/integrations.css">
+<link rel="stylesheet" href="css/testimonials.css">
+<link rel="stylesheet" href="css/footer.css">
+<link rel="stylesheet" href="css/plans-faq.css">
+</head>
+<body>
+
+<section class="section section--nav" id="nav">
+  <div class="nav-pill" data-nav-pill>
+    <a href="#" class="nav-logo" aria-label="AIZU home">
+      <svg class="nav-logo__mark" viewBox="0 0 32 32" aria-hidden="true" focusable="false">
+        <!--
+          The AIZU ping mark, geometry copied verbatim from the live site
+          (marketing/website/index.html) so the two never drift: a solid dot
+          with an arc sweeping away from it, on a 32x32 box. The dot is the
+          customer; the arc is the signal leaving them.
+        -->
+        <circle class="nav-logo__dot" cx="14" cy="18" r="4.5" />
+        <path class="nav-logo__ring" d="M20.5 6.2 A 13.5 13.5 0 0 1 27.8 13.5" />
+      </svg>
+      <span class="nav-logo__text">AIZU</span><span class="nav-logo__jp" aria-hidden="true">合図</span>
+    </a>
+
+    <ul class="nav-links">
+      <li><a href="#" class="nav-link"><span class="nav-link__label">Why AIZU</span></a></li>
+      <li><a href="#" class="nav-link"><span class="nav-link__label">How it works</span></a></li>
+      <li><a href="#plans" class="nav-link"><span class="nav-link__label">Pricing</span></a></li>
+      <li><a href="#faq" class="nav-link"><span class="nav-link__label">FAQ</span></a></li>
+    </ul>
+
+    <div class="nav-actions">
+      <a href="#" class="btn btn--ghost nav-btn nav-btn--signin">Log in</a>
+      <a href="#" class="btn btn--dark nav-btn nav-btn--cta">Start free</a>
+    </div>
+  </div>
+</section>
+
+<section class="section section--hero" id="hero">
+  <div class="container hero-inner">
+
+    <div class="hero-graph" aria-hidden="true">
+      <svg class="hero-connectors" viewBox="0 0 1440 420" preserveAspectRatio="xMidYMid meet">
+        <path class="hero-line" data-line="trunk-left" d="M632 200 L254 200"></path>
+        <path class="hero-line" data-line="trunk-right" d="M808 200 L1190 200"></path>
+        <path class="hero-line hero-line--diag" data-line="diag-left-up" d="M511 200 L432 96 L367 93"></path>
+        <path class="hero-line hero-line--diag" data-line="diag-left-down" d="M557 200 L486 283 L420 283"></path>
+        <path class="hero-line hero-line--diag" data-line="diag-right-up" d="M881 200 L956 112 L1016 112"></path>
+        <path class="hero-line hero-line--diag" data-line="diag-right-down" d="M923 200 L1003 307 L1069 307"></path>
+        <circle class="hero-dot" data-dot="left-up" cx="432" cy="96" r="3"></circle>
+        <circle class="hero-dot" data-dot="left-down" cx="486" cy="283" r="3"></circle>
+        <circle class="hero-dot" data-dot="right-up" cx="956" cy="112" r="3"></circle>
+        <circle class="hero-dot" data-dot="right-down" cx="1003" cy="307" r="3"></circle>
+      </svg>
+
+      <!-- Centre node -->
+      <div class="hero-tile-pos" data-tile="center" style="--x:720;--y:200;--size:176">
+        <div class="hero-tile-parallax" data-depth="0.3">
+          <div class="hero-tile hero-tile--center">
+            <div class="hero-roulette">
+              <span class="hero-roulette-icon" data-icon="scan">
+                <svg viewBox="0 0 24 24"><path d="M4 8V5a1 1 0 0 1 1-1h3"></path><path d="M16 4h3a1 1 0 0 1 1 1v3"></path><path d="M20 16v3a1 1 0 0 1-1 1h-3"></path><path d="M8 20H5a1 1 0 0 1-1-1v-3"></path></svg>
+              </span>
+              <span class="hero-roulette-icon" data-icon="sparkle-x">
+                <svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"></path></svg>
+              </span>
+              <span class="hero-roulette-icon" data-icon="slash">
+                <svg viewBox="0 0 24 24"><path d="M7 17L17 7"></path></svg>
+              </span>
+              <span class="hero-roulette-icon" data-icon="plus">
+                <svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"></path></svg>
+              </span>
+              <span class="hero-roulette-icon" data-icon="backslash">
+                <svg viewBox="0 0 24 24"><path d="M7 7l10 10"></path></svg>
+              </span>
+              <span class="hero-roulette-icon" data-icon="star">
+                <svg viewBox="0 0 24 24"><path d="M12 3.5c.7 3.2 2 5.7 4.9 6.5-2.9.8-4.2 3.3-4.9 6.5-.7-3.2-2-5.7-4.9-6.5 2.9-.8 4.2-3.3 4.9-6.5z"></path></svg>
+              </span>
+              <span class="hero-roulette-icon" data-icon="orbit">
+                <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"></circle><ellipse cx="12" cy="12" rx="9.5" ry="3.6" transform="rotate(-22 12 12)"></ellipse></svg>
+              </span>
+              <span class="hero-roulette-icon" data-icon="check">
+                <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"></circle><path d="M8 12.4l2.6 2.6L16 9.4"></path></svg>
+              </span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Left portrait -->
+      <div class="hero-tile-pos" data-tile="portrait-left" style="--x:179;--y:200;--size:150">
+        <div class="hero-tile-parallax" data-depth="1">
+          <div class="hero-tile hero-tile--portrait">
+            <img src="assets/people/p03.jpg" alt="">
+          </div>
+        </div>
+      </div>
+
+      <!-- Yellow lightbulb -->
+      <div class="hero-tile-pos" data-tile="yellow" style="--x:324;--y:85;--size:86">
+        <div class="hero-tile-parallax" data-depth="0.78">
+          <div class="hero-tile hero-tile--yellow">
+            <svg viewBox="0 0 24 24"><path d="M9 18h6M10 21h4M12 3a6 6 0 0 0-3 11.2c.6.4 1 1.1 1 1.8h4c0-.7.4-1.4 1-1.8A6 6 0 0 0 12 3z"></path></svg>
+          </div>
+        </div>
+      </div>
+
+      <!-- Cyan balloons -->
+      <div class="hero-tile-pos" data-tile="cyan" style="--x:365;--y:284;--size:110">
+        <div class="hero-tile-parallax" data-depth="0.7">
+          <div class="hero-tile hero-tile--cyan">
+            <svg viewBox="0 0 24 24">
+              <ellipse cx="9" cy="8.2" rx="3.3" ry="4.1"></ellipse>
+              <path d="M9 12.3l-.5 2M9 12.3l.7 1.6-1 1.4 1 1"></path>
+              <ellipse cx="15.6" cy="11" rx="2.6" ry="3.2"></ellipse>
+              <path d="M15.6 14.2l.4 1.7M15.6 14.2l-.5 1.2.9 1-.6 1"></path>
+            </svg>
+          </div>
+        </div>
+      </div>
+
+      <!-- Red shield -->
+      <div class="hero-tile-pos" data-tile="red" style="--x:1075;--y:95;--size:118">
+        <div class="hero-tile-parallax" data-depth="0.7">
+          <div class="hero-tile hero-tile--red">
+            <svg viewBox="0 0 24 24">
+              <path class="hero-shield-outline" d="M12 3.2l6.5 2.6v4.6c0 4.6-3.1 7.6-6.5 8.6-3.4-1-6.5-4-6.5-8.6V5.8L12 3.2z"></path>
+              <path class="hero-bolt" d="M13.1 7.6l-3.4 5h2.4l-.9 3.8 3.9-5.4h-2.4l2.4-3.4z"></path>
+            </svg>
+          </div>
+        </div>
+      </div>
+
+      <!-- Lower right portrait -->
+      <div class="hero-tile-pos" data-tile="portrait-right" style="--x:1117;--y:312;--size:96">
+        <div class="hero-tile-parallax" data-depth="0.78">
+          <div class="hero-tile hero-tile--portrait">
+            <img src="assets/people/p05.jpg" alt="">
+          </div>
+        </div>
+      </div>
+
+      <!-- Far right eyes tile -->
+      <div class="hero-tile-pos" data-tile="eyes" style="--x:1260;--y:200;--size:140">
+        <div class="hero-tile-parallax" data-depth="1">
+          <div class="hero-tile hero-tile--eyes">
+            <svg viewBox="0 0 48 24">
+              <ellipse cx="13" cy="12" rx="8.2" ry="9.6"></ellipse>
+              <circle class="hero-pupil" cx="15.6" cy="12.4" r="4.3"></circle>
+              <ellipse cx="35" cy="12" rx="8.2" ry="9.6"></ellipse>
+              <circle class="hero-pupil" cx="37.6" cy="12.4" r="4.3"></circle>
+            </svg>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="hero-copy">
+      <h1 class="h1 hero-heading">Meet customers<br>while they decide</h1>
+      <p class="lead hero-lead">Tell AIZU what you sell and who you serve. It returns a short list of ready-to-buy customers, every week.</p>
+      <a href="#" class="btn btn--coral hero-cta">Start free</a>
+    </div>
+
+  </div>
+</section>
+
+<section class="section section--core-hr surface" id="core-hr">
+  <div class="core-hr-orbits" aria-hidden="true">
+
+    <div class="core-hr-ellipse core-hr-ellipse--l" data-cx="0" data-parallax="-14">
+      <i class="core-hr-metrics" aria-hidden="true"></i>
+      <div class="core-hr-card"><img src="assets/people/p01.jpg" alt="" loading="lazy" decoding="async"><span class="core-hr-card-blur"></span><span class="core-hr-card-blur core-hr-card-blur--2"></span></div>
+      <div class="core-hr-card"><img src="assets/people/p02.jpg" alt="" loading="lazy" decoding="async"><span class="core-hr-card-blur"></span><span class="core-hr-card-blur core-hr-card-blur--2"></span></div>
+      <div class="core-hr-card"><img src="assets/people/p03.jpg" alt="" loading="lazy" decoding="async"><span class="core-hr-card-blur"></span><span class="core-hr-card-blur core-hr-card-blur--2"></span></div>
+      <div class="core-hr-card"><img src="assets/people/p04.jpg" alt="" loading="lazy" decoding="async"><span class="core-hr-card-blur"></span><span class="core-hr-card-blur core-hr-card-blur--2"></span></div>
+      <div class="core-hr-card"><img src="assets/people/p05.jpg" alt="" loading="lazy" decoding="async"><span class="core-hr-card-blur"></span><span class="core-hr-card-blur core-hr-card-blur--2"></span></div>
+      <div class="core-hr-card"><img src="assets/people/p06.jpg" alt="" loading="lazy" decoding="async"><span class="core-hr-card-blur"></span><span class="core-hr-card-blur core-hr-card-blur--2"></span></div>
+    </div>
+
+    <div class="core-hr-ellipse core-hr-ellipse--r" data-cx="100" data-parallax="-8">
+      <i class="core-hr-metrics" aria-hidden="true"></i>
+      <div class="core-hr-card"><img src="assets/people/p07.jpg" alt="" loading="lazy" decoding="async"><span class="core-hr-card-blur"></span><span class="core-hr-card-blur core-hr-card-blur--2"></span></div>
+      <div class="core-hr-card"><img src="assets/people/p08.jpg" alt="" loading="lazy" decoding="async"><span class="core-hr-card-blur"></span><span class="core-hr-card-blur core-hr-card-blur--2"></span></div>
+      <div class="core-hr-card"><img src="assets/people/p09.jpg" alt="" loading="lazy" decoding="async"><span class="core-hr-card-blur"></span><span class="core-hr-card-blur core-hr-card-blur--2"></span></div>
+      <div class="core-hr-card"><img src="assets/people/p10.jpg" alt="" loading="lazy" decoding="async"><span class="core-hr-card-blur"></span><span class="core-hr-card-blur core-hr-card-blur--2"></span></div>
+      <div class="core-hr-card"><img src="assets/people/p11.jpg" alt="" loading="lazy" decoding="async"><span class="core-hr-card-blur"></span><span class="core-hr-card-blur core-hr-card-blur--2"></span></div>
+      <div class="core-hr-card"><img src="assets/people/p12.jpg" alt="" loading="lazy" decoding="async"><span class="core-hr-card-blur"></span><span class="core-hr-card-blur core-hr-card-blur--2"></span></div>
+    </div>
+
+  </div>
+
+  <div class="container core-hr-container">
+    <div class="core-hr-content">
+      <div class="core-hr-badge">
+        <svg class="core-hr-badge-icon" viewBox="0 0 24 24" width="40" height="40" aria-hidden="true" focusable="false">
+          <circle cx="12" cy="8.4" r="3.6"></circle>
+          <path d="M4.8 20.4c0-4.42 3.22-8 7.2-8s7.2 3.58 7.2 8"></path>
+        </svg>
+      </div>
+      <h2 class="h2 core-hr-heading">One signal,<br>not a feed</h2>
+      <p class="lead core-hr-sub">AIZU watches the public conversation and surfaces only the people already asking for what you sell.</p>
+      <a href="#" class="btn btn--violet core-hr-cta">See how it works</a>
+    </div>
+  </div>
+</section>
+
+<section class="section section--bento" id="bento">
+  <div class="container bento-head">
+    <h2 class="h2 bento-title">Built for people who sell direct</h2>
+    <p class="lead bento-sub">E-commerce and DTC brands, agencies, service providers,<br>coaches and creators, B2B sellers.</p>
+  </div>
+
+  <div class="container bento-grid">
+
+    <div class="bento-row bento-row--top">
+    <!-- Card 1 : One brief, every check -->
+    <article class="bento-card bento-card--hr">
+      <div class="bento-visual bento-visual--hr">
+        <div class="bento-ghost bento-ghost--left" aria-hidden="true"></div>
+        <div class="bento-ghost bento-ghost--right" aria-hidden="true"></div>
+
+        <div class="bento-dash">
+          <div class="bento-dash__head">
+            <span class="bento-dash__title">
+              <svg class="bento-dash__ico" viewBox="0 0 16 16" width="12" height="12" fill="none" aria-hidden="true"><path d="M2 4h12M2 8h12M2 12h8" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg>
+              Attendance Report
+            </span>
+            <span class="bento-chip bento-chip--dropdown">Monthly
+              <svg viewBox="0 0 10 6" width="8" height="5" aria-hidden="true"><path d="M1 1l4 3.5L9 1" stroke="currentColor" stroke-width="1.4" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg>
+            </span>
+          </div>
+
+          <div class="bento-chart">
+            <div class="bento-chart__rows" aria-hidden="true">
+              <span class="bento-chart__label">Mon</span>
+              <span class="bento-chart__label">Tue</span>
+              <span class="bento-chart__label">Wed</span>
+              <span class="bento-chart__label">Thu</span>
+              <span class="bento-chart__label">Fri</span>
+            </div>
+            <!--
+              Three groups of two stacked bars, matching ref/t5.09.jpg: the
+              middle group's violet bar is the peak that the dashed average
+              line and the +17% pill both sit on.
+            -->
+            <div class="bento-chart__bars">
+              <!-- both live inside the plot box so they anchor to the peak
+                   bar's top (--h:100%) regardless of the header's height -->
+              <div class="bento-chart__avg" aria-hidden="true"></div>
+              <div class="bento-chart__pill">+17%</div>
+              <div class="bento-bargroup">
+                <span class="bento-bar bento-bar--violet" style="--h:85%"></span>
+                <span class="bento-bar bento-bar--coral" style="--h:60%"></span>
+              </div>
+              <div class="bento-bargroup">
+                <span class="bento-bar bento-bar--violet" style="--h:100%"></span>
+                <span class="bento-bar bento-bar--coral" style="--h:85%"></span>
+              </div>
+              <div class="bento-bargroup">
+                <span class="bento-bar bento-bar--violet" style="--h:73%"></span>
+                <span class="bento-bar bento-bar--coral" style="--h:45%"></span>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+      <h3 class="card-title bento-card__title">One brief, every check</h3>
+      <p class="body bento-card__body">Write what you sell and who you serve once. AIZU checks every candidate against it, not the other way around.</p>
+    </article>
+
+    <!-- Card 2 : For managers & leaders -->
+    <article class="bento-card bento-card--mgr">
+      <div class="bento-visual bento-visual--mgr">
+        <div class="bento-radar" aria-hidden="true">
+          <span class="bento-radar__ring bento-radar__ring--1"></span>
+          <span class="bento-radar__ring bento-radar__ring--2"></span>
+          <span class="bento-radar__ring bento-radar__ring--3"></span>
+        </div>
+
+        <div class="bento-roller">
+          <div class="bento-roller__track" data-bento-roller-track></div>
+        </div>
+      </div>
+      <h3 class="card-title bento-card__title">Know what a lead cost you</h3>
+      <p class="body bento-card__body">CPL trend, channel comparison, spend by stage. The numbers that decide where to spend next.</p>
+    </article>
+
+    <!-- Card 3 : Careful by construction -->
+    <article class="bento-card bento-card--legal">
+      <div class="bento-visual bento-visual--legal">
+        <div class="bento-rules" aria-hidden="true">
+          <span></span><span></span><span></span><span></span><span></span><span></span>
+        </div>
+        <div class="bento-doc bento-doc--back" aria-hidden="true">
+          <span class="bento-doc__mark"></span>
+          <span class="bento-doc__line"></span>
+          <span class="bento-doc__line"></span>
+        </div>
+        <div class="bento-doc bento-doc--front" aria-hidden="true">
+          <span class="bento-doc__mark"></span>
+          <span class="bento-doc__line"></span>
+          <span class="bento-doc__line"></span>
+        </div>
+        <div class="bento-badge bento-badge--shield">
+          <svg viewBox="0 0 24 24" width="26" height="26" fill="none" aria-hidden="true">
+            <path d="M12 3l7 3v5.2c0 4.6-3 8-7 9.8-4-1.8-7-5.2-7-9.8V6l7-3z" fill="rgba(255,255,255,.10)" stroke="var(--paper)" stroke-width="1.6" stroke-linejoin="round"/>
+            <path d="M8.6 12.2l2.2 2.2 4.4-4.6" stroke="var(--lime)" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
+          </svg>
+        </div>
+      </div>
+      <h3 class="card-title bento-card__title">Careful by construction</h3>
+      <p class="body bento-card__body">Daytime pacing, spend caps, cooperative pause. Every run stays inside the limits you set.</p>
+    </article>
+    </div>
+
+    <div class="bento-row bento-row--bottom">
+    <!-- Card 4 : Every lead, one drawer -->
+    <article class="bento-card bento-card--data">
+      <div class="bento-visual bento-visual--data">
+        <div class="bento-doctile" aria-hidden="true">
+          <svg viewBox="0 0 24 24" width="26" height="26" fill="none"><path d="M6 3h9l3 3v15a1 1 0 01-1 1H6a1 1 0 01-1-1V4a1 1 0 011-1z" stroke="var(--coral)" stroke-width="1.6" stroke-linejoin="round"/><path d="M15 3v3a1 1 0 001 1h3" stroke="var(--coral)" stroke-width="1.6" stroke-linejoin="round"/><path d="M8 12h8M8 15h8M8 18h5" stroke="var(--coral)" stroke-width="1.4" stroke-linecap="round"/></svg>
+        </div>
+
+        <div class="bento-panel bento-panel--employees">
+          <div class="bento-panel__head">
+            <span class="bento-panel__title">
+              <svg viewBox="0 0 16 16" width="12" height="12" fill="none" aria-hidden="true"><path d="M2 4h12M2 8h12M2 12h8" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg>
+              Employees
+            </span>
+            <span class="bento-panel__link">See all</span>
+          </div>
+          <div class="bento-tabs">
+            <span class="bento-tab bento-tab--active">Project Dept. <em>24</em></span>
+            <span class="bento-tab">Sales Dept. <em>11</em></span>
+            <span class="bento-tab">Marketing Dept.</span>
+          </div>
+          <ul class="bento-emplist">
+            <li class="bento-emprow">
+              <img class="bento-avatar" src="assets/people/p01-sq.jpg" alt="">
+              <span class="bento-emprow__name">Owner<em>Full access</em></span>
+              <button class="bento-envelope" type="button" aria-label="Message Owner">
+                <svg viewBox="0 0 16 16" width="13" height="13" fill="none"><rect x="2" y="4" width="12" height="8.5" rx="1.4" stroke="currentColor" stroke-width="1.3"/><path d="M2.6 4.8l5.4 4 5.4-4" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/></svg>
+              </button>
+            </li>
+            <li class="bento-emprow">
+              <img class="bento-avatar" src="assets/people/p02-sq.jpg" alt="">
+              <span class="bento-emprow__name">Admin<em>PM/BA</em></span>
+              <button class="bento-envelope" type="button" aria-label="Message Admin">
+                <svg viewBox="0 0 16 16" width="13" height="13" fill="none"><rect x="2" y="4" width="12" height="8.5" rx="1.4" stroke="currentColor" stroke-width="1.3"/><path d="M2.6 4.8l5.4 4 5.4-4" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/></svg>
+              </button>
+            </li>
+            <li class="bento-emprow">
+              <img class="bento-avatar" src="assets/people/p03-sq.jpg" alt="">
+              <span class="bento-emprow__name">Member<em>PM/BA</em></span>
+              <button class="bento-envelope" type="button" aria-label="Message Member">
+                <svg viewBox="0 0 16 16" width="13" height="13" fill="none"><rect x="2" y="4" width="12" height="8.5" rx="1.4" stroke="currentColor" stroke-width="1.3"/><path d="M2.6 4.8l5.4 4 5.4-4" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/></svg>
+              </button>
+            </li>
+          </ul>
+        </div>
+
+        <div class="bento-panel bento-panel--training">
+          <div class="bento-panel__head">
+            <span class="bento-panel__title">
+              <svg viewBox="0 0 16 16" width="12" height="12" fill="none" aria-hidden="true"><path d="M2 4h12M2 8h12M2 12h8" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg>
+              Training Participation
+            </span>
+            <span class="bento-segmented">
+              <span class="bento-seg">Daily</span>
+              <span class="bento-seg">Weekly</span>
+              <span class="bento-seg bento-seg--active">Monthly</span>
+            </span>
+          </div>
+          <div class="bento-trainchart">
+            <div class="bento-trainchart__axis" aria-hidden="true">
+              <span>100%</span><span>80%</span><span>60%</span><span>40%</span><span>20%</span>
+            </div>
+            <div class="bento-trainchart__bars">
+              <span class="bento-trainbar__pill">46%</span>
+              <span class="bento-trainbar" style="--h:62%"></span>
+              <span class="bento-trainbar" style="--h:38%"></span>
+              <span class="bento-trainbar" style="--h:48%"></span>
+              <span class="bento-trainbar bento-trainbar--active" style="--h:78%"></span>
+              <span class="bento-trainbar" style="--h:56%"></span>
+            </div>
+          </div>
+        </div>
+      </div>
+      <h3 class="card-title bento-card__title">Every lead, one drawer</h3>
+      <p class="body bento-card__body">Who they are, what they asked for in their own words, when they asked, and a direct way to respond.</p>
+    </article>
+
+    <!-- Card 5 : For teams & employees -->
+    <article class="bento-card bento-card--team">
+      <div class="bento-visual bento-visual--team">
+        <div class="bento-ring" aria-hidden="true">
+          <div class="bento-ring__avatar" style="--i:0"><div class="bento-ring__avatar-inner"><img src="assets/people/p04-sq.jpg" alt=""></div></div>
+          <div class="bento-ring__avatar" style="--i:1"><div class="bento-ring__avatar-inner"><img src="assets/people/p05-sq.jpg" alt=""></div></div>
+          <div class="bento-ring__avatar" style="--i:2"><div class="bento-ring__avatar-inner"><img src="assets/people/p06-sq.jpg" alt=""></div></div>
+          <div class="bento-ring__avatar" style="--i:3"><div class="bento-ring__avatar-inner"><img src="assets/people/p07-sq.jpg" alt=""></div></div>
+          <div class="bento-ring__avatar" style="--i:4"><div class="bento-ring__avatar-inner"><img src="assets/people/p08-sq.jpg" alt=""></div></div>
+          <div class="bento-ring__avatar" style="--i:5"><div class="bento-ring__avatar-inner"><img src="assets/people/p09-sq.jpg" alt=""></div></div>
+          <div class="bento-ring__avatar" style="--i:6"><div class="bento-ring__avatar-inner"><img src="assets/people/p10-sq.jpg" alt=""></div></div>
+          <div class="bento-ring__avatar" style="--i:7"><div class="bento-ring__avatar-inner"><img src="assets/people/p11-sq.jpg" alt=""></div></div>
+        </div>
+        <div class="bento-ring__centre">
+          <svg viewBox="0 0 24 24" width="26" height="26" fill="none" aria-hidden="true">
+            <circle cx="8.5" cy="7" r="2.2" fill="currentColor"/>
+            <circle cx="16" cy="8.2" r="1.8" fill="currentColor"/>
+            <path d="M4 18c0-2.8 2-4.6 4.5-4.6S13 15.2 13 18" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/>
+            <path d="M13.5 18c0-2.2 1.6-3.6 3.5-3.6S20.5 15.8 20.5 18" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/>
+          </svg>
+        </div>
+      </div>
+      <h3 class="card-title bento-card__title">Roles that actually mean something</h3>
+      <p class="body bento-card__body">Owner, admin, member, viewer. Each sees exactly what their role allows, enforced on the server.</p>
+    </article>
+    </div>
+
+  </div>
+</section>
+
+<section class="section section--integrations surface" id="integrations">
+  <div class="container integrations-container">
+    <div class="integrations-panel">
+
+      <div class="integrations-badge" aria-hidden="true">
+        <svg viewBox="0 0 24 24" width="27" height="27" fill="none">
+          <defs>
+            <rect id="integrations-tooth-lg" x="7.6" y="1.6" width="2.0" height="2.8" rx="0.55"></rect>
+            <rect id="integrations-tooth-sm" x="15.45" y="11.2" width="1.5" height="2.1" rx="0.45"></rect>
+          </defs>
+          <g fill="var(--coral)">
+            <use href="#integrations-tooth-lg" transform="rotate(0 8.6 8.6)"></use>
+            <use href="#integrations-tooth-lg" transform="rotate(45 8.6 8.6)"></use>
+            <use href="#integrations-tooth-lg" transform="rotate(90 8.6 8.6)"></use>
+            <use href="#integrations-tooth-lg" transform="rotate(135 8.6 8.6)"></use>
+            <use href="#integrations-tooth-lg" transform="rotate(180 8.6 8.6)"></use>
+            <use href="#integrations-tooth-lg" transform="rotate(225 8.6 8.6)"></use>
+            <use href="#integrations-tooth-lg" transform="rotate(270 8.6 8.6)"></use>
+            <use href="#integrations-tooth-lg" transform="rotate(315 8.6 8.6)"></use>
+          </g>
+          <circle cx="8.6" cy="8.6" r="5.0" fill="var(--coral)"></circle>
+          <circle cx="8.6" cy="8.6" r="2.0" fill="var(--ground)"></circle>
+
+          <g fill="var(--coral)">
+            <use href="#integrations-tooth-sm" transform="rotate(0 16.2 16.2)"></use>
+            <use href="#integrations-tooth-sm" transform="rotate(60 16.2 16.2)"></use>
+            <use href="#integrations-tooth-sm" transform="rotate(120 16.2 16.2)"></use>
+            <use href="#integrations-tooth-sm" transform="rotate(180 16.2 16.2)"></use>
+            <use href="#integrations-tooth-sm" transform="rotate(240 16.2 16.2)"></use>
+            <use href="#integrations-tooth-sm" transform="rotate(300 16.2 16.2)"></use>
+          </g>
+          <circle cx="16.2" cy="16.2" r="3.4" fill="var(--coral)"></circle>
+          <circle cx="16.2" cy="16.2" r="1.3" fill="var(--ground)"></circle>
+        </svg>
+      </div>
+
+      <h2 class="h2 integrations-title">Six places<br>people ask</h2>
+
+      <div class="integrations-arc">
+        <div class="integrations-arc__stage">
+
+          <div class="integrations-tile" data-name="Instagram" data-desc="Comments under posts about what you sell.">
+            <svg class="integrations-tile__mark" viewBox="0 0 24 24" fill="none"
+                 stroke="currentColor" stroke-width="1.7" stroke-linecap="round"
+                 stroke-linejoin="round" aria-hidden="true"><rect x="2.6" y="2.6" width="18.8" height="18.8" rx="5.4"/><circle cx="12" cy="12" r="4.5"/><circle cx="17.5" cy="6.6" r="1.15" fill="currentColor" stroke="none"/></svg>
+          </div>
+          <div class="integrations-tile" data-name="LinkedIn" data-desc="Buying signals in professional threads.">
+            <svg class="integrations-tile__mark" viewBox="0 0 24 24" fill="none"
+                 stroke="currentColor" stroke-width="1.7" stroke-linecap="round"
+                 stroke-linejoin="round" aria-hidden="true"><rect x="2.6" y="2.6" width="18.8" height="18.8" rx="3.6"/><line x1="7.6" y1="10.6" x2="7.6" y2="17.2"/><circle cx="7.6" cy="7.3" r="1.15" fill="currentColor" stroke="none"/><path d="M11.6 17.2 v-6.6 M11.6 13.4 a2.9 2.9 0 0 1 5.8 0 v3.8"/></svg>
+          </div>
+          <div class="integrations-tile" data-name="X" data-desc="Public asks, in real time.">
+            <svg class="integrations-tile__mark" viewBox="0 0 24 24" fill="none"
+                 stroke="currentColor" stroke-width="1.7" stroke-linecap="round"
+                 stroke-linejoin="round" aria-hidden="true"><path d="M4.4 4.4 L19.6 19.6 M19.6 4.4 L4.4 19.6"/></svg>
+          </div>
+          <div class="integrations-tile" data-name="YouTube" data-desc="Comments under reviews and how-tos.">
+            <svg class="integrations-tile__mark" viewBox="0 0 24 24" fill="none"
+                 stroke="currentColor" stroke-width="1.7" stroke-linecap="round"
+                 stroke-linejoin="round" aria-hidden="true"><rect x="2.3" y="5.2" width="19.4" height="13.6" rx="4.2"/><path d="M10.3 9.4 L15.9 12 L10.3 14.6 Z" fill="currentColor" stroke="none"/></svg>
+          </div>
+          <div class="integrations-tile" data-name="Reddit" data-desc="Recommendation threads, niche by niche.">
+            <svg class="integrations-tile__mark" viewBox="0 0 24 24" fill="none"
+                 stroke="currentColor" stroke-width="1.7" stroke-linecap="round"
+                 stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="13.8" r="7.4"/><circle cx="17.8" cy="5.3" r="1.4" fill="currentColor" stroke="none"/><path d="M12.7 6.4 L16.5 5.6"/><circle cx="9.3" cy="13.2" r="1.05" fill="currentColor" stroke="none"/><circle cx="14.7" cy="13.2" r="1.05" fill="currentColor" stroke="none"/><path d="M9.4 16.7 a4.1 4.1 0 0 0 5.2 0"/></svg>
+          </div>
+          <div class="integrations-tile" data-name="Telegram" data-desc="Open groups where buyers ask first.">
+            <svg class="integrations-tile__mark" viewBox="0 0 24 24" fill="none"
+                 stroke="currentColor" stroke-width="1.7" stroke-linecap="round"
+                 stroke-linejoin="round" aria-hidden="true"><path d="M21.4 4.5 L2.9 11.6 L9.1 13.6 L11.2 19.8 L14.1 15.6 L18.3 18.6 Z"/><path d="M9.1 13.6 L21.4 4.5"/></svg>
+          </div>
+          
+          
+          
+          
+
+        </div>
+
+        <div class="integrations-caption">
+          <p class="integrations-caption__name">X</p>
+          <p class="integrations-caption__desc">Public asks, in real time.</p>
+        </div>
+      </div>
+
+    </div>
+  </div>
+</section>
+
+<section class="section section--testimonials" id="testimonials">
+  <div class="container testimonials-container">
+
+    <div class="testimonials-head">
+      <h2 class="h2 testimonials-title">How AIZU behaves</h2>
+      <p class="lead testimonials-lead">Not promises. What actually runs,<br>every time.</p>
+    </div>
+
+    <div class="testimonials-stage">
+
+      <!-- ===== envelope reveal (scroll-triggered, then discarded) =====
+           back to front: back panel, (the card sits behind the pocket but
+           is a separate sibling below, see .testimonials-card), side
+           flaps, front pocket -- see css/testimonials.css for the
+           z-index contract that makes the pocket occlude the card. ===== -->
+      <div class="testimonials-envelope" aria-hidden="true">
+        <div class="testimonials-envelope-body"></div>
+        <div class="testimonials-flap testimonials-flap--left"></div>
+        <div class="testimonials-flap testimonials-flap--right"></div>
+        <div class="testimonials-pocket"></div>
+      </div>
+
+      <!-- ===== 3D carousel (cards are direct children of .testimonials-stage
+           so the stage's `perspective` applies to their 3D transforms) ===== -->
+      <article class="testimonials-card" data-idx="0">
+          <div class="testimonials-card-content">
+            <div class="testimonials-card-avatar testimonials-card-avatar--mark"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="9.8" cy="14.2" r="3.7" fill="var(--lime)"/><path d="M15.2 5.0 A 10.4 10.4 0 0 1 20.4 10.2" fill="none" stroke="var(--lime)" stroke-width="2.2" stroke-linecap="round"/></svg></div>
+            <h3 class="testimonials-card-name">Attach, never launch</h3>
+            <p class="testimonials-card-role">Session safety</p>
+            
+            <p class="testimonials-card-quote">AIZU only ever attaches to a browser session you already opened. It never launches or owns one itself.</p>
+          </div>
+        </article>
+
+        <article class="testimonials-card" data-idx="1">
+          <div class="testimonials-card-content">
+            <div class="testimonials-card-avatar testimonials-card-avatar--mark"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="9.8" cy="14.2" r="3.7" fill="var(--lime)"/><path d="M15.2 5.0 A 10.4 10.4 0 0 1 20.4 10.2" fill="none" stroke="var(--lime)" stroke-width="2.2" stroke-linecap="round"/></svg></div>
+            <h3 class="testimonials-card-name">Daytime pacing</h3>
+            <p class="testimonials-card-role">Rate discipline</p>
+            
+            <p class="testimonials-card-quote">Every run paces itself to normal hours. No overnight bursts, no three-in-the-morning spikes.</p>
+          </div>
+        </article>
+
+        <article class="testimonials-card" data-idx="2">
+          <div class="testimonials-card-content">
+            <div class="testimonials-card-avatar testimonials-card-avatar--mark"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="9.8" cy="14.2" r="3.7" fill="var(--lime)"/><path d="M15.2 5.0 A 10.4 10.4 0 0 1 20.4 10.2" fill="none" stroke="var(--lime)" stroke-width="2.2" stroke-linecap="round"/></svg></div>
+            <h3 class="testimonials-card-name">Spend caps</h3>
+            <p class="testimonials-card-role">Cost control</p>
+            
+            <p class="testimonials-card-quote">Every model call in a run is budgeted against a cap you set on the campaign. Not an afterthought.</p>
+          </div>
+        </article>
+
+    </div>
+
+    <div class="testimonials-controls">
+      <button class="testimonials-btn testimonials-btn--prev" type="button" aria-label="Previous testimonial">
+        <svg viewBox="0 0 24 24"><path d="M14.5 6l-6 6 6 6" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      </button>
+      <button class="testimonials-btn testimonials-btn--next" type="button" aria-label="Next testimonial">
+        <svg viewBox="0 0 24 24"><path d="M9.5 6l6 6-6 6" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      </button>
+    </div>
+
+  </div>
+</section>
+
+<section class="section section--plans" id="plans">
+  <div class="container">
+    <div class="plans-head">
+      <h2 class="h2 plans-title">Pay for customers, not software</h2>
+      <p class="lead plans-sub">Every plan delivers the same thing: qualified, ready-to-buy
+        customers, every month. The only question is how many you can handle.</p>
+    </div>
+
+    <div class="plans-grid">
+      <article class="plan">
+        <h3 class="plan__name">Free</h3>
+        <p class="plan__price"><span class="plan__amount">$0</span><span class="plan__period"></span></p>
+        <p class="plan__year">no card needed</p>
+        <p class="plan__leads"><strong>10</strong>qualified leads a month</p>
+        <div class="plan__cta-wrap"><a href="#" class="btn btn--ghost">Start free</a></div>
+      </article>
+      <article class="plan plan--featured">
+        <span class="plan__badge">Most popular</span><h3 class="plan__name">Starter</h3>
+        <p class="plan__price"><span class="plan__amount">$24.99</span><span class="plan__period">/mo</span></p>
+        <p class="plan__year">$249 billed yearly</p>
+        <p class="plan__leads"><strong>250</strong>qualified leads a month</p>
+        <div class="plan__cta-wrap"><a href="#" class="btn btn--coral">Choose Starter</a></div>
+      </article>
+      <article class="plan">
+        <h3 class="plan__name">Pro</h3>
+        <p class="plan__price"><span class="plan__amount">$149</span><span class="plan__period">/mo</span></p>
+        <p class="plan__year">$1,490 billed yearly</p>
+        <p class="plan__leads"><strong>2,000</strong>qualified leads a month</p>
+        <div class="plan__cta-wrap"><a href="#" class="btn btn--ghost">Choose Pro</a></div>
+      </article>
+      <article class="plan">
+        <h3 class="plan__name">Scale</h3>
+        <p class="plan__price"><span class="plan__amount">Custom</span><span class="plan__period"></span></p>
+        <p class="plan__year">negotiated cap</p>
+        <p class="plan__leads"><strong>Your number</strong>agreed up front</p>
+        <div class="plan__cta-wrap"><a href="#" class="btn btn--ghost">Talk to sales</a></div>
+      </article>
+    </div>
+
+    <p class="plans-foot">Leads are qualified customers delivered to your account each month.
+      Upgrade, downgrade, or cancel anytime. No contracts, no lock-in.</p>
+  </div>
+</section>
+
+<section class="section section--faq" id="faq">
+  <div class="container faq-layout">
+    <div class="faq-aside">
+      <h2 class="h2 faq-title">Fair questions,<br>straight answers</h2>
+      <p class="lead faq-aside-note">Can’t find your answer?
+        Write to <a href="mailto:hello@aizu.app">hello@aizu.app</a>. A person replies.</p>
+    </div>
+
+    <div class="faq-list">
+        <details class="faq-item">
+          <summary>Where do the customers come from?<span class="faq-icon" aria-hidden="true"></span></summary>
+          <p class="body faq-answer">From public intent signals: people already asking, in public, for exactly what you offer. AIZU’s job is to surface the ones that match your business while the moment is still live. What you get is the outcome: a qualified, ready-to-buy customer. The finding is our work, not yours.</p>
+        </details>
+        <details class="faq-item">
+          <summary>What exactly do I get with each lead?<span class="faq-icon" aria-hidden="true"></span></summary>
+          <p class="body faq-answer">Each lead includes who they are, what they asked for in their own words, when they asked, and a direct way to respond. Enough to reach out the same day, with context. No guesswork, no digging.</p>
+        </details>
+        <details class="faq-item">
+          <summary>Is this cold outreach or a bought list?<span class="faq-icon" aria-hidden="true"></span></summary>
+          <p class="body faq-answer">No. AIZU doesn’t sell contact databases, and it doesn’t blast strangers. Every lead is a person who has already signaled, in public and on their own, that they’re looking for what you sell. You’re not interrupting anyone. You’re answering.</p>
+        </details>
+        <details class="faq-item">
+          <summary>How do I know the leads are actually qualified?<span class="faq-icon" aria-hidden="true"></span></summary>
+          <p class="body faq-answer">Because qualification is the product. Every lead matches what you sell and who you serve, and shows real, current intent to buy. If a lead isn’t a fit, tell us; your list gets sharper.</p>
+        </details>
+        <details class="faq-item">
+          <summary>How fast do I see results?<span class="faq-icon" aria-hidden="true"></span></summary>
+          <p class="body faq-answer">Your first leads typically arrive within days of describing your business, and then they keep coming, week after week. Start on Free: ten qualified leads a month is enough to feel the difference before you spend a dollar.</p>
+        </details>
+        <details class="faq-item">
+          <summary>Can I cancel anytime?<span class="faq-icon" aria-hidden="true"></span></summary>
+          <p class="body faq-answer">Yes. Monthly plans cancel with one click, effective at the end of your billing period. No contracts, no exit calls. The Free plan needs no card at all.</p>
+        </details>
+    </div>
+  </div>
+</section>
+
+<section class="section section--footer" id="footer">
+  <div class="container footer-container">
+    <div class="footer-panel">
+      <div class="footer-top">
+
+        <div class="footer-block footer-block--copy">
+          <p class="footer-tagline">AIZU 合図 is a signal to act<br>&mdash; not another platform<br>to check.</p>
+        </div>
+
+        <nav class="footer-linkgrid" aria-label="Footer">
+          <div class="footer-col">
+            <h4 class="footer-col-title">Product</h4>
+            <ul class="footer-col-list">
+              <li><a href="#" class="footer-link">Why AIZU</a></li>
+              <li><a href="#" class="footer-link">How it works</a></li>
+              <li><a href="#" class="footer-link">Pricing</a></li>
+              <li><a href="#" class="footer-link">FAQ</a></li>
+            </ul>
+          </div>
+
+          <div class="footer-col">
+            <h4 class="footer-col-title">Features</h4>
+            <ul class="footer-col-list">
+              <li><a href="#" class="footer-link">Docs</a></li>
+              <li><a href="#" class="footer-link">Privacy</a></li>
+              <li><a href="#" class="footer-link">Terms</a></li>
+            </ul>
+          </div>
+
+          <div class="footer-col">
+            <h4 class="footer-col-title">Pricing</h4>
+            <ul class="footer-col-list"></ul>
+          </div>
+
+          <div class="footer-col">
+            <h4 class="footer-col-title">Resources</h4>
+            <ul class="footer-col-list"></ul>
+          </div>
+        </nav>
+
+        <div class="footer-block footer-block--social">
+          <h4 class="footer-social-title">Follow us</h4>
+          <div class="footer-social-icons">
+            <a href="#" class="footer-social-btn" aria-label="Instagram">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="16" height="16">
+                <rect x="2" y="2" width="20" height="20" rx="5" ry="5"/>
+                <path d="M16 11.37A4 4 0 1 1 12.63 8 4 4 0 0 1 16 11.37z"/>
+                <line x1="17.5" x2="17.51" y1="6.5" y2="6.5"/>
+              </svg>
+            </a>
+            <a href="#" class="footer-social-btn" aria-label="X">
+              <svg viewBox="0 0 24 24" fill="currentColor" width="14" height="14">
+                <path d="M18.244 2.25h3.308l-7.227 8.26 8.502 11.24H16.17l-5.214-6.817L4.99 21.75H1.68l7.73-8.835L1.254 2.25H8.08l4.713 6.231zm-1.161 17.52h1.833L7.084 4.126H5.117z"/>
+              </svg>
+            </a>
+            <a href="#" class="footer-social-btn" aria-label="TikTok">
+              <svg viewBox="0 0 24 24" fill="none" width="16" height="16">
+                <g transform="scale(1.5)" fill="currentColor">
+                  <path d="M9 0h1.98c.144.715.54 1.617 1.235 2.512C12.895 3.389 13.797 4 15 4v2c-1.753 0-3.07-.814-4-1.829V11a5 5 0 1 1-5-5v2a3 3 0 1 0 3 3V0Z"/>
+                </g>
+              </svg>
+            </a>
+          </div>
+        </div>
+
+      </div>
+
+      <div class="footer-wordmark-wrap" aria-hidden="true">
+        <span class="footer-wordmark">AIZU</span>
+      </div>
+    </div>
+  </div>
+</section>
+
+<script src="vendor/gsap.min.js"></script>
+<script src="vendor/ScrollTrigger.min.js"></script>
+<script src="vendor/lenis.min.js"></script>
+
+<script src="js/split.js"></script>
+<script src="js/reveal.js"></script>
+<script src="js/nav.js"></script>
+<script src="js/hero.js"></script>
+<script src="js/core-hr.js"></script>
+<script src="js/bento.js"></script>
+<script src="js/integrations.js"></script>
+<script src="js/testimonials.js"></script>
+<script src="js/footer.js"></script>
+<script src="js/plans-faq.js"></script>
+<script src="js/main.js"></script>
+
+</body>
+</html>

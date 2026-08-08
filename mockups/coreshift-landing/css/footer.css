@@ -1,0 +1,224 @@
+/* ===== Footer section ===== */
+
+.section--footer {
+  background: var(--surface);
+  /* No padding/space below the footer depends on viewport height, and
+     none is added after it -- the wordmark's per-character entrance
+     (js/footer.js) is a played-once ScrollTrigger keyed to the panel
+     scrolling into view, not a scrubbed one keyed to trailing scroll
+     travel, so it needs no extra room below the section. */
+  padding: 140px 0 96px;
+}
+
+.footer-container {
+  /* uses .container sizing from base.css */
+}
+
+.footer-panel {
+  position: relative;
+  background: var(--white);
+  border-radius: var(--radius-panel);
+  overflow: hidden;
+  /* copy/columns start close to the panel's top edge, not ~200px down */
+  padding-top: clamp(24px, 2.2vw, 40px);
+  isolation: isolate;
+}
+
+/* ---------- top content row ---------- */
+
+.footer-top {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 40px;
+  padding: 0 64px 56px;
+}
+
+.footer-block--copy {
+  flex: 0 1 300px;
+  min-width: 220px;
+}
+
+.footer-tagline {
+  font-family: var(--font-sans);
+  font-weight: 500;
+  font-size: 15px;
+  line-height: 1.55;
+  color: var(--ink);
+}
+
+.footer-linkgrid {
+  flex: 1 1 auto;
+  display: flex;
+  /* tight cluster in the middle third -- justify-content: center only
+     insets the whole group, so this gap is the actual column spacing */
+  gap: clamp(24px, 2.6vw, 40px);
+  justify-content: center;
+}
+
+.footer-col {
+  display: flex;
+  flex-direction: column;
+  min-width: 96px;
+}
+
+.footer-col-title {
+  font-family: var(--font-sans);
+  font-weight: 600;
+  font-size: 15px;
+  letter-spacing: -0.01em;
+  color: var(--ink-2);
+  margin-bottom: 18px;
+}
+
+.footer-col-list {
+  display: flex;
+  flex-direction: column;
+  gap: 13px;
+}
+
+.footer-link {
+  font-family: var(--font-sans);
+  font-weight: 400;
+  font-size: 15px;
+  color: var(--muted);
+  transition: color 0.2s var(--ease-out);
+}
+
+.footer-link:hover,
+.footer-link:focus-visible {
+  color: var(--ink);
+}
+
+.footer-block--social {
+  flex: 0 0 auto;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+}
+
+.footer-social-title {
+  font-family: var(--font-sans);
+  font-weight: 600;
+  font-size: 15px;
+  letter-spacing: -0.01em;
+  color: var(--ink-2);
+  margin-bottom: 18px;
+}
+
+.footer-social-icons {
+  display: flex;
+  gap: 10px;
+}
+
+.footer-social-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 34px;
+  height: 34px;
+  border-radius: 26%;
+  background: var(--tile);
+  color: var(--ink-2);
+  transition: background 0.2s var(--ease-out), transform 0.2s var(--ease-out), color 0.2s var(--ease-out);
+}
+
+.footer-social-btn:hover,
+.footer-social-btn:focus-visible {
+  background: var(--line);
+  color: var(--ink);
+  transform: translateY(-2px);
+}
+
+.footer-social-btn svg {
+  display: block;
+}
+
+/* ---------- giant wordmark ---------- */
+
+.footer-wordmark-wrap {
+  position: relative;
+  width: calc(100% + 160px);
+  margin-left: -80px;
+  font-size: clamp(120px, 15.5vw, 260px);
+  /* This box's height (not its own overflow) is what sets where the crop
+     line falls: tall enough to clear the full letterforms (cap-height
+     ~0.72em) with only a small sliver of the descender zone cropped --
+     not cropped through the middle of the letters. Overflow is left
+     visible here on purpose -- each character's entrance animation
+     (js/footer.js) drops it in from above its final position, and that
+     needs to be visible rising up over the content above (matching the
+     source video). The actual crop -- both this sliver at the bottom and
+     the horizontal bleed past the panel's edges -- comes from
+     .footer-panel's own `overflow: hidden` below, since this wrap's
+     declared height still stops contributing to the panel's own layout
+     height at exactly this line, whether or not it clips locally. */
+  height: 0.9em;
+  overflow: visible;
+  line-height: 1;
+  pointer-events: none;
+}
+
+.footer-wordmark {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  display: block;
+  text-align: center;
+  font-family: var(--font-sans);
+  font-weight: 700;
+  font-size: 1em;
+  line-height: 1;
+  letter-spacing: -0.03em;
+  color: var(--coral);
+  white-space: nowrap;
+  will-change: filter, opacity;
+}
+
+/* ---------- responsive ---------- */
+
+@media (max-width: 1100px) {
+  .footer-top {
+    flex-wrap: wrap;
+    row-gap: 40px;
+  }
+
+  .footer-linkgrid {
+    flex: 1 1 100%;
+    justify-content: flex-start;
+    order: 3;
+    gap: 40px;
+  }
+
+  .footer-block--social {
+    order: 2;
+    margin-left: auto;
+  }
+}
+
+@media (max-width: 640px) {
+  .section--footer {
+    padding: 100px 0 64px;
+  }
+
+  .footer-panel {
+    padding-top: clamp(24px, 6vw, 40px);
+  }
+
+  .footer-top {
+    padding: 0 28px 40px;
+  }
+
+  .footer-linkgrid {
+    flex-wrap: wrap;
+    gap: 24px 32px;
+  }
+
+  .footer-wordmark-wrap {
+    width: calc(100% + 80px);
+    margin-left: -40px;
+    font-size: clamp(64px, 24vw, 120px);
+  }
+}
+

@@ -1,0 +1,165 @@
+/* ============================================================
+   CoreShift — "Integrate with your existing tools in seconds"
+   The arc carousel section. All rules scoped to .section--integrations.
+   ============================================================ */
+
+.section--integrations {
+  padding: 96px 0 108px;
+}
+
+.integrations-panel {
+  position: relative;
+  width: 100%;
+  background: var(--white);
+  border-radius: var(--radius-panel);
+  padding: 64px 40px 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  overflow: hidden;
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.28);
+}
+
+/* ---------- badge ---------- */
+.integrations-badge {
+  width: 64px;
+  height: 64px;
+  border-radius: 26%;
+  background: var(--white);
+  box-shadow: 0 10px 24px rgba(0, 0, 0, 0.38), 0 1px 2px rgba(0, 0, 0, 0.3);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin-bottom: 28px;
+  flex: none;
+}
+
+/* ---------- heading ---------- */
+.integrations-title {
+  text-align: center;
+  margin-bottom: 8px;
+}
+
+/* ---------- arc stage ---------- */
+.integrations-arc {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+
+.integrations-arc__stage {
+  position: relative;
+  width: 100%;
+  max-width: 1100px;
+  height: 318px;
+  transform-origin: top center;
+}
+
+.integrations-tile {
+  position: absolute;
+  left: 50%;
+  top: 116px;
+  width: 135px;
+  height: 135px;
+  margin-left: -67.5px;
+  margin-top: -67.5px;
+  border-radius: 26%;
+  background: var(--tile);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  will-change: transform, opacity, box-shadow;
+  /* base transform/opacity/box-shadow are written inline by js/integrations.js
+     every frame — these are just a safe fallback before JS runs. */
+  opacity: 0;
+}
+
+.integrations-tile__logo {
+  width: 65px;
+  height: 65px;
+  object-fit: contain;
+  pointer-events: none;
+}
+
+/* AIZU rebrand: the arc used to carry third-party product logos (Teams, Gmail,
+   Loom...). It now carries the six platforms AIZU actually discovers leads on.
+   The deck grew 5 -> 6; js/integrations.js derives everything from
+   SLOT_ANGLES.length, so the wheel motion itself is unchanged.
+
+   Each tile carries one source-platform mark. Colour is driven per-frame by
+   js/integrations.js, which sets `color` on the TILE (grey -> lime as it
+   reaches dead centre); the glyph picks that up through currentColor, so the
+   mark lights up with the tile on the same curve. */
+.integrations-tile__mark {
+  width: 52px;
+  height: 52px;
+  pointer-events: none;
+}
+
+/* ---------- active caption ---------- */
+/* negative: sits right under the apex tile (~40px below it), not under
+   the taller overall arc box — the wing tiles hang lower than the apex
+   but don't overlap the (narrow, centred) caption text horizontally. */
+.integrations-caption {
+  margin-top: -76px;
+  text-align: center;
+  min-height: 66px;
+}
+
+.integrations-caption__name {
+  font-family: var(--font-display);
+  font-weight: 700;
+  font-size: 22px;
+  letter-spacing: -0.02em;
+  color: var(--ink);
+  margin-bottom: 4px;
+}
+
+.integrations-caption__desc {
+  font-family: var(--font-sans);
+  font-size: 15px;
+  color: var(--muted);
+}
+
+/* ---------- responsive ---------- */
+@media (max-width: 1280px) {
+  .integrations-panel {
+    padding: 56px 28px 0;
+  }
+}
+
+@media (max-width: 900px) {
+  .integrations-arc__stage {
+    transform: scale(0.82);
+    margin-bottom: -57px;
+  }
+}
+
+@media (max-width: 640px) {
+  .section--integrations {
+    padding: 72px 0 84px;
+  }
+  .integrations-panel {
+    padding: 44px 18px 0;
+    border-radius: 22px;
+  }
+  .integrations-arc__stage {
+    transform: scale(0.62);
+    margin-bottom: -121px;
+  }
+}
+
+@media (max-width: 420px) {
+  .integrations-arc__stage {
+    transform: scale(0.5);
+    margin-bottom: -159px;
+  }
+}
+
+/* ---------- reduced motion ---------- */
+@media (prefers-reduced-motion: reduce) {
+  .integrations-tile {
+    transition: none;
+  }
+}

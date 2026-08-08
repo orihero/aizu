@@ -1,0 +1,171 @@
+/* ============================================================
+   CoreShift — "Core HR solutions" section
+   Depends on css/tokens.css + css/base.css being loaded first.
+   All rules scoped under .section--core-hr / core-hr- prefixed
+   classes so nothing collides with other sections.
+   ============================================================ */
+
+.section--core-hr {
+  overflow-x: hidden;
+  padding: 200px 0 170px;
+  min-height: 900px;
+  display: flex;
+  align-items: center;
+}
+
+/* ---------- Flanking portrait orbits ----------
+   One ellipse per side, mirrored. Cards are positioned every frame
+   by js/core-hr.js (x = cx + rx*cos(a), y = cy + ry*sin(a)) — this
+   stylesheet only sets up the containing box, the base card look,
+   and the responsive radii read back via getComputedStyle(). Each
+   ellipse's centre sits at the viewport edge (data-cx="0"/"100" in
+   the markup) and rx is wide enough that roughly the outer half of
+   every orbit swings off screen — overflow-x: hidden above clips
+   that without touching vertical overflow. */
+.core-hr-orbits {
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+}
+
+.core-hr-ellipse {
+  position: absolute;
+  inset: 0;
+  /* radii consumed by JS — keep in sync with the SPEC-driven defaults
+     (cx handled via the data-cx attribute, read separately). rx scales
+     with viewport width (clamped) so centre-on-edge + wide-rx reads the
+     same at 1280/1440/1920: ~256px / ~288px / clamped to 340px. */
+  --rx: clamp(240px, 20vw, 340px);
+  --ry: 230px;
+}
+
+.core-hr-card {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 170px;
+  aspect-ratio: 3 / 4;
+  border-radius: 18px;
+  overflow: hidden;
+  background: var(--tile);
+  border: 3px solid var(--white);
+  box-shadow: 0 18px 40px rgba(0, 0, 0, 0.5);
+  will-change: transform;
+}
+
+.core-hr-card img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+/* ---------- Progressive bottom blur ----------
+   Two stacked overlays: the image itself stays fully opaque, only
+   its apparent focus falls off toward the bottom edge. Both layers
+   clip to the card's rounded corners via the parent's overflow:
+   hidden, with border-radius: inherit as a Safari-corner-leak
+   safety net. */
+.core-hr-card-blur {
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  pointer-events: none;
+  -webkit-backdrop-filter: blur(5px);
+  backdrop-filter: blur(5px);
+  -webkit-mask-image: linear-gradient(to bottom, transparent 62%, #000 100%);
+  mask-image: linear-gradient(to bottom, transparent 62%, #000 100%);
+}
+
+.core-hr-card-blur--2 {
+  -webkit-backdrop-filter: blur(13px);
+  backdrop-filter: blur(13px);
+  -webkit-mask-image: linear-gradient(to bottom, transparent 80%, #000 100%);
+  mask-image: linear-gradient(to bottom, transparent 80%, #000 100%);
+}
+
+/* ---------- Centre copy column ---------- */
+.core-hr-container {
+  position: relative;
+  z-index: 1;
+}
+
+.core-hr-content {
+  max-width: 460px;
+  margin-inline: auto;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  gap: 24px;
+}
+
+.core-hr-badge {
+  width: 94px;
+  height: 94px;
+  border-radius: 24px;
+  background: var(--white);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--violet);
+  box-shadow: 0 14px 30px rgba(0, 0, 0, 0.45), 0 2px 8px rgba(0, 0, 0, 0.32);
+}
+
+.core-hr-badge-icon circle,
+.core-hr-badge-icon path {
+  fill: currentColor;
+}
+
+.core-hr-sub {
+  max-width: 400px;
+  margin: 0;
+}
+
+.core-hr-cta {
+  margin-top: 4px;
+}
+
+/* ---------- Responsive ----------
+   Smaller radii keep the ellipses proportionate to a narrower
+   viewport; js/core-hr.js re-reads --rx/--ry on resize. */
+@media (max-width: 1100px) {
+  .core-hr-ellipse {
+    --rx: 96px;
+    --ry: 176px;
+  }
+
+  .core-hr-card {
+    width: 140px;
+  }
+
+  .core-hr-content {
+    max-width: 78vw;
+  }
+}
+
+@media (max-width: 680px) {
+  .core-hr-orbits {
+    display: none;
+  }
+
+  .section--core-hr {
+    padding: 140px 0 110px;
+    min-height: 0;
+  }
+}
+
+/* Zero-visibility probe: its box resolves --rx/--ry (clamp(), vw units and
+   the responsive overrides included) into real pixels that js/core-hr.js can
+   measure. Reading the custom properties directly returns their specified
+   token, not a length, so the orbit collapsed to its JS fallback. */
+.core-hr-metrics {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: var(--rx);
+  height: var(--ry);
+  visibility: hidden;
+  pointer-events: none;
+}

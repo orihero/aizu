@@ -1,0 +1,327 @@
+/* ============================================================
+   CoreShift — "Words of Appreciation" testimonials section
+   Envelope reveal + 3D coverflow carousel.
+   Depends on tokens.css + base.css. All classes prefixed
+   `testimonials-` (or nested under .section--testimonials).
+   ============================================================ */
+
+.section--testimonials {
+  background: var(--surface);
+  padding: 150px 0 170px;
+  overflow-x: clip;
+}
+
+.testimonials-head {
+  text-align: center;
+  max-width: 640px;
+  margin: 0 auto;
+}
+
+.testimonials-title {
+  margin: 0 0 20px;
+  font-size: clamp(36px, 4.3vw, 62px);
+  white-space: nowrap;
+}
+
+.testimonials-lead {
+  margin: 0 auto;
+}
+
+@media (max-width: 900px) {
+  .testimonials-title {
+    white-space: normal;
+  }
+}
+
+/* ---------- stage ---------- */
+.testimonials-stage {
+  position: relative;
+  height: clamp(440px, 52vw, 640px);
+  margin: 64px auto 0;
+  perspective: 1400px;
+  perspective-origin: 50% 50%;
+}
+
+/* ---------- envelope ----------
+   A real envelope, back to front: back panel, (the card -- a sibling
+   below, in markup order -- slots in visually between here and the
+   flaps/pocket via z-index, see the z-index contract below), side
+   flaps, front pocket. No transform on this wrapper (translate would
+   open a stacking context and trap the pocket's z-index inside it,
+   below the card) -- centring is done with negative margins instead so
+   .testimonials-pocket's z-index compares directly against the card. */
+.testimonials-envelope {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: clamp(360px, 58vw, 640px);
+  height: clamp(200px, 30vw, 330px);
+  margin-left: calc(clamp(360px, 58vw, 640px) * -0.5);
+  margin-top: calc(clamp(200px, 30vw, 330px) * -0.5 + 54px);
+  pointer-events: none;
+}
+
+/* back panel -- a plain white body, z-index 1: behind everything,
+   including the card (see .testimonials-card z-index below) */
+.testimonials-envelope-body {
+  position: absolute;
+  inset: 0;
+  background: var(--ground-2);
+  border: 1px solid rgba(0, 0, 0, 0.32);
+  border-radius: 26px;
+  box-shadow: 0 30px 70px rgba(0, 0, 0, 0.55);
+  z-index: 1;
+}
+
+/* left/right side flaps folded inward: small triangles whose apex points
+   out to the envelope's own edge and whose base sits toward the middle,
+   roughly level with the envelope's top third. Width is kept narrow
+   enough that the base lands right where the centred card's own edge
+   begins, so the flap reads as running behind the card rather than
+   fighting it for z-order. z-index 4: above the card, below the front
+   pocket. Height/position keep the whole footprint inside
+   .testimonials-pocket's clipped-away V (see below) so it is never
+   bitten into by the pocket's white. */
+.testimonials-flap {
+  position: absolute;
+  top: 2%;
+  width: 18%;
+  height: 20%;
+  background: var(--violet);
+  will-change: transform, opacity, background-color;
+  z-index: 4;
+}
+
+.testimonials-flap--left {
+  left: 0;
+  clip-path: polygon(0% 50%, 100% 0%, 100% 100%);
+  transform-origin: 0% 50%;
+}
+
+.testimonials-flap--right {
+  right: 0;
+  clip-path: polygon(100% 50%, 0% 0%, 0% 100%);
+  transform-origin: 100% 50%;
+}
+
+/* front pocket -- the envelope's most distinctive part: a white panel
+   over the bottom of the envelope whose top edge is a wide "V" (chevron
+   pointing down), occluding whatever card content sits behind it below
+   the seam. z-index 6: front-most, above the card and the flaps -- this
+   is what lets the card look like it is emerging out of the envelope as
+   it slides up past the seam. */
+.testimonials-pocket {
+  position: absolute;
+  inset: 0;
+  background: var(--ground-2);
+  border-radius: 0 0 26px 26px;
+  clip-path: polygon(0% 26%, 50% 60%, 100% 26%, 100% 100%, 0% 100%);
+  box-shadow: inset 0 12px 16px -10px rgba(0, 0, 0, 0.5);
+  will-change: transform, opacity;
+  z-index: 6;
+}
+
+/* ---------- carousel cards ---------- */
+.testimonials-card {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 420px;
+  height: 470px;
+  border-radius: 26px;
+  padding: 34px 30px;
+  background: linear-gradient(160deg, #202027, #191920);
+  box-shadow: none;
+  transform-style: flat;
+  backface-visibility: hidden;
+  transition: background 1s cubic-bezier(0.65, 0, 0.35, 1),
+    box-shadow 1s cubic-bezier(0.65, 0, 0.35, 1);
+  z-index: 3;
+}
+
+/* fallback paint before JS positions everything — avoids a flash of
+   three stacked full-opacity cards if init runs late */
+.testimonials-card:not(:first-child) {
+  opacity: 0;
+}
+
+.testimonials-card.is-center {
+  background: var(--white);
+  box-shadow: 0 24px 60px rgba(0, 0, 0, 0.42);
+}
+
+.testimonials-card-content {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  opacity: 0;
+}
+
+.testimonials-card:first-child .testimonials-card-content {
+  opacity: 1;
+}
+
+.testimonials-card-avatar {
+  width: 66px;
+  height: 66px;
+  border-radius: 50%;
+  overflow: hidden;
+  box-shadow: 0 6px 14px rgba(0, 0, 0, 0.46);
+  margin-bottom: 18px;
+  flex-shrink: 0;
+}
+
+.testimonials-card-avatar img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+/* AIZU rebrand: these cards describe named safety mechanisms, not people, so
+   the avatar slot carries the ping mark instead of a portrait — which also
+   answers "whose photo is this?" with "nobody's". */
+.testimonials-card-avatar--mark {
+  display: grid;
+  place-items: center;
+  background: var(--ground-3);
+  border: 1px solid var(--line);
+  box-shadow: none;
+}
+
+.testimonials-card-avatar--mark svg {
+  width: 30px;
+  height: 30px;
+}
+
+.testimonials-card-name {
+  font-family: var(--font-display);
+  font-weight: 700;
+  font-size: 22px;
+  letter-spacing: -0.02em;
+  line-height: 1.2;
+  color: var(--ink);
+  margin: 0 0 4px;
+}
+
+.testimonials-card-role {
+  font-family: var(--font-sans);
+  font-size: 15px;
+  color: var(--muted);
+  margin: 0 0 18px;
+}
+
+.testimonials-card-rating {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 18px;
+}
+
+.testimonials-stars {
+  display: inline-flex;
+  gap: 3px;
+}
+
+.testimonials-star {
+  width: 16px;
+  height: 16px;
+  color: var(--star);
+}
+
+.testimonials-star path {
+  fill: currentColor;
+}
+
+.testimonials-rating-num {
+  font-family: var(--font-sans);
+  font-weight: 600;
+  font-size: 14px;
+  color: var(--ink-2);
+}
+
+.testimonials-card-quote {
+  font-family: var(--font-sans);
+  font-size: 15px;
+  line-height: 1.6;
+  color: var(--muted);
+  max-width: 320px;
+}
+
+/* ---------- controls ---------- */
+.testimonials-controls {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  gap: 16px;
+  margin-top: 32px;
+}
+
+.testimonials-btn {
+  width: 46px;
+  height: 46px;
+  border-radius: 50%;
+  background: var(--white);
+  box-shadow: 0 6px 16px rgba(0, 0, 0, 0.38);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--ink);
+  transition: transform 0.25s var(--ease-out), box-shadow 0.25s var(--ease-out);
+}
+
+.testimonials-btn svg {
+  width: 18px;
+  height: 18px;
+}
+
+.testimonials-btn:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 10px 22px rgba(0, 0, 0, 0.5);
+}
+
+.testimonials-btn:active {
+  transform: translateY(0);
+}
+
+/* ============================================================
+   Responsive
+   ============================================================ */
+@media (max-width: 1099px) {
+  .testimonials-card:not(.is-center) {
+    opacity: 0 !important;
+    pointer-events: none;
+  }
+}
+
+@media (max-width: 640px) {
+  .section--testimonials {
+    padding: 100px 0 120px;
+  }
+
+  .testimonials-stage {
+    height: clamp(380px, 92vw, 480px);
+    margin-top: 44px;
+  }
+
+  .testimonials-card {
+    padding: 26px 20px;
+  }
+
+  .testimonials-card-quote {
+    max-width: 260px;
+  }
+}
+
+/* ============================================================
+   Reduced motion — carousel/envelope still readable, no idle motion
+   ============================================================ */
+@media (prefers-reduced-motion: reduce) {
+  .testimonials-btn {
+    transition: none;
+  }
+
+  .testimonials-btn:hover {
+    transform: none;
+  }
+}

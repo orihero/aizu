@@ -1,0 +1,148 @@
+/* ============================================================
+   CoreShift — base layout, type scale, buttons
+   Depends on css/tokens.css being loaded first.
+   ============================================================ */
+
+.container {
+  width: min(100% - var(--gutter) * 2, var(--page));
+  margin-inline: auto;
+}
+
+.section {
+  position: relative;
+}
+
+.surface {
+  background: var(--surface);
+}
+
+/* ---------- Display type scale ---------- */
+.h1,
+.h2 {
+  font-family: var(--font-display);
+  font-weight: 700;
+  letter-spacing: -0.035em;
+  line-height: 1.02;
+  color: var(--ink);
+}
+
+.h1 {
+  font-size: clamp(48px, 5.2vw, 76px);
+}
+
+.h2 {
+  font-size: clamp(40px, 4.6vw, 66px);
+}
+
+.card-title {
+  font-family: var(--font-display);
+  font-weight: 700;
+  font-size: 26px;
+  letter-spacing: -0.02em;
+  line-height: 1.15;
+  color: var(--ink-2);
+}
+
+/* ---------- Body copy ---------- */
+.lead {
+  font-family: var(--font-sans);
+  font-weight: 400;
+  font-size: clamp(17px, 1.6vw, 20px);
+  line-height: 1.55;
+  color: var(--muted);
+}
+
+.body,
+.body-copy {
+  font-family: var(--font-sans);
+  font-weight: 400;
+  font-size: 15px;
+  line-height: 1.55;
+  color: var(--muted);
+}
+
+/* ---------- Buttons ---------- */
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  border-radius: 999px;
+  padding: 15px 34px;
+  font-family: var(--font-sans);
+  font-weight: 600;
+  font-size: 15px;
+  letter-spacing: -0.01em;
+  white-space: nowrap;
+  border: 1px solid transparent;
+  transition: transform 0.25s var(--ease-out), box-shadow 0.25s var(--ease-out),
+    background 0.25s var(--ease-out), opacity 0.25s var(--ease-out);
+  will-change: transform;
+}
+
+.btn:hover {
+  transform: translateY(-1px);
+}
+
+.btn:active {
+  transform: translateY(0);
+}
+
+/* On an ink ground a drop shadow is invisible (it would be darker than
+   the page). Depth comes from a lime glow on the one signal control,
+   and from borders + elevation on everything else. */
+
+/* Primary — the single lime CTA. Ink text on lime keeps AA at this size. */
+.btn--coral {
+  background: linear-gradient(180deg, var(--lime-hi), var(--lime-lo));
+  color: var(--ground);
+  box-shadow: 0 0 0 1px var(--lime-24), 0 8px 28px rgba(217, 242, 79, 0.18);
+}
+
+.btn--coral:hover {
+  box-shadow: 0 0 0 6px var(--lime-14), 0 10px 34px rgba(217, 242, 79, 0.26);
+}
+
+/* Secondary — raised ink chip. Never a second accent hue. */
+.btn--violet {
+  background: linear-gradient(180deg, var(--violet-hi), var(--violet-lo));
+  color: var(--paper);
+  border-color: var(--line);
+}
+
+.btn--violet:hover {
+  border-color: var(--grey-3);
+  background: linear-gradient(180deg, #3a3a45, #2c2c37);
+}
+
+/* Inverted — paper fill, used where a control must read as "solid"
+   against a busy panel. (Was near-black on the light theme.) */
+.btn--dark {
+  background: var(--paper);
+  color: var(--ground);
+}
+
+.btn--dark:hover {
+  background: #ffffff;
+}
+
+.btn--ghost {
+  background: transparent;
+  color: var(--paper);
+  border: 1px solid var(--grey-3);
+}
+
+.btn--ghost:hover {
+  border-color: var(--grey-1);
+  background: rgba(255, 255, 255, 0.04);
+}
+
+/* ---------- Reduced motion ---------- */
+@media (prefers-reduced-motion: reduce) {
+  .btn {
+    transition: none;
+  }
+  .btn:hover {
+    transform: none;
+  }
+}

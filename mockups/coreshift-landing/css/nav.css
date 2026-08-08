@@ -1,0 +1,179 @@
+/* ============================================================
+   CoreShift — fixed floating nav pill
+   Depends on css/tokens.css + css/base.css being loaded first.
+   ============================================================ */
+
+.section--nav {
+  position: fixed;
+  top: 22px;
+  left: 0;
+  right: 0;
+  z-index: 1000;
+  display: flex;
+  justify-content: center;
+  pointer-events: none; /* let scroll/clicks pass through the empty strip */
+}
+
+.nav-pill {
+  pointer-events: auto;
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 40px;
+  height: 64px;
+  padding: 8px 10px 8px 26px;
+  background: var(--white);
+  border-radius: 999px;
+  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.38);
+  transition: box-shadow 0.3s var(--ease-out);
+  /* CS.initNav drives the page-load entrance (y:-24 -> 0, opacity 0 -> 1)
+     via gsap.fromTo, which sets the "from" state itself on first paint —
+     no hidden-by-default CSS here, so the nav still renders if JS fails. */
+}
+
+.nav-pill--scrolled {
+  box-shadow: 0 14px 36px rgba(0, 0, 0, 0.5);
+}
+
+/* ---------- wordmark ---------- */
+.nav-logo {
+  display: inline-flex;
+  /* The CoreShift mark was a glyph that completed the word ("C" + "oreShift"),
+     so it sat on the baseline with no gap. The AIZU ping mark is a standalone
+     mark set BESIDE the wordmark, so it centres and takes real spacing. */
+  align-items: center;
+  gap: 9px;
+  font-family: var(--font-sans);
+  font-weight: 700;
+  font-size: 22px;
+  letter-spacing: -0.02em;
+  color: var(--ink);
+  flex: none;
+}
+
+.nav-logo__mark {
+  /* sized against the wordmark rather than as a glyph: the mark now reads as
+     the logo, not as a letter inside it */
+  width: 1.45em;
+  height: 1.45em;
+  /* the ping mark is the one lime element in the nav */
+  color: var(--lime);
+  flex: none;
+}
+
+/* the arc of the ping mark (was the CoreShift "C" ring, hence the name) */
+.nav-logo__ring {
+  fill: none;
+  stroke: currentColor;
+  /* 2.6 on the canonical 32-unit box, matching the live site exactly */
+  stroke-width: 2.6;
+  stroke-linecap: round;
+}
+
+.nav-logo__dot {
+  fill: currentColor;
+}
+
+.nav-logo__text {
+  line-height: 1;
+  letter-spacing: -0.01em;
+}
+
+/* 合図 — the name's Japanese form, set in mono beside the wordmark exactly as
+   on the live site. Decorative, hence aria-hidden in the markup. */
+.nav-logo__jp {
+  font-family: var(--font-mono);
+  font-size: 0.62em;
+  font-weight: 500;
+  letter-spacing: 0.08em;
+  color: var(--muted);
+  margin-left: 7px;
+  line-height: 1;
+}
+
+/* ---------- links ---------- */
+.nav-links {
+  display: flex;
+  align-items: center;
+  gap: 28px;
+}
+
+.nav-link {
+  position: relative;
+  display: inline-block;
+  padding: 4px 1px;
+  font-family: var(--font-sans);
+  font-weight: 400;
+  font-size: 15px;
+  color: var(--ink-2);
+  transition: color 0.2s var(--ease-out);
+}
+
+.nav-link::after {
+  content: '';
+  position: absolute;
+  left: 0;
+  bottom: 0;
+  width: 100%;
+  height: 2px;
+  background: var(--ink);
+  border-radius: 1px;
+  transform: scaleX(0);
+  transform-origin: left;
+  transition: transform 0.3s var(--ease-out);
+}
+
+.nav-link:hover {
+  color: var(--ink);
+}
+
+.nav-link:hover::after {
+  transform: scaleX(1);
+}
+
+/* ---------- actions ---------- */
+.nav-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-left: auto;
+}
+
+.nav-btn {
+  padding: 11px 22px;
+  font-size: 14px;
+}
+
+.nav-btn--signin {
+  color: var(--ink);
+}
+
+.nav-btn--cta {
+  /* pokes ~6px past the pill's fixed height / flat bottom edge */
+  margin-top: 6px;
+}
+
+/* ---------- responsive ---------- */
+@media (max-width: 860px) {
+  .nav-pill {
+    gap: 20px;
+    padding: 7px 8px 7px 20px;
+  }
+
+  .nav-links {
+    display: none;
+  }
+}
+
+@media (max-width: 480px) {
+  .nav-btn--signin {
+    display: none;
+  }
+}
+
+/* ---------- reduced motion ---------- */
+@media (prefers-reduced-motion: reduce) {
+  .nav-link::after {
+    transition: none;
+  }
+}

@@ -1,0 +1,214 @@
+/* ============================================================
+   AIZU landing (CoreShift structure) — design tokens, fonts, reset
+   Shared foundation. All section CSS should build on this file.
+
+   REBRAND NOTE — this file was flipped from the original CoreShift
+   light theme (white ground, coral/violet/yellow/cyan accents,
+   Geist + Outfit) to the AIZU brand: ink ground, lime as the only
+   accent, Inter Tight throughout.
+
+   The layout, radii, motion and section structure are unchanged —
+   only palette, type and copy were rebranded.
+
+   HOW THE PALETTE IS ORGANISED
+   The semantic names below (--ground / --paper / --lime ...) are the
+   real tokens. The CoreShift names (--white / --ink / --coral ...)
+   are kept underneath as ALIASES so the nine section stylesheets
+   keep working untouched. That means --white is deliberately a very
+   dark value and --ink is a very light one: the alias preserves each
+   token's ROLE (ground, text) while inverting its brightness. Prefer
+   the semantic names in any new code.
+   ============================================================ */
+
+/* Geist/Outfit are no longer used — AIZU is Inter Tight. The font
+   files remain in assets/fonts/ but are intentionally not imported,
+   so the page makes zero font requests.
+   @import url('../assets/fonts/fonts.css'); */
+
+/* ---------- CSS reset ---------- */
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html,
+body,
+h1,
+h2,
+h3,
+h4,
+h5,
+h6,
+p,
+figure,
+blockquote,
+dl,
+dd {
+  margin: 0;
+}
+
+ul[class],
+ol[class] {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+img,
+picture,
+svg {
+  display: block;
+  max-width: 100%;
+}
+
+button {
+  font: inherit;
+  color: inherit;
+  background: none;
+  border: 0;
+  padding: 0;
+  cursor: pointer;
+  appearance: none;
+  -webkit-appearance: none;
+}
+
+a {
+  color: inherit;
+  text-decoration: none;
+}
+
+input,
+textarea,
+select {
+  font: inherit;
+}
+
+/* ---------- Design tokens ---------- */
+:root {
+  /* ---- AIZU palette (semantic — prefer these) ---- */
+  --ground: #16161a;    /* page ground; ~90% of every frame */
+  --ground-2: #1b1b20;  /* alternating section band */
+  --ground-3: #202026;  /* tiles, chips, recessed fills */
+  --ground-4: #2a2a32;  /* raised chip / filled secondary control */
+
+  --paper: #f2f2f4;     /* primary text, headings */
+  --paper-2: #dcdce1;   /* card titles, slightly settled */
+  --grey-1: #9a9aa2;    /* body copy — 6.45:1 on ground, passes AA */
+  --grey-2: #6b6b73;    /* recedes past body; NEVER used as text */
+  --grey-3: #43434c;    /* borders, decorative strokes, dot fields */
+
+  /* Lime is signal only: it marks the thing worth acting on.
+     It never decorates, and it always arrives rather than starts lit. */
+  --lime: #d9f24f;
+  --lime-hi: #e4f77b;
+  --lime-lo: #c8e337;
+  --lime-08: rgba(217, 242, 79, 0.08);
+  --lime-14: rgba(217, 242, 79, 0.14);
+  --lime-24: rgba(217, 242, 79, 0.24);
+
+  --line: #2a2a30;         /* hairline borders, connectors */
+  --border-soft: #23232a;  /* softer inner divider */
+
+  /* ---- CoreShift aliases (role-preserving, brightness-inverted) ----
+     Kept so the section stylesheets need no rewrite.
+
+     NOTE on elevation: in the light theme --white was BOTH the page ground and
+     the panel/card fill, and panels separated from the page by shadow alone. On
+     ink, shadows barely read, so panels have to separate by lightness instead.
+     The alias therefore lifts --white ABOVE the page rather than flattening
+     onto it, giving: page (--ground) < band (--surface) < panel (--white) <
+     chip (--tile). That keeps every card reading as raised, the way it did on
+     white, instead of sinking into the page. */
+  --white: #1e1e25;   /* panels, cards, the hero ground — raised */
+  --surface: #1a1a1f; /* alternating section band — just off the page */
+  --tile: var(--ground-3);
+  --ink: var(--paper);
+  --ink-2: var(--paper-2);
+  --muted: var(--grey-1);
+  --muted-2: var(--grey-2);
+
+  /* Primary accent (was coral) → lime. */
+  --coral: var(--lime);
+  --coral-hi: var(--lime-hi);
+  --coral-lo: var(--lime-lo);
+
+  /* Secondary accent (was violet) → neutral raised ink, so filled
+     badges keep their depth without introducing a second hue. */
+  --violet: var(--grey-1);
+  --violet-hi: #32323c;
+  --violet-lo: #262630;
+
+  /* Decorative tile fills (were yellow/cyan/red) → one lime signal
+     tile plus graded ink chips, preserving the original composition's
+     value contrast without a multi-hue palette. */
+  --yellow: var(--lime);
+  --cyan: var(--ground-4);
+  --red: var(--grey-3);
+  --star: var(--lime);
+
+  /* fonts — AIZU is Inter Tight; mono is reserved for labels and
+     data beats (stage labels, numerals, report names), never body. */
+  --font-display: 'Inter Tight', 'Inter', 'SF Pro Display',
+    'Segoe UI Variable Display', 'Segoe UI', system-ui, -apple-system, sans-serif;
+  --font-sans: 'Inter Tight', 'Inter', 'SF Pro Display',
+    'Segoe UI Variable Display', 'Segoe UI', system-ui, -apple-system, sans-serif;
+  --font-mono: ui-monospace, 'JetBrains Mono', 'SFMono-Regular',
+    'Cascadia Mono', Consolas, monospace;
+
+  /* layout — unchanged from CoreShift */
+  --page: 1440px;
+  --gutter: 48px;
+  --radius-panel: 28px;
+  --radius-card: 24px;
+
+  /* misc easing tokens (referenced from JS as strings, kept here for docs) */
+  --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+html {
+  scroll-behavior: auto; /* Lenis owns scrolling */
+}
+
+body {
+  background: var(--ground);
+  font-family: var(--font-sans);
+  color: var(--paper);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  overflow-x: hidden;
+}
+
+::selection {
+  background: var(--lime);
+  color: var(--ground);
+}
+
+:focus-visible {
+  outline: 2px solid var(--lime);
+  outline-offset: 3px;
+  border-radius: 4px;
+}
+
+/* ---------- Signature reveal primitive ---------- */
+.reveal-char {
+  display: inline-block;
+  will-change: filter, opacity, transform;
+}
+
+.reveal-word {
+  display: inline-block;
+  white-space: nowrap;
+}
+
+/* ---------- Reduced motion ---------- */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+    scroll-behavior: auto !important;
+  }
+}

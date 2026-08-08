@@ -1,0 +1,773 @@
+/* ============================================================
+   CoreShift — "Built for everyone" bento section
+   All class names prefixed bento- and scoped under .section--bento
+   ============================================================ */
+
+.section--bento {
+  background: var(--surface);
+  padding: 148px 0 80px;
+}
+
+.bento-head {
+  text-align: center;
+  margin-bottom: 56px;
+}
+
+.bento-title {
+  color: var(--ink);
+}
+
+.bento-sub {
+  margin: 20px auto 0;
+  max-width: 520px;
+}
+
+/* ---------- grid scaffolding ---------- */
+.bento-grid {
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
+}
+
+.bento-row {
+  display: grid;
+  gap: 24px;
+}
+
+.bento-row--top {
+  grid-template-columns: repeat(3, 1fr);
+}
+
+.bento-row--bottom {
+  grid-template-columns: 1.6fr 1fr;
+}
+
+.bento-card {
+  background: var(--white);
+  border-radius: var(--radius-card);
+  padding: 28px;
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.28);
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.bento-visual {
+  position: relative;
+  height: 240px;
+  margin-bottom: 22px;
+  border-radius: 18px;
+  overflow: hidden;
+}
+
+.bento-card__title {
+  margin-bottom: 8px;
+}
+
+.bento-card__body {
+  max-width: 34ch;
+}
+
+/* ============================================================
+   Card 1 — For HR professionals — Attendance Report
+   ============================================================ */
+.bento-visual--hr {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: visible;
+}
+
+.bento-ghost {
+  position: absolute;
+  top: 8px;
+  bottom: 8px;
+  width: 78px;
+  background: var(--grey-3);
+  border-radius: 16px;
+  filter: blur(2px);
+  opacity: 0.7;
+}
+
+.bento-ghost--left {
+  left: -6px;
+}
+
+.bento-ghost--right {
+  right: -6px;
+}
+
+.bento-dash {
+  position: relative;
+  z-index: 2;
+  width: 100%;
+  max-width: 232px;
+  background: var(--white);
+  border-radius: 16px;
+  box-shadow: 0 18px 40px rgba(0, 0, 0, 0.42);
+  padding: 16px 16px 14px;
+}
+
+.bento-dash__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 18px;
+}
+
+.bento-dash__title {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--ink-2);
+}
+
+.bento-dash__ico {
+  color: var(--muted-2);
+  flex: none;
+}
+
+.bento-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 10px;
+  font-weight: 600;
+  color: var(--muted);
+  background: var(--tile);
+  border-radius: 999px;
+  padding: 4px 9px;
+}
+
+.bento-chart {
+  position: relative;
+  display: flex;
+  align-items: flex-end;
+  gap: 12px;
+  height: 132px;
+  padding-left: 26px;
+}
+
+.bento-chart__rows {
+  position: absolute;
+  left: 0;
+  top: 2px;
+  bottom: 0;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  padding-bottom: 2px;
+}
+
+.bento-chart__label {
+  font-size: 9px;
+  color: var(--muted-2);
+  line-height: 1;
+}
+
+/* Anchored to the plot box, so it lands exactly on the top of the peak
+   bar (--h:100%) -- as in the reference, where the average line and the
+   tallest bar's cap coincide. */
+.bento-chart__avg {
+  position: absolute;
+  left: -22px;
+  right: 0;
+  top: 0;
+  border-top: 1px dashed var(--line);
+}
+
+.bento-chart__pill {
+  position: absolute;
+  /* centred on the middle group's violet bar (the peak), clear above the
+     dashed average line rather than sitting on top of the bar */
+  left: 50%;
+  top: 0;
+  transform: translate(-50%, -125%);
+  background: var(--ink);
+  color: var(--white);
+  font-size: 10px;
+  font-weight: 700;
+  padding: 4px 9px;
+  border-radius: 999px;
+  white-space: nowrap;
+  z-index: 2;
+}
+
+.bento-chart__bars {
+  position: relative;
+  flex: 1;
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-around;
+  /* short of the full 132px so there is clear space between the card
+     header and the top of the plot for the +17% pill to sit in. The
+     parent is align-items:flex-end, so this trims from the top. */
+  height: calc(100% - 26px);
+  padding: 0 4px;
+}
+
+.bento-bargroup {
+  display: flex;
+  align-items: flex-end;
+  gap: 7px;
+  height: 100%;
+}
+
+.bento-bar {
+  display: block;
+  width: 21px;
+  height: var(--h);
+  border-radius: 7px 7px 3px 3px;
+  transform: scaleY(0);
+  transform-origin: bottom;
+}
+
+/* Each bar is banded into tonal segments with hard gradient stops -- the
+   reference bars are stacked series, not flat fills. */
+.bento-bar--violet {
+  background: linear-gradient(
+    180deg,
+    #4a4a58 0 33%,
+    #3a3a46 33% 64%,
+    #2c2c36 64% 100%
+  );
+}
+
+.bento-bar--coral {
+  background: linear-gradient(180deg, var(--lime-hi) 0 42%, var(--lime-lo) 42% 100%);
+}
+
+/* ============================================================
+   Card 2 — For managers & leaders — radar + pill roller
+   ============================================================ */
+.bento-visual--mgr {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.bento-radar {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.bento-radar__ring {
+  position: absolute;
+  border-radius: 50%;
+  border: 1px solid var(--line);
+}
+
+.bento-radar__ring--1 {
+  width: 130px;
+  height: 130px;
+}
+
+.bento-radar__ring--2 {
+  width: 195px;
+  height: 195px;
+}
+
+.bento-radar__ring--3 {
+  width: 260px;
+  height: 260px;
+}
+
+.bento-roller {
+  position: relative;
+  z-index: 2;
+  width: 88%;
+  max-width: 268px;
+  height: 176px;
+  overflow: hidden;
+  -webkit-mask-image: linear-gradient(180deg, transparent 0%, #000 22%, #000 78%, transparent 100%);
+  mask-image: linear-gradient(180deg, transparent 0%, #000 22%, #000 78%, transparent 100%);
+}
+
+.bento-roller__track {
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 0;
+}
+
+.bento-pill {
+  position: absolute;
+  left: 0;
+  right: 0;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  height: 56px;
+  padding: 0 14px;
+  background: var(--white);
+  border-radius: 14px;
+  box-shadow: 0 14px 30px rgba(0, 0, 0, 0.46);
+  opacity: 0.35;
+  transform: scale(0.86);
+  will-change: transform, opacity, top;
+}
+
+.bento-pill__icon {
+  flex: none;
+  width: 30px;
+  height: 30px;
+  border-radius: 26%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  /* default glyph sits on a lime chip, so it is ink */
+  color: var(--ground);
+}
+
+/* --cyan is a raised ink chip after the rebrand, so its glyph flips to paper */
+.bento-pill__icon--cyan {
+  background: var(--cyan);
+  color: var(--paper);
+}
+
+.bento-pill__icon--coral {
+  background: var(--coral);
+}
+
+.bento-pill__icon--yellow {
+  background: var(--yellow);
+  color: var(--ground);
+}
+
+.bento-pill__text {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--ink-2);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* ============================================================
+   Card 3 — For legal teams — documents + shield badge
+   ============================================================ */
+.bento-visual--legal {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.bento-rules {
+  position: absolute;
+  inset: 20px 34px;
+  display: flex;
+  justify-content: space-between;
+}
+
+.bento-rules span {
+  width: 1px;
+  height: 100%;
+  background: repeating-linear-gradient(180deg, var(--grey-3) 0 4px, transparent 4px 9px);
+}
+
+.bento-doc {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 128px;
+  height: 156px;
+  background: var(--ground-3);
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  padding: 18px 16px;
+}
+
+.bento-doc--back {
+  transform: translate(calc(-50% - 46px), calc(-50% + 6px)) rotate(-4deg);
+  z-index: 1;
+}
+
+.bento-doc--front {
+  transform: translate(calc(-50% + 46px), calc(-50% - 2px)) rotate(4deg);
+  z-index: 2;
+}
+
+.bento-doc__mark {
+  display: block;
+  width: 28px;
+  height: 28px;
+  border-radius: 6px;
+  background: var(--grey-3);
+  margin-bottom: 14px;
+}
+
+.bento-doc__line {
+  display: block;
+  height: 5px;
+  border-radius: 3px;
+  background: var(--ground-4);
+  margin-bottom: 8px;
+}
+
+.bento-doc__line + .bento-doc__line {
+  width: 68%;
+}
+
+.bento-badge--shield {
+  position: absolute;
+  z-index: 3;
+  top: 50%;
+  left: 50%;
+  width: 72px;
+  height: 72px;
+  border-radius: 26%;
+  background: linear-gradient(180deg, var(--violet-hi), var(--violet-lo));
+  box-shadow: 0 20px 40px rgba(0, 0, 0, 0.55);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transform: translate(-50%, -50%);
+}
+
+/* ============================================================
+   Card 4 — All employee data at once
+   ============================================================ */
+.bento-card--data {
+  padding-bottom: 30px;
+}
+
+.bento-visual--data {
+  overflow: visible;
+  display: block;
+  height: 232px;
+}
+
+.bento-doctile {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 72px;
+  height: 72px;
+  border-radius: 20px;
+  background: var(--white);
+  box-shadow: 0 10px 26px rgba(217, 242, 79, 0.16);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 3;
+}
+
+.bento-panel {
+  position: absolute;
+  top: 0;
+  background: var(--white);
+  border-radius: 16px;
+  box-shadow: 0 18px 40px rgba(0, 0, 0, 0.38);
+  padding: 16px 16px 14px;
+}
+
+.bento-panel--employees {
+  left: 92px;
+  width: 232px;
+  z-index: 2;
+}
+
+.bento-panel--training {
+  left: 320px;
+  right: 0;
+  z-index: 1;
+}
+
+.bento-panel__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 12px;
+}
+
+.bento-panel__title {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--ink-2);
+}
+
+.bento-panel__link {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--violet);
+}
+
+.bento-tabs {
+  display: flex;
+  gap: 6px;
+  margin-bottom: 14px;
+  flex-wrap: wrap;
+}
+
+.bento-tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 9.5px;
+  font-weight: 600;
+  color: var(--muted);
+  background: var(--tile);
+  padding: 5px 9px;
+  border-radius: 999px;
+  white-space: nowrap;
+}
+
+.bento-tab em {
+  font-style: normal;
+  color: var(--muted-2);
+}
+
+.bento-tab--active {
+  background: var(--ink);
+  color: var(--white);
+}
+
+.bento-tab--active em {
+  color: var(--grey-1);
+}
+
+.bento-emplist {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.bento-emprow {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.bento-avatar {
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  object-fit: cover;
+  flex: none;
+}
+
+.bento-emprow__name {
+  display: flex;
+  flex-direction: column;
+  font-size: 11.5px;
+  font-weight: 600;
+  color: var(--ink-2);
+  line-height: 1.35;
+  flex: 1;
+  min-width: 0;
+}
+
+.bento-emprow__name em {
+  font-style: normal;
+  font-size: 10px;
+  font-weight: 500;
+  color: var(--muted);
+}
+
+.bento-envelope {
+  flex: none;
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  background: var(--tile);
+  color: var(--muted);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.bento-segmented {
+  display: inline-flex;
+  gap: 2px;
+  background: var(--tile);
+  border-radius: 999px;
+  padding: 3px;
+}
+
+.bento-seg {
+  font-size: 9.5px;
+  font-weight: 600;
+  color: var(--muted);
+  padding: 4px 8px;
+  border-radius: 999px;
+}
+
+.bento-seg--active {
+  background: var(--ink);
+  color: var(--white);
+}
+
+.bento-trainchart {
+  display: flex;
+  gap: 10px;
+  height: 118px;
+}
+
+.bento-trainchart__axis {
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  font-size: 9px;
+  color: var(--muted-2);
+  padding-bottom: 2px;
+}
+
+.bento-trainchart__bars {
+  position: relative;
+  flex: 1;
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 10px;
+  border-left: 1px dashed var(--grey-3);
+  padding-left: 12px;
+}
+
+.bento-trainbar {
+  position: relative;
+  flex: 1;
+  height: var(--h);
+  border-radius: 6px 6px 0 0;
+  background: var(--tile);
+  transform: scaleY(0);
+  transform-origin: bottom;
+}
+
+.bento-trainbar--active {
+  background: linear-gradient(180deg, var(--violet-hi), var(--violet-lo));
+}
+
+.bento-trainbar__pill {
+  position: absolute;
+  left: 72%;
+  top: 6px;
+  transform: translateX(-50%);
+  background: var(--ink);
+  color: var(--white);
+  font-size: 10px;
+  font-weight: 700;
+  padding: 4px 9px;
+  border-radius: 999px;
+  white-space: nowrap;
+  z-index: 2;
+  opacity: 0;
+}
+
+/* ============================================================
+   Card 5 — For teams & employees — orbit ring
+   ============================================================ */
+.bento-visual--team {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.bento-ring {
+  position: relative;
+  width: 232px;
+  height: 232px;
+}
+
+.bento-ring__avatar {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 52px;
+  height: 52px;
+  margin: -26px 0 0 -26px;
+  border-radius: 26%;
+  box-shadow: 0 10px 22px rgba(0, 0, 0, 0.5);
+  transform: rotate(calc(var(--i) * 45deg)) translateY(-98px) rotate(calc(var(--i) * -45deg));
+}
+
+.bento-ring__avatar-inner {
+  width: 100%;
+  height: 100%;
+  border-radius: 26%;
+  overflow: hidden;
+  /* clip-path (rather than relying on overflow:hidden alone on a
+     continuously-transform-animated ancestor) keeps the rounded-rect
+     mask smooth instead of degrading to a low-poly octagon under
+     the orbit rotation animation. */
+  clip-path: inset(0 round 26%);
+}
+
+.bento-ring__avatar img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.bento-ring__centre {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 96px;
+  height: 96px;
+  transform: translate(-50%, -50%);
+  border-radius: 50%;
+  background: var(--white);
+  box-shadow: 0 16px 34px rgba(0, 0, 0, 0.46);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--ink);
+  z-index: 2;
+}
+
+/* ============================================================
+   Responsive
+   ============================================================ */
+@media (max-width: 1100px) {
+  .bento-row--top {
+    grid-template-columns: repeat(2, 1fr);
+  }
+
+  .bento-row--bottom {
+    grid-template-columns: 1fr;
+  }
+
+  .bento-card--hr {
+    grid-column: span 2;
+  }
+
+  .bento-visual--data {
+    height: auto;
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+    padding-bottom: 4px;
+  }
+
+  .bento-doctile {
+    position: static;
+  }
+
+  .bento-panel--employees,
+  .bento-panel--training {
+    position: static;
+    width: 100%;
+  }
+}
+
+@media (max-width: 720px) {
+  .section--bento {
+    padding: 96px 0 64px;
+  }
+
+  .bento-row--top {
+    grid-template-columns: 1fr;
+  }
+
+  .bento-card--hr {
+    grid-column: auto;
+  }
+}
