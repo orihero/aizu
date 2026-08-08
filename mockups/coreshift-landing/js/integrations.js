@@ -11,12 +11,12 @@ window.CS = window.CS || {};
   'use strict';
 
   var DECK = [
-    { name: 'Instagram', desc: 'Comments under posts about what you sell.' },
-    { name: 'LinkedIn', desc: 'Buying signals in professional threads.' },
-    { name: 'X', desc: 'Public asks, in real time.' },
-    { name: 'YouTube', desc: 'Comments under reviews and how-tos.' },
-    { name: 'Reddit', desc: 'Recommendation threads, niche by niche.' },
-    { name: 'Telegram', desc: 'Open groups where buyers ask first.' }
+    { name: 'Social posts', desc: 'Comments under posts about what you sell.' },
+    { name: 'Professional network', desc: 'Buying signals in professional threads.' },
+    { name: 'Public feed', desc: 'Public asks, in real time.' },
+    { name: 'Video comments', desc: 'Comments under reviews and how-tos.' },
+    { name: 'Community threads', desc: 'Recommendation threads, niche by niche.' },
+    { name: 'Messaging groups', desc: 'Open groups where buyers ask first.' }
   ];
 
   // Tiles sit on slots 16deg apart, centred on 0; the deck is exactly as long

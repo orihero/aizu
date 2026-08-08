@@ -61,7 +61,7 @@ window.CS = window.CS || {};
     });
 
     /* ---------------------------------------------------------
-       Card 1 — Attendance Report bars grow from the baseline
+       Card 1 — Match Report bars grow from the baseline
        --------------------------------------------------------- */
     var hrCard = section.querySelector('.bento-card--hr');
     if (hrCard) {
@@ -83,7 +83,7 @@ window.CS = window.CS || {};
     }
 
     /* ---------------------------------------------------------
-       Card 4 — Training Participation bars grow
+       Card 4 — Response Rate bars grow
        --------------------------------------------------------- */
     var dataCard = section.querySelector('.bento-card--data');
     if (dataCard) {
@@ -151,19 +151,19 @@ window.CS = window.CS || {};
     var items = [
       {
         cls: 'cyan',
-        text: 'Access Real-Time Insights',
+        text: 'Cost per lead, week by week',
         icon:
           '<circle cx="8" cy="8" r="5.5" stroke="currentColor" stroke-width="1.6"/><path d="M8 5v3l2 2" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>'
       },
       {
         cls: 'coral',
-        text: 'Make Data-Driven Decisions',
+        text: 'Compare spend by channel',
         icon:
           '<path d="M3 3v10h10" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/><rect x="5" y="8" width="1.8" height="3.5" fill="currentColor"/><rect x="7.6" y="6" width="1.8" height="5.5" fill="currentColor"/><rect x="10.2" y="4" width="1.8" height="7.5" fill="currentColor"/>'
       },
       {
         cls: 'yellow',
-        text: 'Track Performance in Real Time',
+        text: 'See where spend converts',
         icon:
           '<path d="M2 12l3.5-4 3 3L14 4" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>'
       }

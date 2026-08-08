@@ -1,42 +1,29 @@
 <section class="section section--nav" id="nav">
   <div class="nav-pill" data-nav-pill>
-    <a href="#" class="nav-logo" aria-label="CoreShift home">
-      <svg class="nav-logo__mark" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+    <a href="#" class="nav-logo" aria-label="AIZU home">
+      <svg class="nav-logo__mark" viewBox="0 0 32 32" aria-hidden="true" focusable="false">
         <!--
-          The CoreShift mark: a bold ring with a narrow wedge notch cut out
-          of its RIGHT side (so it optically reads as a "C"), with a stem
-          running in from the inner-left wall to a diamond at the centre.
-          Geometry, centre (12,12):
-            ring   mid-radius 8.7, stroke 4.6 -> outer R 11, inner r 6.4
-                   (stroke is ~21% of the 22-unit outer diameter)
-            notch  half-angle 14deg either side of 0deg (pointing right),
-                   butt caps so both ends are flat radial cuts
-            stem   x 3 -> 12, 2.2 tall, merging into the ring's left stroke
-            dot    diamond, half-diagonal 3.2, centred
-          The ring fills 22 of the 24 viewBox units, so at width .764em its
-          outer diameter equals the ~.70em cap-height of "S" in "Shift",
-          and the leftover 1 unit a side acts as normal glyph side-bearing
-          -- "C" + "oreShift" then reads as a single tight word.
+          The AIZU ping mark, geometry copied verbatim from the live site
+          (marketing/website/index.html) so the two never drift: a solid dot
+          with an arc sweeping away from it, on a 32x32 box. The dot is the
+          customer; the arc is the signal leaving them.
         -->
-        <path class="nav-logo__ring"
-              d="M20.44,9.90 A8.7,8.7 0 1 0 20.44,14.10" />
-        <path class="nav-logo__dot"
-              d="M3,10.9 H12 V13.1 H3 Z
-                 M12,8.8 L15.2,12 L12,15.2 L8.8,12 Z" />
+        <circle class="nav-logo__dot" cx="14" cy="18" r="4.5" />
+        <path class="nav-logo__ring" d="M20.5 6.2 A 13.5 13.5 0 0 1 27.8 13.5" />
       </svg>
-      <span class="nav-logo__text">oreShift</span>
+      <span class="nav-logo__text">AIZU</span><span class="nav-logo__jp" aria-hidden="true">合図</span>
     </a>
 
     <ul class="nav-links">
-      <li><a href="#" class="nav-link"><span class="nav-link__label">Product</span></a></li>
-      <li><a href="#" class="nav-link"><span class="nav-link__label">Features</span></a></li>
-      <li><a href="#" class="nav-link"><span class="nav-link__label">Pricing</span></a></li>
-      <li><a href="#" class="nav-link"><span class="nav-link__label">Resources</span></a></li>
+      <li><a href="#" class="nav-link"><span class="nav-link__label">Why AIZU</span></a></li>
+      <li><a href="#" class="nav-link"><span class="nav-link__label">How it works</span></a></li>
+      <li><a href="#plans" class="nav-link"><span class="nav-link__label">Pricing</span></a></li>
+      <li><a href="#faq" class="nav-link"><span class="nav-link__label">FAQ</span></a></li>
     </ul>
 
     <div class="nav-actions">
-      <a href="#" class="btn btn--ghost nav-btn nav-btn--signin">Sign in</a>
-      <a href="#" class="btn btn--dark nav-btn nav-btn--cta">Request a Demo</a>
+      <a href="#" class="btn btn--ghost nav-btn nav-btn--signin">Log in</a>
+      <a href="#" class="btn btn--dark nav-btn nav-btn--cta">Start free</a>
     </div>
   </div>
 </section>

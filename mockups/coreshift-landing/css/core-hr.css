@@ -54,35 +54,384 @@
   will-change: transform;
 }
 
-.core-hr-card img {
+/* Platform cards — each card reproduces the layout, palette and type
+   conventions of the surface its ask was posted on (Instagram, LinkedIn,
+   X, Reddit, YouTube, Telegram), because this section's job is to show the
+   public conversation exactly as it looks BEFORE AIZU filters it. Six
+   skins, two cards each, all on the same orbit slots the portraits used.
+
+   Three things to preserve if you edit these:
+
+   1. Every platform mark is hand-drawn inline SVG approximating the glyph
+      (see the sprite in the markup) — no official brand asset is vendored,
+      matching how the footer social icons were already handled. This is a
+      mockup: see README for the trademark note before shipping it.
+   2. The type stack is deliberately platform-native (system UI faces), NOT
+      the AIZU face. A card in Inter Tight stops reading as a real post,
+      which is the entire point of the section.
+   3. No lime anywhere. This field is the noise AIZU filters; lime only
+      ever marks the one thing worth acting on, and a like count is not it.
+      Platform brand colours are allowed here precisely BECAUSE they read
+      as somebody else's chrome rather than as AIZU's accent. */
+.cs-card {
   width: 100%;
   height: 100%;
-  object-fit: cover;
-  display: block;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  padding: 9px 9px 8px;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto,
+    Helvetica, Arial, sans-serif;
+  letter-spacing: normal;
+  overflow: hidden;
+}
+
+/* ---- shared primitives ---- */
+.cs-card__row {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.cs-card__av {
+  flex: none;
+  width: 19px;
+  height: 19px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 8.5px;
+  font-weight: 700;
+  color: #fff;
+  background: #9aa0a6;
+}
+
+/* An avatar slot carrying a mark instead of a monogram (Reddit's subreddit
+   icon). The svg needs explicit sizing: an inline <svg> with no width/height
+   falls back to the 300x150 replaced-element default, not to its parent. */
+.cs-card__av svg {
+  width: 100%;
+  height: 100%;
+}
+
+.cs-card__av--plain {
+  background: transparent;
+}
+
+/* min-width: 0 lets the nowrap/ellipsis children actually shrink inside
+   the flex row instead of forcing the header past the card edge. */
+.cs-card__who {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  line-height: 1.15;
+}
+
+.cs-card__name,
+.cs-card__sub {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.cs-card__name {
+  font-size: 10px;
+  font-weight: 600;
+}
+
+.cs-card__sub {
+  font-size: 8.5px;
+}
+
+.cs-card__body {
+  margin: 0;
+  flex: 1 1 auto;
+  font-size: 11px;
+  line-height: 1.35;
+}
+
+.cs-card__acts {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 9px;
+}
+
+.cs-card__acts svg {
+  width: 12px;
+  height: 12px;
+  flex: none;
+}
+
+.cs-card__stat {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+}
+
+/* The platform badge pinned to the top-right of every card. */
+.cs-card__mark {
+  flex: none;
+  margin-left: auto;
+  width: 13px;
+  height: 13px;
+}
+
+.cs-card__mark--wide {
+  width: 18px;
+}
+
+/* ---- Instagram ---- */
+.cs-card--ig {
+  background: #fff;
+  color: #262626;
+}
+
+/* The gradient ring is the padding of a gradient-filled box; the avatar
+   sits on a white inset so the ring reads as a ring, not a halo. */
+.cs-card--ig .cs-card__av {
+  background: linear-gradient(45deg, #f09433, #dc2743 45%, #bc1888);
+  box-shadow: inset 0 0 0 1.5px #fff;
+}
+
+.cs-card--ig .cs-card__name {
+  font-size: 10px;
+  font-weight: 600;
+}
+
+.cs-card--ig .cs-card__mark {
+  color: #262626;
+}
+
+.cs-card--ig .cs-card__acts {
+  color: #262626;
+  gap: 7px;
+}
+
+.cs-card--ig .cs-card__likes {
+  margin: 0;
+  font-size: 9.5px;
+  font-weight: 600;
+}
+
+.cs-card--ig .cs-card__time {
+  margin: 0;
+  font-size: 8px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: #8e8e8e;
+}
+
+/* ---- LinkedIn ---- */
+.cs-card--li {
+  background: #fff;
+  color: #000000e6;
+}
+
+.cs-card--li .cs-card__av {
+  border-radius: 50%;
+  background: #0a66c2;
+}
+
+.cs-card--li .cs-card__sub {
+  color: #00000099;
+}
+
+.cs-card--li .cs-card__acts {
+  color: #00000099;
+  border-top: 1px solid #0000001a;
+  padding-top: 5px;
+}
+
+.cs-card--li .cs-card__reaction {
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: #0a66c2;
+  color: #fff;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.cs-card--li .cs-card__reaction svg {
+  width: 7px;
+  height: 7px;
+}
+
+/* ---- X ---- */
+.cs-card--x {
+  background: #000;
+  color: #e7e9ea;
+}
+
+.cs-card--x .cs-card__av {
+  background: #333639;
+}
+
+.cs-card--x .cs-card__who {
+  flex-direction: row;
+  align-items: baseline;
+  gap: 4px;
+}
+
+.cs-card--x .cs-card__sub {
+  color: #71767b;
+}
+
+.cs-card--x .cs-card__mark {
+  color: #e7e9ea;
+}
+
+.cs-card--x .cs-card__acts {
+  color: #71767b;
+  justify-content: space-between;
+  gap: 0;
+  padding-right: 6px;
+}
+
+/* ---- Reddit ---- */
+.cs-card--rd {
+  background: #fff;
+  color: #1a1a1b;
+}
+
+.cs-card--rd .cs-card__name {
+  font-size: 9.5px;
+  font-weight: 700;
+}
+
+.cs-card--rd .cs-card__sub {
+  color: #7c7c7c;
+}
+
+.cs-card--rd .cs-card__body {
+  font-weight: 500;
+}
+
+.cs-card--rd .cs-card__acts {
+  color: #7c7c7c;
+  font-weight: 700;
+}
+
+/* The vote pill: arrows flanking the score, the way a post footer reads. */
+.cs-card--rd .cs-card__vote {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  padding: 2px 5px;
+  border-radius: 999px;
+  background: #f6f7f8;
+}
+
+.cs-card--rd .cs-card__vote svg:first-child {
+  color: #ff4500;
+}
+
+/* ---- YouTube ---- */
+.cs-card--yt {
+  background: #fff;
+  color: #0f0f0f;
+}
+
+.cs-card--yt .cs-card__av {
+  background: #606060;
+}
+
+.cs-card--yt .cs-card__sub {
+  color: #606060;
+}
+
+.cs-card--yt .cs-card__acts {
+  color: #606060;
+}
+
+.cs-card--yt .cs-card__reply {
+  font-weight: 600;
+}
+
+/* ---- Telegram ---- */
+.cs-card--tg {
+  background: #e4ebf1;
+  color: #000;
+  justify-content: flex-end;
+  gap: 0;
+  padding: 9px 8px;
+}
+
+/* The card is bottom-anchored (justify-content: flex-end), so the mark row
+   needs margin-bottom: auto to stay pinned at the top instead of collapsing
+   onto the bubble. */
+.cs-card--tg .cs-card__row {
+  margin-bottom: auto;
+}
+
+/* One incoming bubble, bottom-anchored, with the squared-off bottom-left
+   corner Telegram uses to point the bubble at its sender. */
+.cs-card--tg .cs-card__bubble {
+  background: #fff;
+  border-radius: 10px 10px 10px 2px;
+  padding: 6px 7px 5px;
+  box-shadow: 0 1px 1px #0000001f;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.cs-card--tg .cs-card__name {
+  color: #3390ec;
+  font-size: 9.5px;
+  font-weight: 600;
+}
+
+.cs-card--tg .cs-card__body {
+  flex: 0 1 auto;
+  font-size: 10.5px;
+}
+
+.cs-card--tg .cs-card__acts {
+  align-self: flex-end;
+  color: #8ba0b3;
+  gap: 3px;
+  font-size: 8.5px;
+}
+
+.cs-card--tg .cs-card__acts svg {
+  width: 11px;
+  height: 11px;
+  color: #4fae4e;
 }
 
 /* ---------- Progressive bottom blur ----------
-   Two stacked overlays: the image itself stays fully opaque, only
+   Two stacked overlays: the card content stays fully opaque, only
    its apparent focus falls off toward the bottom edge. Both layers
    clip to the card's rounded corners via the parent's overflow:
    hidden, with border-radius: inherit as a Safari-corner-leak
-   safety net. */
+   safety net.
+
+   Both stops were pushed down (62%/80% -> 74%/89%) and the radii eased
+   when the photo became a post: the falloff used to land on an
+   expendable bottom crop of a portrait, but it now lands on the
+   engagement row, which has to stay readable for the card to read as a
+   post at all. The edge still softens — it just no longer eats the
+   likes. */
 .core-hr-card-blur {
   position: absolute;
   inset: 0;
   border-radius: inherit;
   pointer-events: none;
-  -webkit-backdrop-filter: blur(5px);
-  backdrop-filter: blur(5px);
-  -webkit-mask-image: linear-gradient(to bottom, transparent 62%, #000 100%);
-  mask-image: linear-gradient(to bottom, transparent 62%, #000 100%);
+  -webkit-backdrop-filter: blur(4px);
+  backdrop-filter: blur(4px);
+  -webkit-mask-image: linear-gradient(to bottom, transparent 74%, #000 100%);
+  mask-image: linear-gradient(to bottom, transparent 74%, #000 100%);
 }
 
 .core-hr-card-blur--2 {
-  -webkit-backdrop-filter: blur(13px);
-  backdrop-filter: blur(13px);
-  -webkit-mask-image: linear-gradient(to bottom, transparent 80%, #000 100%);
-  mask-image: linear-gradient(to bottom, transparent 80%, #000 100%);
+  -webkit-backdrop-filter: blur(10px);
+  backdrop-filter: blur(10px);
+  -webkit-mask-image: linear-gradient(to bottom, transparent 89%, #000 100%);
+  mask-image: linear-gradient(to bottom, transparent 89%, #000 100%);
 }
 
 /* ---------- Centre copy column ---------- */

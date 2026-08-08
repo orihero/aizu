@@ -35,7 +35,7 @@ CS.initFooter = function () {
 
   // ---------------------------------------------------------------------
   // Giant wordmark: a played (not scrubbed) per-character drop-in. Each
-  // letter of "CoreShift" falls from above its final position -- blurred,
+  // letter of "AIZU" falls from above its final position -- blurred,
   // transparent -- down into place, staggered left to right, so the
   // leading letters have already landed and are sharp while the trailing
   // ones are still arriving. It plays once, when the panel scrolls into

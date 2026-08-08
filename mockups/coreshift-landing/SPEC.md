@@ -103,6 +103,11 @@ White background, full viewport. Node-graph illustration on top, headline below.
 - Connectors: 1px `#DDE1E4` polylines fanning out from the centre node, with 6px violet dots at the
   fork vertices.
 
+> **AIZU implementation note:** the two **portrait** satellites above are reference-video content
+> only. AIZU has no customer photography, so both slots are built as ping-mark "signal chip"
+> tiles (mark + short mono label) instead — same position, size and idle/parallax motion, no
+> photo. See `README.md` § De-personalization. Do not reintroduce photos here.
+
 ### Entrance choreography (total ≈1.45s) — `ref/A_hero_01.jpg`
 | t (rel) | Beat |
 |---|---|
@@ -139,6 +144,11 @@ Marquees — 3 columns per side (6 total, mirrored):
   inner columns `yPercent: -8` across the section's scroll range.
 - Cards nearest the viewport edges are partially clipped — that is intentional (see `ref/C_para_01.jpg`).
 
+> **AIZU implementation note:** the "portrait cards" above are reference-video content only.
+> AIZU's marquee columns carry the same size/count/stagger/speed/direction/parallax choreography
+> but each card shows a fabricated public-intent-signal quote (short first-person ask + relative
+> timestamp) instead of a photo. See `README.md` § De-personalization. Do not swap photos back in.
+
 Entrance: badge pops (`back.out(1.7)`), H2 + sub blur-reveal, button fades, marquee columns fade in
 from `opacity 0, y 40` with 0.08 stagger.
 
@@ -174,6 +184,10 @@ from `opacity 0, y 40` with 0.08 stagger.
 5. **For teams & employees** — 8 portrait squircles arranged evenly on a circle around a white
    centre disc holding a black "people" glyph. The ring **rotates slowly and continuously**
    (`rotation: 360`, 40s, linear, repeat -1) while each avatar counter-rotates so faces stay upright.
+
+> **AIZU implementation note:** the 8 **portrait squircles** above are reference-video content
+> only. AIZU's ring keeps the same slot count, radius, rotation speed and counter-rotation, but
+> each slot holds a lime dot node instead of a photo. See `README.md` § De-personalization.
 
 Card entrance: `y: 48 → 0`, `opacity 0 → 1`, `scale .97 → 1`, `0.8s power3.out`, stagger 0.09,
 triggered at `top 85%`.
@@ -214,6 +228,12 @@ Real logos: `assets/logos/{gmail,google-meet,outlook,teams}.svg` are the officia
 **Loom** must be hand-authored: a `#625DF5` sunburst — 12 tapered rays radiating from a small centre
 circle, rays are rounded-tip teardrops, overall 24×24 viewBox.
 
+> **AIZU implementation note:** the deck and logos above are reference-video content only. AIZU
+> does not integrate with these products, does not depict third-party marks, and has no source
+> platforms to name, so the arc carries five checkpoint-numbered tiles instead — same slot count,
+> angles, sizing and roll/recycle motion, no logos, no deck table. `assets/logos/` is empty; do
+> not repopulate it to "restore" this deck.
+
 Entrance: panel fades/rises, badge pops, H2 blur-reveals, then the five tiles fan out from the
 centre slot into their arc positions (`0.9s power3.out`, stagger 0.05 outward from the middle).
 
@@ -252,6 +272,14 @@ Testimonials (from the video):
 2. **James Carter** — HR Manager at BrightPath Solutions — 5.0 — *"The platform is easy to use, keeps everything in one place, and helps our team stay on top of things without extra hassle."*
 3. Add a third in the same voice to make the loop feel full.
 
+> **AIZU implementation note:** the named people, roles, companies and star ratings above are
+> reference-video content only. AIZU has no real customers to quote, so the centre-card slot
+> keeps its exact geometry (avatar → name → role → quote) but the avatar is the ping mark (not a
+> photo), the name/role pair names a safety mechanism (e.g. "Attach, never launch" / "Session
+> safety"), the quote explains it, and the 5-star rating row is dropped. The envelope reveal and
+> 3D coverflow motion, including the washed-out side-card geometry, are unchanged. See
+> `README.md` § Rebrand for the current card copy.
+
 ---
 
 ## 7. Footer  (t≈15.0 → 17.6) — `ref/t16.00.jpg`, `ref/F_foot_01.jpg`
@@ -288,3 +316,79 @@ A white panel (radius 28px) inset in `--surface`, containing:
 - Vendored JS in `vendor/`: `gsap.min.js`, `ScrollTrigger.min.js`, `lenis.min.js`.
   **Do not use `SplitText.min.js`** (licence-restricted) — ship a ~20-line char/word splitter in
   `js/split.js` instead, which must preserve spaces and be safe to run twice.
+
+---
+
+## 9. ADDENDUM — Plans and FAQ (AIZU-only, no CoreShift source)
+
+> Everything below this line documents scenes that do not exist in the reference video. They
+> were added directly against the AIZU brief, not reverse-engineered from `ref/`, so there is no
+> timestamp or still frame to cite. Markup: `sections/plans-faq.html`. Styles:
+> `css/plans-faq.css`. Behaviour: `js/plans-faq.js` (`CS.initPlans`, `CS.initFaq`).
+
+### 9a. Plans — "Pay for customers, not software"
+
+`--surface` background (`.section--plans`), same page rhythm as the rest of the site
+(140px top padding / 120px bottom). Centred head: H2 + one-line sub, max-width 560px.
+
+**Grid:** four pricing cards, `grid-template-columns: repeat(4, 1fr)`, 22px gap, `align-items:
+stretch` so every card matches the tallest. Card = `--white` fill, 1px `--line` border,
+`--radius-card` corners, flex column with the CTA button pinned to the bottom via `margin-top:
+auto`. Each card: plan name → price (mono, big amount + small `/mo` period) → billed-yearly
+note → a divider-topped lead count (`<strong>` in mono) → CTA button.
+
+One card only — **Starter**, the "Most popular" tier — carries the lime accent
+(`border-color: var(--lime)`, a lime ring + heavier shadow, a lime pill badge, and the coral CTA
+button) per the one-accent brand rule; the other three stay on the ink/grey scale with a ghost
+CTA. Tiers, top to bottom: **Free** ($0, 10 leads/mo, no card) → **Starter** ($24.99/mo or
+$249/yr, 250 leads/mo, featured) → **Pro** ($149/mo or $1,490/yr, 2,000 leads/mo) → **Scale**
+(custom price, negotiated lead volume, "Talk to sales"). A one-line footnote below the grid
+states leads are delivered monthly and plans can be changed or cancelled anytime.
+
+**Entrance** (`CS.initPlans`, fired by `CS.scrollReveal` when the section enters view — same
+IntersectionObserver-driven helper every other section uses, not a bespoke ScrollTrigger):
+a single GSAP timeline —
+```
+0.00  title  — CS.blurReveal, word-granularity, stagger 0.03, blur 10
+0.12  sub    — CS.fadeUp, y:24
+0.18  cards  — CS.fadeUp, y:36, stagger 0.07 (all 4 cards as one call)
+0.42  foot   — CS.fadeUp, y:20
+```
+No scroll-scrub, no pinning, no auto-advance — the section plays once on entry and is otherwise
+static. This matches the ordinary-document-scroll model in § 0; there is no new scroll
+mechanism to learn.
+
+**Responsive:** 4-up collapses to 2×2 at ≤1020px, then 1-up at ≤520px (with reduced section
+padding). No breakpoint-specific animation changes.
+
+### 9b. FAQ — "Fair questions, straight answers"
+
+`--white` background (`.section--faq`), 140px vertical padding both sides — this is the one
+section on the page that inverts to the light/paper surface rather than staying on `--surface`
+or ink, matching the footer panel's role as a closing, calmer beat.
+
+**Layout:** two-column grid (`0.85fr 1.15fr`, 72px gap, `align-items: start`), collapsing to a
+single stacked column at ≤980px. Left column ("aside"): H2 + a short "can't find your answer"
+note linking `mailto:hello@aizu.uz` (lime underline-on-hover). Right column: a list of six
+`<details>`/`<summary>` accordion items, top/bottom-bordered in `--line`, each summary pairing a
+question (display font, 19px) with a custom plus/minus icon (a bordered circle with two
+`::before`/`::after` bars; the vertical bar fades out and the circle rotates 180° + turns lime
+when open).
+
+**Entrance:** same `CS.scrollReveal` pattern as Plans —
+```
+0.00  title — CS.blurReveal, word-granularity, stagger 0.03, blur 10
+0.14  note  — CS.fadeUp, y:24
+0.16  items — CS.fadeUp, y:26, stagger 0.05 (all 6 items as one call)
+```
+
+**Interaction (not scroll-driven):** native `<details>` handles the actual open/close state and
+keyboard accessibility. `CS.initFaq` layers a GSAP height/opacity tween on top purely for the
+visual expand/collapse, and enforces one-open-at-a-time by closing any other open item
+(`height → 0, opacity → 0`, 0.32s `power2.inOut`) before opening the clicked one
+(`height 0 → auto, opacity 0 → 1`, 0.38s `power3.out`). Under `prefers-reduced-motion` the
+JS listener returns immediately and lets the browser's native instant toggle run instead — no
+custom height tween at all.
+
+**Responsive:** stacks to one column at ≤980px; question font drops slightly at ≤520px along
+with reduced section padding. No content or interaction changes at any breakpoint.

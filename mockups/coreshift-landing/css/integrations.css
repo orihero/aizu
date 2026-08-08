@@ -83,14 +83,16 @@
 }
 
 /* AIZU rebrand: the arc used to carry third-party product logos (Teams, Gmail,
-   Loom...). It now carries the six platforms AIZU actually discovers leads on.
-   The deck grew 5 -> 6; js/integrations.js derives everything from
-   SLOT_ANGLES.length, so the wheel motion itself is unchanged.
+   Loom...). It now carries six generic channel-type marks (social posts,
+   professional network, public feed, video comments, community threads,
+   messaging groups) rather than any named/depicted third-party platform, per
+   brand rule. The deck grew 5 -> 6; js/integrations.js derives everything
+   from SLOT_ANGLES.length, so the wheel motion itself is unchanged.
 
-   Each tile carries one source-platform mark. Colour is driven per-frame by
-   js/integrations.js, which sets `color` on the TILE (grey -> lime as it
-   reaches dead centre); the glyph picks that up through currentColor, so the
-   mark lights up with the tile on the same curve. */
+   Each tile carries one abstract, generic mark (not a platform logo). Colour
+   is driven per-frame by js/integrations.js, which sets `color` on the TILE
+   (grey -> lime as it reaches dead centre); the glyph picks that up through
+   currentColor, so the mark lights up with the tile on the same curve. */
 .integrations-tile__mark {
   width: 52px;
   height: 52px;

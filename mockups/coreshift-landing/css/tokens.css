@@ -20,10 +20,13 @@
    the semantic names in any new code.
    ============================================================ */
 
-/* Geist/Outfit are no longer used — AIZU is Inter Tight. The font
-   files remain in assets/fonts/ but are intentionally not imported,
-   so the page makes zero font requests.
-   @import url('../assets/fonts/fonts.css'); */
+/* AIZU is Inter Tight (display + sans) and JetBrains Mono (labels,
+   numerals). Both are self-hosted under assets/fonts/ — no CDN, no
+   external request — so this import is the only way they load;
+   without it the page silently falls back to the system stack.
+   The Geist/Outfit .woff2 files themselves were deleted from disk as
+   part of this rebrand (see README.md); nothing else imports them. */
+@import url('../assets/fonts/fonts.css');
 
 /* ---------- CSS reset ---------- */
 *,

@@ -69,9 +69,9 @@
 }
 
 /* ============================================================
-   Card 1 — For HR professionals — Attendance Report
+   Card 1 — One brief, every check — Match Report
    ============================================================ */
-.bento-visual--hr {
+.bento-visual--brief {
   display: flex;
   align-items: center;
   justify-content: center;
@@ -430,7 +430,7 @@
 }
 
 /* ============================================================
-   Card 4 — All employee data at once
+   Card 4 — Every lead, one drawer
    ============================================================ */
 .bento-card--data {
   padding-bottom: 30px;
@@ -466,13 +466,13 @@
   padding: 16px 16px 14px;
 }
 
-.bento-panel--employees {
+.bento-panel--leads {
   left: 92px;
   width: 232px;
   z-index: 2;
 }
 
-.bento-panel--training {
+.bento-panel--response {
   left: 320px;
   right: 0;
   z-index: 1;
@@ -534,13 +534,13 @@
   color: var(--grey-1);
 }
 
-.bento-emplist {
+.bento-leadlist {
   display: flex;
   flex-direction: column;
   gap: 10px;
 }
 
-.bento-emprow {
+.bento-leadrow {
   display: flex;
   align-items: center;
   gap: 8px;
@@ -554,7 +554,21 @@
   flex: none;
 }
 
-.bento-emprow__name {
+/* Signal-mark avatar — replaces a portrait photo with the AIZU ping mark
+   (dot + arc) on a small ink chip, same 26px circle the photo used to fill. */
+.bento-avatar--mark {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--ground-3);
+}
+
+.bento-avatar--mark svg {
+  width: 62%;
+  height: 62%;
+}
+
+.bento-leadrow__name {
   display: flex;
   flex-direction: column;
   font-size: 11.5px;
@@ -565,7 +579,7 @@
   min-width: 0;
 }
 
-.bento-emprow__name em {
+.bento-leadrow__name em {
   font-style: normal;
   font-size: 10px;
   font-weight: 500;
@@ -662,7 +676,7 @@
 }
 
 /* ============================================================
-   Card 5 — For teams & employees — orbit ring
+   Card 5 — Roles that actually mean something — orbit ring
    ============================================================ */
 .bento-visual--team {
   display: flex;
@@ -698,12 +712,20 @@
      mask smooth instead of degrading to a low-poly octagon under
      the orbit rotation animation. */
   clip-path: inset(0 round 26%);
+  /* Signal-mark node — replaces a portrait photo with a lime dot on
+     the same orbit slot the photo used to fill. */
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--ground-3);
 }
 
-.bento-ring__avatar img {
-  width: 100%;
-  height: 100%;
-  object-fit: cover;
+.bento-ring__dot {
+  width: 34%;
+  height: 34%;
+  border-radius: 50%;
+  background: var(--lime);
+  box-shadow: 0 0 0 5px var(--lime-14);
 }
 
 .bento-ring__centre {
@@ -751,8 +773,8 @@
     position: static;
   }
 
-  .bento-panel--employees,
-  .bento-panel--training {
+  .bento-panel--leads,
+  .bento-panel--response {
     position: static;
     width: 100%;
   }
