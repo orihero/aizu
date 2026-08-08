@@ -67,6 +67,12 @@
 
       <div class="footer-wordmark-wrap" aria-hidden="true">
         <span class="footer-wordmark">AIZU</span>
+        <!--
+          The floating blur lens. Must stay AFTER .footer-wordmark in the DOM:
+          it carries no content of its own and works purely by backdrop-filter,
+          so it can only blur what is already painted beneath it.
+        -->
+        <span class="footer-wordmark-blur"></span>
       </div>
     </div>
   </div>

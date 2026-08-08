@@ -148,22 +148,26 @@ window.CS = window.CS || {};
     var track = section.querySelector('[data-bento-roller-track]');
     if (!roller || !track) return;
 
+    // These pills are built in JS rather than authored in index.html, so they
+    // carry no data-i18n hook for CS.applyTranslations to find — they read the
+    // active dictionary directly instead. i18n.js loads first and is
+    // synchronous, so CS.t is always defined by the time this runs.
     var items = [
       {
         cls: 'cyan',
-        text: 'Cost per lead, week by week',
+        text: CS.t('bento.roller.1'),
         icon:
           '<circle cx="8" cy="8" r="5.5" stroke="currentColor" stroke-width="1.6"/><path d="M8 5v3l2 2" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>'
       },
       {
         cls: 'coral',
-        text: 'Compare spend by channel',
+        text: CS.t('bento.roller.2'),
         icon:
           '<path d="M3 3v10h10" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/><rect x="5" y="8" width="1.8" height="3.5" fill="currentColor"/><rect x="7.6" y="6" width="1.8" height="5.5" fill="currentColor"/><rect x="10.2" y="4" width="1.8" height="7.5" fill="currentColor"/>'
       },
       {
         cls: 'yellow',
-        text: 'See where spend converts',
+        text: CS.t('bento.roller.3'),
         icon:
           '<path d="M2 12l3.5-4 3 3L14 4" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>'
       }

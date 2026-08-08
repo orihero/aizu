@@ -27,9 +27,9 @@
 | 5 | 40–52s | Pillar 2 · Precision & Quality | "Not more leads — the right ones. A short list of people ready to buy, not a hundred dead ends." | **5 qualified > 100 junk.** |
 | 6 | 52–63s | Pillar 3 · Growth & Pipeline | "And it keeps going — a steady stream of customers ready to buy, filling your pipeline week after week." | **A pipeline that fills itself.** |
 | 7 | 63–70s | Trust | "It works quietly and respectfully in the background, and your data always stays yours." | **Quiet. Respectful. Yours.** |
-| 8 | 70–75s | CTA + bookend | "AIZU finds the signal. You win the customer. Start today at aizu.app." | **AIZU finds the signal. You win the customer. — aizu.app** |
+| 8 | 70–75s | CTA + bookend | "AIZU finds the signal. You win the customer. Start today at aizu.uz." | **AIZU finds the signal. You win the customer. — aizu.uz** |
 
-**CTA:** AIZU finds the signal. You win the customer. Start today at **aizu.app**.
+**CTA:** AIZU finds the signal. You win the customer. Start today at **aizu.uz**.
 
 **Audience fit:** deliberately vertical-agnostic — "what you sell and who you serve", "people ready to buy", and "customers" all read cleanly for a DTC store, an agency, a service business, or a B2B seller. No "product/founder/closing/sales-ops" language that would narrow it to SaaS.
 
@@ -120,7 +120,7 @@ Never more than two type sizes on screen at once. Text is lime-on-ink or muted g
 
 ### Scene 8 · 70–75s (2100–2250) · CTA + bookend · "AIZU finds the signal. You win the customer."
 - **Layout:** Centered brand lockup (ping + AIZU + 合図), the CTA line in lime beneath — same tempo and composition as scene 3, bookending scene 1.
-- **Elements:** hero ping (pulses once); "AIZU" + 合図; CTA line **"AIZU finds the signal. You win the customer. — aizu.app"** in lime.
+- **Elements:** hero ping (pulses once); "AIZU" + 合図; CTA line **"AIZU finds the signal. You win the customer. — aizu.uz"** in lime.
 - **Animation:** brand lockup resolves at center (ping springs, wordmark clip-reveal — reused from scene 3 for exact bookend); the final ping pulses **once** and rings into silence; the CTA line fades in last and holds to frame 2250. Music resolves and drops to the single ping.
 - **Remotion:** reuse `<Ping/>` + `<KineticWordmark/>` from scene 3; CTA = `<KineticLine/>` lime; single final pulse = one sine cycle of scale on the ping, then static.
 - **Out:** hold static lockup + CTA to frame 2250, then a clean 10-frame fade to full ink `#16161a`. The calm hold *is* the ending — no outro animation.

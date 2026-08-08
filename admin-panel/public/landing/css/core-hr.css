@@ -13,7 +13,7 @@
   align-items: center;
 }
 
-/* ---------- Flanking portrait orbits ----------
+/* ---------- Flanking post-card orbits ----------
    One ellipse per side, mirrored. Cards are positioned every frame
    by js/core-hr.js (x = cx + rx*cos(a), y = cy + ry*sin(a)) — this
    stylesheet only sets up the containing box, the base card look,
@@ -21,7 +21,14 @@
    ellipse's centre sits at the viewport edge (data-cx="0"/"100" in
    the markup) and rx is wide enough that roughly the outer half of
    every orbit swings off screen — overflow-x: hidden above clips
-   that without touching vertical overflow. */
+   that without touching vertical overflow.
+
+   That clipping is deliberate: it holds the rings well clear of the
+   centre copy and is what makes them read as two half-visible orbits
+   rather than two card columns. The trade is that only about four of
+   the six cards on each ring are legible at any instant — so treat
+   the card copy as texture, and keep anything the visitor must
+   actually read in .core-hr-content. */
 .core-hr-orbits {
   position: absolute;
   inset: 0;
@@ -144,11 +151,98 @@
   font-size: 8.5px;
 }
 
+/* Line-clamped because the card is a fixed 3:4 box on an orbit, not a
+   growable column: a long ask must truncate rather than push the
+   engagement row out through the bottom edge. Cards carrying media get
+   one line less, set by .cs-card--media below. */
 .cs-card__body {
   margin: 0;
-  flex: 1 1 auto;
+  flex: 0 1 auto;
+  min-height: 0;
   font-size: 11px;
   line-height: 1.35;
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.cs-card--media .cs-card__body {
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+}
+
+/* ---- attached media ----
+   Every "photo" is a flat vector silhouette on a soft ground, never a
+   photograph: same rule as the rest of the page, no imagery this project
+   has no rights to. The silhouette reads as "there is a picture here" at
+   card size, which is all the section needs. */
+.cs-card__media {
+  flex: none;
+  position: relative;
+  aspect-ratio: 16 / 9;
+  border-radius: 3px;
+  overflow: hidden;
+  background: linear-gradient(150deg, #dfe4ea, #c3ccd6);
+  color: #8b96a3;
+}
+
+.cs-card__media svg,
+.cs-card__media img {
+  width: 100%;
+  height: 100%;
+  display: block;
+}
+
+/* A real photograph fills the crop rather than letterboxing: the media box
+   owns the aspect ratio, the image covers it. Any file dropped into
+   landing/photos/ works with no other change. */
+.cs-card__media img {
+  object-fit: cover;
+}
+
+/* Instagram is image-first, so its media gets the most height the card
+   can spare once the caption and the two meta lines are accounted for. */
+.cs-card--ig .cs-card__media {
+  aspect-ratio: 2 / 1;
+}
+
+.cs-card__media--video {
+  background: linear-gradient(150deg, #4a5560, #232a31);
+  color: #7d8894;
+}
+
+.cs-card__play {
+  position: absolute;
+  inset: 0;
+  margin: auto;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  background: #000000a6;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.cs-card__play svg {
+  width: 9px;
+  height: 9px;
+  color: #fff;
+}
+
+.cs-card__dur {
+  position: absolute;
+  right: 4px;
+  bottom: 4px;
+  padding: 1px 3px;
+  border-radius: 2px;
+  background: #000000cc;
+  color: #fff;
+  font-size: 7.5px;
+  font-weight: 600;
+  line-height: 1.4;
 }
 
 .cs-card__acts {

@@ -26,12 +26,17 @@ from aizu.core.store import Store
 ROOT = Path(__file__).resolve().parents[1]
 CONFIG = ROOT / "config"
 
-# Minimal stand-in for a built React SPA (admin-panel/dist): an index shell and
-# one hashed asset. The server serves these as-is and falls back to index.html
-# for unknown client routes.
-_INDEX_HTML = '<!doctype html><html><head></head><body><div id="root"></div>' \
-              '<script type="module" src="/assets/index-abc123.js"></script></body></html>'
+# Minimal stand-ins for the built panel_dir (admin-panel/dist) since the aizu.uz
+# split: a landing shell at the root, a separate SPA shell under app/, a hashed
+# asset, and one real file under landing/ (the landing's own static assets). The
+# server serves the HTML shells as-is, falls back to the landing for unknown
+# non-API paths, and falls back to the SPA shell for unknown paths under /app/.
+_LANDING_HTML = '<!doctype html><html><head></head><body><div id="landing"></div>' \
+                '</body></html>'
+_APP_HTML = '<!doctype html><html><head></head><body><div id="root"></div>' \
+            '<script type="module" src="/assets/index-abc123.js"></script></body></html>'
 _ASSET_JS = 'console.log("spa bundle");'
+_LANDING_CSS = 'body { color: red; }'
 
 # All /api/* surfaces except /api/auth/* now require a session. The module-scoped
 # `panel` fixture signs up once and stashes the cookie here; the shared _get/_post
@@ -97,10 +102,16 @@ def panel():
     fd, db_path = tempfile.mkstemp(suffix=".db")
     os.close(fd)
     panel_dir = tempfile.mkdtemp(suffix="-spa")
-    (Path(panel_dir) / "index.html").write_text(_INDEX_HTML, encoding="utf-8")
+    (Path(panel_dir) / "index.html").write_text(_LANDING_HTML, encoding="utf-8")
+    app_dir = Path(panel_dir) / "app"
+    app_dir.mkdir()
+    (app_dir / "index.html").write_text(_APP_HTML, encoding="utf-8")
     assets = Path(panel_dir) / "assets"
     assets.mkdir()
     (assets / "index-abc123.js").write_text(_ASSET_JS, encoding="utf-8")
+    landing_css = Path(panel_dir) / "landing" / "css"
+    landing_css.mkdir(parents=True)
+    (landing_css / "core-hr.css").write_text(_LANDING_CSS, encoding="utf-8")
     spawner = _FakeSpawner()
     manager = RunManager(db_path=db_path, config_dir=str(CONFIG),
                          engine_root=panel_dir, log_dir=Path(panel_dir) / "run-logs",
@@ -159,10 +170,12 @@ def _campaign_id() -> str:
 
 
 def test_index_served_as_is(panel):
-    # The SPA shell is served unchanged — the React app fetches /api/state itself.
+    # "/" now serves the public marketing landing, not the SPA — the SPA moved to
+    # /app/ so the landing's in-page anchor nav (#core-hr etc.) isn't swallowed by
+    # createHashRouter.
     status, html = _get(panel["base"] + "/")
     assert status == 200
-    assert '<div id="root"></div>' in html
+    assert '<div id="landing"></div>' in html
     assert "__raw__" not in html
 
 
@@ -172,12 +185,39 @@ def test_static_assets_served(panel):
     assert "spa bundle" in body
 
 
-def test_unknown_client_route_falls_back_to_index(panel):
-    # A hard refresh on a client-side route returns the SPA shell (history mode),
-    # not a 404 — React Router then resolves the path in the browser.
-    status, html = _get(panel["base"] + "/matches")
+def test_landing_static_asset_served(panel):
+    # Landing's own assets (css/js/vendor/fonts/photos) live under /landing/ inside
+    # panel_dir and must serve directly, same as /assets/*.
+    status, body = _get(panel["base"] + "/landing/css/core-hr.css")
+    assert status == 200
+    assert "color: red" in body
+
+
+def test_app_shell_served_at_app_path(panel):
+    # Both "/app" (no trailing slash) and "/app/" must serve the SPA shell — no
+    # redirect required since the hash fragment (e.g. "#/leads") never reaches the
+    # server either way.
+    for path in ("/app", "/app/", "/app/index.html"):
+        status, html = _get(panel["base"] + path)
+        assert status == 200, path
+        assert '<div id="root"></div>' in html, path
+
+
+def test_unknown_app_subpath_falls_back_to_app_shell(panel):
+    # A stale/typed deep link under /app/ still resolves to the SPA shell so
+    # createHashRouter gets a chance to parse the route client-side.
+    status, html = _get(panel["base"] + "/app/somewhere")
     assert status == 200
     assert '<div id="root"></div>' in html
+
+
+def test_unknown_client_route_falls_back_to_landing(panel):
+    # A hard refresh on an unknown non-API, non-/app path falls back to the
+    # marketing landing (a soft 404), not the SPA shell — the SPA no longer lives
+    # at "/".
+    status, html = _get(panel["base"] + "/matches")
+    assert status == 200
+    assert '<div id="landing"></div>' in html
 
 
 def test_api_state_returns_raw_json(panel):

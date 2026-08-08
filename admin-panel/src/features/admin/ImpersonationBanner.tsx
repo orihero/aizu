@@ -44,7 +44,7 @@ export function ImpersonationBanner() {
           fresh against the admin cookie and picks up the impersonated identity. */}
       <button
         type="button"
-        onClick={() => { window.location.assign('/'); }}
+        onClick={() => { window.location.assign('/app/'); }}
         disabled={ending}
         className="inline-flex items-center gap-1.5 rounded-full border border-danger px-3.5 py-1.5 text-xs font-bold text-danger transition hover:bg-danger/10 active:scale-95 disabled:opacity-50"
       >

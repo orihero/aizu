@@ -95,7 +95,8 @@ describe('AppLayout chrome', () => {
 
     await user.click(screen.getByRole('button', { name: /exit impersonation/i }));
     await waitFor(() => { expect(repository.endImpersonateCount).toBe(1); });
-    expect(assign).toHaveBeenCalledWith('/admin/orgs');
+    // Under /app/ (the marketing landing owns '/'), and as a hash route within it.
+    expect(assign).toHaveBeenCalledWith('/app/#/admin/orgs');
   });
 
   test('no impersonation banner for a real signed-in user', async () => {

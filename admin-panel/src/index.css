@@ -1,5 +1,12 @@
 @import 'tailwindcss';
 
+/* Tailwind v4 auto-detects sources from the project root, which sweeps public/ —
+   including the marketing landing's hand-written CSS/JS and its vendored gsap/lenis
+   bundles. Class-shaped substrings in there (`.invisible`, `.contents`, `.resize`,
+   `.blur`) leak real utility rules into the app's stylesheet. The landing ships its
+   own CSS and never uses Tailwind, so exclude it outright. */
+@source not "../public";
+
 /* ------------------------------------------------------------------
    AIZU design tokens — "Ink × Lime".
 

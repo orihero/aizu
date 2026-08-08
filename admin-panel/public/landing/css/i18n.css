@@ -1,0 +1,133 @@
+/* ============================================================
+   AIZU landing — language switcher + translation paint guard.
+   Depends on css/tokens.css + css/nav.css being loaded first
+   (the switcher lives inside .nav-actions, in the nav pill).
+   ============================================================ */
+
+/* ---------- paint guard ----------
+   The inline snippet at the top of index.html stamps this attribute before
+   anything renders; landing/js/i18n.js clears it once the active locale has
+   been written into the DOM. Without it a Russian or Uzbek visitor would see
+   the English source copy — which ships inlined in the HTML so the page still
+   works with JS off — flash for a frame before being replaced.
+
+   The snippet also clears the attribute on window load and on a 1.5s timer,
+   so a failed or blocked i18n.js can never leave the page permanently blank. */
+html[data-i18n-pending] body {
+  visibility: hidden;
+}
+
+/* ---------- nav pill, now that it holds a switcher ----------
+   The pill is one flex row and its links used to have all the slack they
+   needed. Three locales and a ~95px switcher later they don't: Russian and
+   Uzbek labels are long enough to wrap mid-pill in the band just above the
+   860px breakpoint where nav.css drops them. Wrapping there looked broken —
+   two-line links inside a capsule sized for one. Forbid the wrap and collapse
+   the links a little earlier instead, which is what the 860px rule already
+   does, just at a width that accounts for the switcher. */
+.nav-link {
+  white-space: nowrap;
+}
+
+@media (max-width: 1080px) {
+  .nav-links {
+    display: none;
+  }
+}
+
+/* ---------- switcher ---------- */
+.lang-switch {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  padding: 3px;
+  margin-right: 4px;
+  background: var(--ground-3);
+  border-radius: 999px;
+  flex: none;
+}
+
+.lang-option {
+  appearance: none;
+  -webkit-appearance: none;
+  border: 0;
+  background: transparent;
+  padding: 7px 9px;
+  border-radius: 999px;
+  font-family: var(--font-sans);
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--muted);
+  cursor: pointer;
+  transition: color 0.2s var(--ease-out), background-color 0.2s var(--ease-out);
+}
+
+.lang-option:hover {
+  color: var(--ink);
+}
+
+.lang-option--active {
+  background: var(--ground-4);
+  color: var(--lime);
+}
+
+/* Keyboard focus stays visible against both the pill and the active chip. */
+.lang-option:focus-visible {
+  outline: 2px solid var(--lime);
+  outline-offset: 2px;
+}
+
+/* ---------- responsive ----------
+   Below 480px nav.css already drops the "Log in" action, leaving the wordmark,
+   the switcher and the primary CTA in the pill. Even so the switcher's ~95px
+   is enough to push that row past a phone viewport — it overflowed at 360px in
+   every locale, English included — so the pill has to give the width back
+   somewhere. It comes out of padding, gaps and type size rather than out of the
+   switcher itself: language choice matters most on exactly these screens, and a
+   hidden switcher would strand a visitor in the wrong language. */
+@media (max-width: 480px) {
+  .nav-pill {
+    gap: 12px;
+    padding: 7px 8px 7px 14px;
+  }
+
+  .nav-logo {
+    font-size: 19px;
+    gap: 7px;
+  }
+
+  .nav-btn {
+    padding: 10px 16px;
+    font-size: 13px;
+  }
+
+  .lang-switch {
+    padding: 2px;
+    margin-right: 0;
+  }
+
+  .lang-option {
+    padding: 5px 6px;
+    font-size: 11px;
+    letter-spacing: 0.02em;
+  }
+}
+
+/* The Japanese form of the name is decorative (aria-hidden in the markup) and
+   is the first thing worth spending on the narrowest phones, where the three
+   remaining pill items still do not fit. */
+@media (max-width: 400px) {
+  .nav-logo__jp {
+    display: none;
+  }
+}
+
+/* ---------- reduced motion ---------- */
+@media (prefers-reduced-motion: reduce) {
+  .lang-option {
+    transition: none;
+  }
+}

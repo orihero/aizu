@@ -3,12 +3,12 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>AIZU: a signal to act</title>
-<meta name="description" content="Tell AIZU what you sell and who you serve. It returns a short list of qualified, ready-to-buy customers, every week. A pipeline that fills itself.">
-<meta property="og:title" content="AIZU: a signal to act">
-<meta property="og:description" content="Tell AIZU what you sell and who you serve. It returns a short list of qualified, ready-to-buy customers, every week.">
+<title data-i18n="meta.title">AIZU: a signal to act</title>
+<meta name="description" content="Tell AIZU what you sell and who you serve. It returns a short list of qualified, ready-to-buy customers, every week. A pipeline that fills itself." data-i18n-attr="content:meta.desc">
+<meta property="og:title" content="AIZU: a signal to act" data-i18n-attr="content:meta.ogTitle">
+<meta property="og:description" content="Tell AIZU what you sell and who you serve. It returns a short list of qualified, ready-to-buy customers, every week." data-i18n-attr="content:meta.ogDesc">
 <meta property="og:type" content="website">
-<meta property="og:url" content="https://aizu.app/">
+<meta property="og:url" content="https://aizu.uz/">
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%2316161a'/%3E%3Ccircle cx='14' cy='18' r='4.5' fill='%23d9f24f'/%3E%3Cpath d='M20.5 6.2 A 13.5 13.5 0 0 1 27.8 13.5' fill='none' stroke='%23d9f24f' stroke-width='2.6' stroke-linecap='round'/%3E%3C/svg%3E">
 <style>
 /* ============================================================
@@ -29,7 +29,7 @@
   --lime-08:rgba(217,242,79,.08);
   --lime-14:rgba(217,242,79,.14);
   --sans:"Inter Tight","Inter","SF Pro Display","Segoe UI Variable Display","Segoe UI",system-ui,-apple-system,sans-serif;
-  --mono:ui-monospace,"JetBrains Mono","SFMono-Regular","Cascadia Mono",Consolas,monospace;
+  --mono:ui-monospace,"JetBrains Mono","SFMono-Regular","Cascadia Mono",Consolas,"Noto Sans Mono",monospace;
   --r-surface:16px;
   --r-inner:12px;
   --maxw:1120px;
@@ -97,13 +97,31 @@ section{padding-block:clamp(76px,10vw,140px)}
 .logo{display:flex;align-items:center;gap:10px;font-weight:600;color:var(--paper);font-size:18px;letter-spacing:-.02em}
 .logo .jp{font-family:var(--mono);font-size:13px;color:var(--grey-1);letter-spacing:.08em;margin-top:2px}
 .logo svg{width:26px;height:26px;color:var(--lime)}
-.nav-links{display:flex;gap:28px;margin-left:auto;align-items:center}
+/* never wrap: .nav-in is a fixed 68px row, so a wrapped second line is
+   clipped rather than shown. The narrow-width block below is what makes
+   logo + selector + CTA fit on one line in the longer languages. */
+.nav-links{display:flex;flex-wrap:nowrap;gap:28px;margin-left:auto;align-items:center}
 .nav-links a{font-size:15px;color:var(--grey-1);transition:color .15s}
 .nav-links a:hover{color:var(--paper)}
 .nav .btn{margin-left:8px}
-@media (max-width:760px){
+/* ---------- language selector: a smaller sibling of .toggle ---------- */
+.lang{display:inline-flex;align-items:center;background:var(--ink-2);border:1px solid var(--line);border-radius:999px;padding:3px;gap:2px}
+.lang button{padding:5px 9px;border-radius:999px;font-size:12px;font-weight:600;color:var(--grey-1);line-height:1;transition:background .2s,color .2s}
+.lang button[aria-pressed="true"]{background:var(--grey-3);color:var(--paper)}
+@media (max-width:900px){
+  .nav-links{gap:18px}
   .nav-links a:not(.btn){display:none}
   .nav-in{gap:16px}
+}
+/* 460px, not 420: "Начать бесплатно" + the selector still overrun a
+   420px-tight nav. Verified down to 320px in all three languages. */
+@media (max-width:460px){
+  .logo .jp{display:none}
+  .nav-in{gap:8px}
+  .nav-links{gap:8px}
+  .lang{padding:2px}
+  .lang button{padding:4px 5px;font-size:11px;letter-spacing:0}
+  .nav-in .btn-sm{padding:8px 12px;font-size:12.5px}
 }
 
 /* ---------- hero: asymmetric split ---------- */
@@ -199,9 +217,12 @@ section{padding-block:clamp(76px,10vw,140px)}
   box-shadow:0 0 0 1px var(--lime-08),0 8px 24px rgba(0,0,0,.35);
 }
 .lead-avatar{width:28px;height:28px;border-radius:50%;background:var(--grey-3);flex:0 0 auto}
-.lead-copy{display:flex;flex-direction:column;gap:3px;flex:1;min-width:0}
+/* flex-basis 0 + width 0, not just min-width:0: the nowrap .l-who still
+   reports its full text width as a min-content contribution, which pushed
+   the whole hero grid track past the viewport in ru/uz at <=390px. */
+.lead-copy{display:flex;flex-direction:column;gap:3px;flex:1 1 0;width:0;min-width:0}
 .lead-copy .l-who{font-size:12.5px;font-weight:600;color:var(--paper);letter-spacing:-.01em;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.lead-copy .l-ask{font-size:12px;color:var(--grey-1);line-height:1.4;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.lead-copy .l-ask{font-size:12px;color:var(--grey-1);line-height:1.4;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;white-space:normal;overflow:hidden}
 .lead-tag{
   flex:0 0 auto;font-family:var(--mono);font-size:10.5px;letter-spacing:.1em;color:var(--grey-1);
   border:1px solid var(--line);border-radius:999px;padding:5px 10px;background:var(--ink);
@@ -493,12 +514,12 @@ footer{border-top:1px solid var(--line);padding-block:44px;font-size:14px;color:
 </style></noscript>
 </head>
 <body>
-<a class="skip" href="#main">Skip to content</a>
+<a class="skip" href="#main" data-i18n="skip.link">Skip to content</a>
 
 <!-- ================= NAV ================= -->
-<nav class="nav" aria-label="Main">
+<nav class="nav" aria-label="Main" data-i18n-attr="aria-label:nav.aria">
   <div class="nav-in">
-    <a class="logo" href="#top" aria-label="AIZU home">
+    <a class="logo" href="#top" aria-label="AIZU home" data-i18n-attr="aria-label:nav.logo.aria">
       <svg class="ping-mark drawn" viewBox="0 0 32 32" aria-hidden="true">
         <circle cx="14" cy="18" r="4.5" fill="currentColor"/>
         <path class="arc" pathLength="1" d="M20.5 6.2 A 13.5 13.5 0 0 1 27.8 13.5" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round"/>
@@ -506,11 +527,19 @@ footer{border-top:1px solid var(--line);padding-block:44px;font-size:14px;color:
       <span>AIZU</span><span class="jp" aria-hidden="true">合図</span>
     </a>
     <div class="nav-links">
-      <a href="#why">Why AIZU</a>
-      <a href="#how">How it works</a>
-      <a href="#pricing">Pricing</a>
-      <a href="#faq">FAQ</a>
-      <a class="btn btn-lime btn-sm" href="https://aizu.app/app">Start free</a>
+      <a href="#why" data-i18n="nav.why">Why AIZU</a>
+      <a href="#how" data-i18n="nav.how">How it works</a>
+      <a href="#pricing" data-i18n="nav.pricing">Pricing</a>
+      <a href="#faq" data-i18n="nav.faq">FAQ</a>
+      <!-- language selector: plain buttons (not <a>), so the
+           `.nav-links a:not(.btn){display:none}` mobile rule below
+           never hides it -->
+      <div class="lang" role="group" aria-label="Language" data-i18n-attr="aria-label:lang.aria">
+        <button type="button" data-lang="en" lang="en" aria-pressed="true" aria-label="English">EN</button>
+        <button type="button" data-lang="ru" lang="ru" aria-pressed="false" aria-label="Русский">RU</button>
+        <button type="button" data-lang="uz" lang="uz" aria-pressed="false" aria-label="Oʻzbekcha">UZ</button>
+      </div>
+      <a class="btn btn-lime btn-sm" href="https://aizu.uz/app" data-i18n="nav.cta">Start free</a>
     </div>
   </div>
 </nav>
@@ -520,22 +549,22 @@ footer{border-top:1px solid var(--line);padding-block:44px;font-size:14px;color:
 <header class="hero" id="top">
   <div class="wrap hero-grid">
     <div>
-      <h1>Meet your next customers while they're still deciding.</h1>
-      <p class="sub">Tell AIZU what you sell and who you serve. It returns a short list of <strong>ready-to-buy customers</strong>, every week.</p>
+      <h1 data-i18n="hero.h1">Meet your next customers while they're still deciding.</h1>
+      <p class="sub" data-i18n-html="hero.sub">Tell AIZU what you sell and who you serve. It returns a short list of <strong>ready-to-buy customers</strong>, every week.</p>
       <div class="hero-ctas">
-        <a class="btn btn-lime" href="https://aizu.app/app">Start free</a>
-        <a class="btn btn-ghost" href="#how">See how it works</a>
+        <a class="btn btn-lime" href="https://aizu.uz/app" data-i18n="hero.cta.primary">Start free</a>
+        <a class="btn btn-ghost" href="#how" data-i18n="hero.cta.secondary">See how it works</a>
       </div>
     </div>
 
     <!-- SIGNAL THEATER: input, black box, delivered leads -->
     <div>
-      <div class="theater" id="theater" role="img" aria-label="Abstract animation. You describe what you sell and who you serve. AIZU finds the signal. Ready-to-buy customers appear, each showing who they are and what they asked for.">
+      <div class="theater" id="theater" role="img" aria-label="Abstract animation. You describe what you sell and who you serve. AIZU finds the signal. Ready-to-buy customers appear, each showing who they are and what they asked for." data-i18n-attr="aria-label:theater.aria">
         <div class="stage" aria-hidden="true">
-          <p class="stage-label"><b>you describe</b></p>
+          <p class="stage-label" data-i18n-html="theater.label.input"><b>you describe</b></p>
           <div class="input-card">
-            <p class="input-line" id="line-sell"><span class="key">sell ›</span><span class="typed" id="type-sell">handmade ceramic tableware</span><span class="caret"></span></p>
-            <p class="input-line" id="line-serve"><span class="key">serve ›</span><span class="typed" id="type-serve">people furnishing a first home</span><span class="caret"></span></p>
+            <p class="input-line" id="line-sell"><span class="key" data-i18n="theater.prompt.sell">sell ›</span><span class="typed" id="type-sell" data-i18n="theater.example.sell">handmade ceramic tableware</span><span class="caret"></span></p>
+            <p class="input-line" id="line-serve"><span class="key" data-i18n="theater.prompt.serve">serve ›</span><span class="typed" id="type-serve" data-i18n="theater.example.serve">people furnishing a first home</span><span class="caret"></span></p>
           </div>
         </div>
         <div class="stage" aria-hidden="true">
@@ -546,21 +575,22 @@ footer{border-top:1px solid var(--line);padding-block:44px;font-size:14px;color:
                 <circle cx="14" cy="18" r="4.5" fill="currentColor"/>
                 <path class="arc" pathLength="1" d="M20.5 6.2 A 13.5 13.5 0 0 1 27.8 13.5" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round"/>
               </svg>
+              <!-- "AIZU 合図" is the brand mark, never translated -->
               <span class="bb-label">AIZU 合図</span>
             </div>
             <div class="wire"><span class="pulse" id="pulse-out"></span></div>
           </div>
         </div>
         <div class="stage" aria-hidden="true">
-          <p class="stage-label"><b>ready-to-buy customers</b></p>
+          <p class="stage-label" data-i18n-html="theater.label.output"><b>ready-to-buy customers</b></p>
           <ul class="lead-cards" id="lead-cards">
-            <li class="lead-card lit"><span class="lead-avatar"></span><span class="lead-copy"><span class="l-who">K. · furnishing a first home</span><span class="l-ask">"Who makes a dinnerware set that lasts?"</span></span><span class="lead-tag">ready to buy</span></li>
-            <li class="lead-card lit"><span class="lead-avatar"></span><span class="lead-copy"><span class="l-who">M. · just moved in</span><span class="l-ask">"Want handmade plates, any makers?"</span></span><span class="lead-tag">ready to buy</span></li>
-            <li class="lead-card lit"><span class="lead-avatar"></span><span class="lead-copy"><span class="l-who">J. · gift for a new home</span><span class="l-ask">"Where do I find ceramic tableware?"</span></span><span class="lead-tag">ready to buy</span></li>
+            <li class="lead-card lit"><span class="lead-avatar"></span><span class="lead-copy"><span class="l-who" data-i18n="theater.example.lead1.who">K. · furnishing a first home</span><span class="l-ask" data-i18n="theater.example.lead1.ask">"Who makes a dinnerware set that lasts?"</span></span><span class="lead-tag" data-i18n="theater.tag.ready">ready to buy</span></li>
+            <li class="lead-card lit"><span class="lead-avatar"></span><span class="lead-copy"><span class="l-who" data-i18n="theater.example.lead2.who">M. · just moved in</span><span class="l-ask" data-i18n="theater.example.lead2.ask">"Want handmade plates, any makers?"</span></span><span class="lead-tag" data-i18n="theater.tag.ready">ready to buy</span></li>
+            <li class="lead-card lit"><span class="lead-avatar"></span><span class="lead-copy"><span class="l-who" data-i18n="theater.example.lead3.who">J. · gift for a new home</span><span class="l-ask" data-i18n="theater.example.lead3.ask">"Where do I find ceramic tableware?"</span></span><span class="lead-tag" data-i18n="theater.tag.ready">ready to buy</span></li>
           </ul>
         </div>
       </div>
-      <p class="theater-caption">Describe your business once. AIZU delivers the people already asking for it.</p>
+      <p class="theater-caption" data-i18n="theater.caption">Describe your business once. AIZU delivers the people already asking for it.</p>
     </div>
   </div>
 </header>
@@ -568,46 +598,46 @@ footer{border-top:1px solid var(--line);padding-block:44px;font-size:14px;color:
 <!-- ================= AUDIENCE STRIP ================= -->
 <div class="audience reveal">
   <div class="wrap">
-    <p>Built for people who sell direct: e-commerce and DTC brands, agencies, service providers, coaches and creators, B2B sellers.</p>
+    <p data-i18n="audience.text">Built for people who sell direct: e-commerce and DTC brands, agencies, service providers, coaches and creators, B2B sellers.</p>
   </div>
 </div>
 
 <!-- ================= THE MISS ================= -->
 <section id="why" aria-labelledby="why-title">
   <div class="wrap">
-    <h2 class="sec-title reveal" id="why-title">They're already asking.</h2>
+    <h2 class="sec-title reveal" id="why-title" data-i18n="why.title">They're already asking.</h2>
     <div class="problem-grid">
       <div class="reveal">
-        <p>Right now, someone out there is looking for exactly what you sell, and asking who can help.</p>
+        <p data-i18n="why.lead">Right now, someone out there is looking for exactly what you sell, and asking who can help.</p>
       </div>
       <div class="reveal d1">
-        <h3>Gone before you find them.</h3>
-        <p>By the time you'd ever find them, they've moved on. And you've spent hours you don't have: chasing, sorting, guessing.</p>
+        <h3 data-i18n="why.gone.title">Gone before you find them.</h3>
+        <p data-i18n="why.gone.body">By the time you'd ever find them, they've moved on. And you've spent hours you don't have: chasing, sorting, guessing.</p>
       </div>
     </div>
 
-    <div class="miss-diagram reveal d2" role="img" aria-label="Diagram of outcomes. Without AIZU, the moment a customer asks has passed by the time you find them. With AIZU, you are there while the moment is live.">
+    <div class="miss-diagram reveal d2" role="img" aria-label="Diagram of outcomes. Without AIZU, the moment a customer asks has passed by the time you find them. With AIZU, you are there while the moment is live." data-i18n-attr="aria-label:why.diagram.aria">
       <svg viewBox="0 0 560 168" aria-hidden="true">
         <!-- without -->
-        <text x="0" y="14" fill="#9a9aa2" font-family="ui-monospace,monospace" font-size="10" letter-spacing="1.5">WITHOUT</text>
+        <text x="0" y="14" fill="#9a9aa2" font-family="ui-monospace,monospace" font-size="10" letter-spacing="1.5" data-i18n="why.diagram.without">WITHOUT</text>
         <line x1="0" y1="44" x2="560" y2="44" stroke="#2a2a30" stroke-width="2"/>
         <circle cx="120" cy="44" r="6" fill="#43434c"/>
-        <text x="98" y="70" fill="#9a9aa2" font-family="ui-monospace,monospace" font-size="10">the moment</text>
+        <text x="98" y="70" fill="#9a9aa2" font-family="ui-monospace,monospace" font-size="10" data-i18n="why.diagram.moment">the moment</text>
         <circle cx="470" cy="44" r="5" fill="none" stroke="#43434c" stroke-width="1.5"/>
-        <text x="432" y="24" fill="#9a9aa2" font-family="ui-monospace,monospace" font-size="10">you find them</text>
+        <text x="545" y="24" text-anchor="end" fill="#9a9aa2" font-family="ui-monospace,monospace" font-size="10" data-i18n="why.diagram.without.found">you find them</text>
         <path d="M132 32 q170 -26 328 4" fill="none" stroke="#43434c" stroke-width="1" stroke-dasharray="3 5"/>
-        <text x="252" y="70" fill="#9a9aa2" font-family="ui-monospace,monospace" font-size="10">days later, gone</text>
+        <text x="252" y="70" fill="#9a9aa2" font-family="ui-monospace,monospace" font-size="10" data-i18n="why.diagram.daysLater">days later, gone</text>
         <!-- with -->
-        <text x="0" y="112" fill="#9a9aa2" font-family="ui-monospace,monospace" font-size="10" letter-spacing="1.5">WITH AIZU</text>
+        <text x="0" y="112" fill="#9a9aa2" font-family="ui-monospace,monospace" font-size="10" letter-spacing="1.5" data-i18n="why.diagram.withAizu">WITH AIZU</text>
         <line x1="0" y1="140" x2="560" y2="140" stroke="#2a2a30" stroke-width="2"/>
         <circle cx="120" cy="140" r="6" fill="#d9f24f"/>
         <circle cx="120" cy="140" r="12" fill="none" stroke="#d9f24f" stroke-width="1" opacity=".35"/>
         <circle cx="158" cy="140" r="5" fill="none" stroke="#d9f24f" stroke-width="1.5" opacity=".9"/>
-        <text x="176" y="145" fill="#9a9aa2" font-family="ui-monospace,monospace" font-size="10">you're there, while it still counts</text>
+        <text x="176" y="145" fill="#9a9aa2" font-family="ui-monospace,monospace" font-size="10" data-i18n="why.diagram.withAizu.tagline">you're there, while it still counts</text>
       </svg>
     </div>
 
-    <p class="kicker-line reveal d3">The customer was real. The moment was real. <em>You just weren't there.</em></p>
+    <p class="kicker-line reveal d3" data-i18n-html="why.kicker">The customer was real. The moment was real. <em>You just weren't there.</em></p>
   </div>
 </section>
 
@@ -615,22 +645,22 @@ footer{border-top:1px solid var(--line);padding-block:44px;font-size:14px;color:
 <section class="payoff" aria-labelledby="payoff-title">
   <span class="jp-water" aria-hidden="true">合図</span>
   <div class="wrap">
-    <h2 class="payoff-lock reveal" id="payoff-title">AIZU <span class="jp" lang="ja">合図</span>. <em class="sig">A signal to act.</em></h2>
-    <p class="reveal d1">AIZU is Japanese for <strong>a signal to act</strong>. In all the noise online, it surfaces the one that matters: the customer worth reaching, right now.</p>
-    <p class="reveal d2"><strong>Not more noise. Not another tab to check.</strong> One clear signal, delivered while it still counts.</p>
+    <h2 class="payoff-lock reveal" id="payoff-title" data-i18n-html="payoff.lock">AIZU <span class="jp" lang="ja">合図</span>. <em class="sig">A signal to act.</em></h2>
+    <p class="reveal d1" data-i18n-html="payoff.body1">AIZU is Japanese for <strong>a signal to act</strong>. In all the noise online, it surfaces the one that matters: the customer worth reaching, right now.</p>
+    <p class="reveal d2" data-i18n-html="payoff.body2"><strong>Not more noise. Not another tab to check.</strong> One clear signal, delivered while it still counts.</p>
   </div>
 </section>
 
 <!-- ================= WHAT YOU GET: bento ================= -->
 <section aria-labelledby="get-title">
   <div class="wrap">
-    <h2 class="sec-title reveal" id="get-title">What you get.</h2>
+    <h2 class="sec-title reveal" id="get-title" data-i18n="get.title">What you get.</h2>
     <div class="bento">
 
       <article class="cell cell-precision reveal">
-        <h3>5 qualified &gt; 100 junk.</h3>
-        <p>Not more leads. The right ones. A short list of people ready to buy, each one already looking for what you offer.</p>
-        <div class="diagram" role="img" aria-label="Diagram: a field of grey dots with five lime dots. Five qualified beats one hundred junk.">
+        <h3 data-i18n="get.precision.title">5 qualified &gt; 100 junk.</h3>
+        <p data-i18n="get.precision.body">Not more leads. The right ones. A short list of people ready to buy, each one already looking for what you offer.</p>
+        <div class="diagram" role="img" aria-label="Diagram: a field of grey dots with five lime dots. Five qualified beats one hundred junk." data-i18n-attr="aria-label:get.precision.diagram.aria">
           <svg viewBox="0 0 280 88" aria-hidden="true">
             <g fill="#43434c">
               <circle cx="14" cy="16" r="3.2"/><circle cx="40" cy="16" r="3.2"/><circle cx="66" cy="16" r="3.2"/><circle cx="92" cy="16" r="3.2"/><circle cx="118" cy="16" r="3.2"/><circle cx="144" cy="16" r="3.2"/><circle cx="170" cy="16" r="3.2"/><circle cx="222" cy="16" r="3.2"/><circle cx="248" cy="16" r="3.2"/><circle cx="274" cy="16" r="3.2"/>
@@ -649,16 +679,16 @@ footer{border-top:1px solid var(--line);padding-block:44px;font-size:14px;color:
       </article>
 
       <article class="cell reveal d1">
-        <h3>Stop chasing. Start winning.</h3>
-        <p>Tell AIZU what you sell and who you serve. It does the finding, quietly and continuously, so your hours go back into serving customers instead of hunting for them.</p>
+        <h3 data-i18n="get.momentum.title">Stop chasing. Start winning.</h3>
+        <p data-i18n="get.momentum.body">Tell AIZU what you sell and who you serve. It does the finding, quietly and continuously, so your hours go back into serving customers instead of hunting for them.</p>
       </article>
 
       <article class="cell cell-pipeline reveal d2">
         <div class="cell-text">
-          <h3>A pipeline that fills itself.</h3>
-          <p>A steady stream of ready-to-buy customers, arriving week after week. Next month is already taken care of while you close this one.</p>
+          <h3 data-i18n="get.pipeline.title">A pipeline that fills itself.</h3>
+          <p data-i18n="get.pipeline.body">A steady stream of ready-to-buy customers, arriving week after week. Next month is already taken care of while you close this one.</p>
         </div>
-        <div class="diagram" role="img" aria-label="Diagram: bars rising week after week, each topped with a lime dot. A pipeline that keeps filling.">
+        <div class="diagram" role="img" aria-label="Diagram: bars rising week after week, each topped with a lime dot. A pipeline that keeps filling." data-i18n-attr="aria-label:get.pipeline.diagram.aria">
           <svg viewBox="0 0 280 88" aria-hidden="true">
             <g fill="#2a2a30">
               <rect x="20" y="60" width="22" height="20" rx="4"/>
@@ -672,7 +702,7 @@ footer{border-top:1px solid var(--line);padding-block:44px;font-size:14px;color:
               <circle cx="31" cy="52" r="4"/><circle cx="73" cy="44" r="4"/><circle cx="115" cy="38" r="4"/><circle cx="157" cy="30" r="4"/><circle cx="199" cy="22" r="4"/><circle cx="241" cy="12" r="4"/>
             </g>
             <g fill="#9a9aa2" font-family="ui-monospace,monospace" font-size="8">
-              <text x="24" y="87">w1</text><text x="66" y="87">w2</text><text x="108" y="87">w3</text><text x="150" y="87">w4</text><text x="192" y="87">w5</text><text x="234" y="87">w6</text>
+              <text x="24" y="87" data-i18n="get.pipeline.diagram.w1">w1</text><text x="66" y="87" data-i18n="get.pipeline.diagram.w2">w2</text><text x="108" y="87" data-i18n="get.pipeline.diagram.w3">w3</text><text x="150" y="87" data-i18n="get.pipeline.diagram.w4">w4</text><text x="192" y="87" data-i18n="get.pipeline.diagram.w5">w5</text><text x="234" y="87" data-i18n="get.pipeline.diagram.w6">w6</text>
             </g>
           </svg>
         </div>
@@ -684,29 +714,29 @@ footer{border-top:1px solid var(--line);padding-block:44px;font-size:14px;color:
 <!-- ================= HOW YOU USE IT ================= -->
 <section id="how" aria-labelledby="how-title">
   <div class="wrap">
-    <h2 class="sec-title reveal" id="how-title">How you use it.</h2>
-    <p class="how-intro reveal">Three steps. <strong>The middle one is ours.</strong></p>
+    <h2 class="sec-title reveal" id="how-title" data-i18n="how.title">How you use it.</h2>
+    <p class="how-intro reveal" data-i18n-html="how.intro">Three steps. <strong>The middle one is ours.</strong></p>
     <div class="steps">
 
       <article class="step reveal">
-        <h3>Describe</h3>
-        <p>Tell AIZU what you sell and who you serve. One short description in plain words. That's the whole setup.</p>
+        <h3 data-i18n="how.step1.title">Describe</h3>
+        <p data-i18n="how.step1.body">Tell AIZU what you sell and who you serve. One short description in plain words. That's the whole setup.</p>
         <div class="mini" aria-hidden="true">
           <div class="mini-input"><span class="row"></span><span class="row"></span></div>
         </div>
       </article>
 
       <article class="step reveal d1">
-        <h3>Signal</h3>
-        <p>Out in the open, people are already asking who can help. AIZU surfaces the ones that match you while the moment is live.</p>
+        <h3 data-i18n="how.step2.title">Signal</h3>
+        <p data-i18n="how.step2.body">Out in the open, people are already asking who can help. AIZU surfaces the ones that match you while the moment is live.</p>
         <div class="mini" aria-hidden="true">
           <div class="mini-wire"><span class="mini-dot"></span></div>
         </div>
       </article>
 
       <article class="step reveal d2">
-        <h3>Customers</h3>
-        <p>A short list lands in your account: who they are, what they asked for in their own words, and a direct way to respond. Next week, it refills.</p>
+        <h3 data-i18n="how.step3.title">Customers</h3>
+        <p data-i18n="how.step3.body">A short list lands in your account: who they are, what they asked for in their own words, and a direct way to respond. Next week, it refills.</p>
         <div class="mini" aria-hidden="true">
           <div class="mini-out">
             <span class="row"></span>
@@ -718,8 +748,8 @@ footer{border-top:1px solid var(--line);padding-block:44px;font-size:14px;color:
     </div>
 
     <div class="how-closer reveal d3">
-      <p>You never see the noise. <em>You only see the signal.</em></p>
-      <a class="btn btn-lime" href="https://aizu.app/app">Start free</a>
+      <p data-i18n-html="how.closer">You never see the noise. <em>You only see the signal.</em></p>
+      <a class="btn btn-lime" href="https://aizu.uz/app" data-i18n="how.cta">Start free</a>
     </div>
   </div>
 </section>
@@ -727,31 +757,33 @@ footer{border-top:1px solid var(--line);padding-block:44px;font-size:14px;color:
 <!-- ================= SAMPLE LEAD ================= -->
 <section id="sample" aria-labelledby="sample-title">
   <div class="wrap">
-    <h2 class="sec-title reveal" id="sample-title">What lands in your account.</h2>
-    <p class="sample-intro reveal d1">Every lead answers three things: <strong>who they are, what they asked for in their own words, and when they asked.</strong> With a direct way to respond. A representative example:</p>
+    <h2 class="sec-title reveal" id="sample-title" data-i18n="sample.title">What lands in your account.</h2>
+    <p class="sample-intro reveal d1" data-i18n-html="sample.intro">Every lead answers three things: <strong>who they are, what they asked for in their own words, and when they asked.</strong> With a direct way to respond. A representative example:</p>
     <div class="sample-card reveal d2">
       <div class="s-head">
-        <p class="s-who">K., furnishing a first apartment</p>
-        <span class="s-tag" aria-label="Qualified: ready to buy"><i aria-hidden="true"></i>ready to buy</span>
+        <p class="s-who" data-i18n="sample.card.who">K., furnishing a first apartment</p>
+        <!-- the <i> status dot is a sibling of the label text, so the
+             translated text goes on its own inner span, not on s-tag itself -->
+        <span class="s-tag" aria-label="Qualified: ready to buy" data-i18n-attr="aria-label:sample.card.tag.aria"><i aria-hidden="true"></i><span data-i18n="sample.card.tag">ready to buy</span></span>
       </div>
-      <blockquote>"Looking for a handmade ceramic dinnerware set for our new place. Happy to pay more for something that lasts. Who should I talk to?"</blockquote>
+      <blockquote data-i18n="sample.card.quote">"Looking for a handmade ceramic dinnerware set for our new place. Happy to pay more for something that lasts. Who should I talk to?"</blockquote>
       <div class="s-foot">
-        <p class="s-when">asked in public · surfaced 2h later</p>
-        <p class="s-reach">Direct way to respond included</p>
+        <p class="s-when" data-i18n="sample.card.when">asked in public · surfaced 2h later</p>
+        <p class="s-reach" data-i18n="sample.card.reach">Direct way to respond included</p>
       </div>
     </div>
-    <p class="sample-note reveal d3">Details anonymized and illustrative. Every delivered lead carries these same fields, matched to what you sell.</p>
+    <p class="sample-note reveal d3" data-i18n="sample.note">Details anonymized and illustrative. Every delivered lead carries these same fields, matched to what you sell.</p>
   </div>
 </section>
 
 <!-- ================= TRUST ================= -->
 <section class="trust" aria-labelledby="trust-title">
   <div class="wrap">
-    <h2 class="sec-title reveal" id="trust-title">Quiet. Respectful. Yours.</h2>
+    <h2 class="sec-title reveal" id="trust-title" data-i18n="trust.title">Quiet. Respectful. Yours.</h2>
     <div class="trust-prose">
-      <p class="reveal"><strong>Quiet.</strong> AIZU works in the background. No dashboards demanding attention, nothing to babysit. It shows up when there's something worth acting on.</p>
-      <p class="reveal d1"><strong>Respectful.</strong> Never pushy, never spam. AIZU finds people who are already looking; it doesn't manufacture interest that isn't there.</p>
-      <p class="reveal d2"><strong>Yours.</strong> What you tell AIZU about your business, and every lead it delivers, belongs to you. Never sold, never shared. Leave anytime and take it with you.</p>
+      <p class="reveal" data-i18n-html="trust.quiet"><strong>Quiet.</strong> AIZU works in the background. No dashboards demanding attention, nothing to babysit. It shows up when there's something worth acting on.</p>
+      <p class="reveal d1" data-i18n-html="trust.respectful"><strong>Respectful.</strong> Never pushy, never spam. AIZU finds people who are already looking; it doesn't manufacture interest that isn't there.</p>
+      <p class="reveal d2" data-i18n-html="trust.yours"><strong>Yours.</strong> What you tell AIZU about your business, and every lead it delivers, belongs to you. Never sold, never shared. Leave anytime and take it with you.</p>
     </div>
   </div>
 </section>
@@ -761,135 +793,138 @@ footer{border-top:1px solid var(--line);padding-block:44px;font-size:14px;color:
   <div class="wrap">
     <div class="pricing-head reveal">
       <div>
-        <h2 class="sec-title" id="pricing-title">Pay for customers, not software.</h2>
-        <p>Every plan delivers the same thing: qualified, ready-to-buy customers, every month. The only question is how many you can handle.</p>
+        <h2 class="sec-title" id="pricing-title" data-i18n="pricing.title">Pay for customers, not software.</h2>
+        <p data-i18n="pricing.lead">Every plan delivers the same thing: qualified, ready-to-buy customers, every month. The only question is how many you can handle.</p>
       </div>
-      <div class="toggle" role="group" aria-label="Billing period">
-        <button type="button" id="bill-m" aria-pressed="true">Monthly</button>
-        <button type="button" id="bill-y" aria-pressed="false">Yearly <span class="save">2 mo free</span></button>
+      <div class="toggle" role="group" aria-label="Billing period" data-i18n-attr="aria-label:pricing.toggle.aria">
+        <button type="button" id="bill-m" aria-pressed="true" data-i18n="pricing.toggle.monthly">Monthly</button>
+        <button type="button" id="bill-y" aria-pressed="false" data-i18n-html="pricing.toggle.yearly">Yearly <span class="save">2 mo free</span></button>
       </div>
     </div>
 
     <div class="plans">
 
-      <article class="plan reveal" aria-label="Free plan">
-        <h3>Free</h3>
-        <p class="plan-for">Try the signal for yourself. No card required.</p>
-        <p class="price"><span>$0</span><span class="per" data-m="/mo" data-y="/mo">/mo</span></p>
-        <p class="price-sub" data-m="forever · no card" data-y="forever · no card">forever · no card</p>
-        <p class="leads"><strong>10</strong> qualified leads / mo</p>
-        <a class="btn btn-ghost btn-sm" data-plan="free" href="https://aizu.app/app?plan=free&amp;billing=monthly">Start free</a>
+      <article class="plan reveal" aria-label="Free plan" data-i18n-attr="aria-label:pricing.plan.free.aria">
+        <h3 data-i18n="pricing.plan.free.name">Free</h3>
+        <p class="plan-for" data-i18n="pricing.plan.free.for">Try the signal for yourself. No card required.</p>
+        <p class="price"><span>$0</span><span class="per" data-m="/mo" data-y="/mo" data-i18n-m="pricing.plan.free.per.m" data-i18n-y="pricing.plan.free.per.y">/mo</span></p>
+        <p class="price-sub" data-m="forever · no card" data-y="forever · no card" data-i18n-m="pricing.plan.free.priceSub.m" data-i18n-y="pricing.plan.free.priceSub.y">forever · no card</p>
+        <p class="leads" data-i18n-html="pricing.plan.free.leads"><strong>10</strong> qualified leads / mo</p>
+        <a class="btn btn-ghost btn-sm" data-plan="free" href="https://aizu.uz/app?plan=free&amp;billing=monthly" data-i18n="pricing.plan.free.cta">Start free</a>
         <ul>
-          <li>10 qualified, ready-to-buy leads every month</li>
-          <li>One business description</li>
-          <li>Fresh leads delivered weekly</li>
-          <li>Nothing to cancel, ever</li>
+          <li data-i18n="pricing.plan.free.f1">10 qualified, ready-to-buy leads every month</li>
+          <li data-i18n="pricing.plan.free.f2">One business description</li>
+          <li data-i18n="pricing.plan.free.f3">Fresh leads delivered weekly</li>
+          <li data-i18n="pricing.plan.free.f4">Nothing to cancel, ever</li>
         </ul>
       </article>
 
-      <article class="plan plan-popular reveal d1" aria-label="Starter plan, most popular">
-        <p class="badge">Most popular</p>
-        <h3>Starter</h3>
-        <p class="plan-for">For growing businesses: a pipeline that genuinely fills itself.</p>
-        <p class="price"><span data-m="$24.99" data-y="$249">$24.99</span><span class="per" data-m="/mo" data-y="/yr">/mo</span></p>
-        <p class="price-sub" data-m="about $0.10 per qualified lead" data-y="about $20.75/mo, $0.08 per lead">about $0.10 per qualified lead</p>
-        <p class="leads"><strong>250</strong> qualified leads / mo</p>
-        <a class="btn btn-lime btn-sm" data-plan="starter" href="https://aizu.app/app?plan=starter&amp;billing=monthly">Choose Starter</a>
+      <article class="plan plan-popular reveal d1" aria-label="Starter plan, most popular" data-i18n-attr="aria-label:pricing.plan.starter.aria">
+        <p class="badge" data-i18n="pricing.plan.starter.badge">Most popular</p>
+        <h3 data-i18n="pricing.plan.starter.name">Starter</h3>
+        <p class="plan-for" data-i18n="pricing.plan.starter.for">For growing businesses: a pipeline that genuinely fills itself.</p>
+        <p class="price"><span data-m="$24.99" data-y="$249" data-i18n-m="pricing.plan.starter.price.m" data-i18n-y="pricing.plan.starter.price.y">$24.99</span><span class="per" data-m="/mo" data-y="/yr" data-i18n-m="pricing.plan.starter.per.m" data-i18n-y="pricing.plan.starter.per.y">/mo</span></p>
+        <p class="price-sub" data-m="about $0.10 per qualified lead" data-y="about $20.75/mo, $0.08 per lead" data-i18n-m="pricing.plan.starter.priceSub.m" data-i18n-y="pricing.plan.starter.priceSub.y">about $0.10 per qualified lead</p>
+        <p class="leads" data-i18n-html="pricing.plan.starter.leads"><strong>250</strong> qualified leads / mo</p>
+        <a class="btn btn-lime btn-sm" data-plan="starter" href="https://aizu.uz/app?plan=starter&amp;billing=monthly" data-i18n="pricing.plan.starter.cta">Choose Starter</a>
         <ul>
-          <li class="plus">Everything in Free, plus:</li>
-          <li>250 qualified leads every month</li>
-          <li>Up to 3 offer profiles</li>
-          <li>Lead feedback: your list gets sharper</li>
-          <li>Priority support</li>
+          <li class="plus" data-i18n="pricing.plan.starter.f1">Everything in Free, plus:</li>
+          <li data-i18n="pricing.plan.starter.f2">250 qualified leads every month</li>
+          <li data-i18n="pricing.plan.starter.f3">Up to 3 offer profiles</li>
+          <li data-i18n="pricing.plan.starter.f4">Lead feedback: your list gets sharper</li>
+          <li data-i18n="pricing.plan.starter.f5">Priority support</li>
         </ul>
       </article>
 
-      <article class="plan reveal d2" aria-label="Pro plan">
-        <h3>Pro</h3>
-        <p class="plan-for">For teams: volume without the junk. Every lead still qualified.</p>
-        <p class="price"><span data-m="$149" data-y="$1,490">$149</span><span class="per" data-m="/mo" data-y="/yr">/mo</span></p>
-        <p class="price-sub" data-m="about $0.07 per qualified lead" data-y="about $124/mo, $0.06 per lead">about $0.07 per qualified lead</p>
-        <p class="leads"><strong>2,000</strong> qualified leads / mo</p>
-        <a class="btn btn-ghost btn-sm" data-plan="pro" href="https://aizu.app/app?plan=pro&amp;billing=monthly">Choose Pro</a>
+      <article class="plan reveal d2" aria-label="Pro plan" data-i18n-attr="aria-label:pricing.plan.pro.aria">
+        <h3 data-i18n="pricing.plan.pro.name">Pro</h3>
+        <p class="plan-for" data-i18n="pricing.plan.pro.for">For teams: volume without the junk. Every lead still qualified.</p>
+        <p class="price"><span data-m="$149" data-y="$1,490" data-i18n-m="pricing.plan.pro.price.m" data-i18n-y="pricing.plan.pro.price.y">$149</span><span class="per" data-m="/mo" data-y="/yr" data-i18n-m="pricing.plan.pro.per.m" data-i18n-y="pricing.plan.pro.per.y">/mo</span></p>
+        <p class="price-sub" data-m="about $0.07 per qualified lead" data-y="about $124/mo, $0.06 per lead" data-i18n-m="pricing.plan.pro.priceSub.m" data-i18n-y="pricing.plan.pro.priceSub.y">about $0.07 per qualified lead</p>
+        <p class="leads" data-i18n-html="pricing.plan.pro.leads"><strong>2,000</strong> qualified leads / mo</p>
+        <a class="btn btn-ghost btn-sm" data-plan="pro" href="https://aizu.uz/app?plan=pro&amp;billing=monthly" data-i18n="pricing.plan.pro.cta">Choose Pro</a>
         <ul>
-          <li class="plus">Everything in Starter, plus:</li>
-          <li>2,000 qualified leads every month</li>
-          <li>Unlimited offer profiles</li>
-          <li>Team seats</li>
-          <li>Dedicated support</li>
+          <li class="plus" data-i18n="pricing.plan.pro.f1">Everything in Starter, plus:</li>
+          <li data-i18n="pricing.plan.pro.f2">2,000 qualified leads every month</li>
+          <li data-i18n="pricing.plan.pro.f3">Unlimited offer profiles</li>
+          <li data-i18n="pricing.plan.pro.f4">Team seats</li>
+          <li data-i18n="pricing.plan.pro.f5">Dedicated support</li>
         </ul>
       </article>
 
-      <article class="plan plan-scale reveal d3" aria-label="Custom plan">
+      <article class="plan plan-scale reveal d3" aria-label="Custom plan" data-i18n-attr="aria-label:pricing.plan.custom.aria">
         <div class="scale-main">
-          <h3>Custom</h3>
-          <p class="plan-for">For serious pipelines: volume tailored to what your team can handle, with onboarding and support to match.</p>
+          <h3 data-i18n="pricing.plan.custom.name">Custom</h3>
+          <p class="plan-for" data-i18n="pricing.plan.custom.for">For serious pipelines: volume tailored to what your team can handle, with onboarding and support to match.</p>
         </div>
         <ul>
-          <li class="plus">Everything in Pro, plus:</li>
-          <li>Volume tailored to your pipeline</li>
-          <li>Tailored onboarding</li>
-          <li>Priority support and SLA</li>
+          <li class="plus" data-i18n="pricing.plan.custom.f1">Everything in Pro, plus:</li>
+          <li data-i18n="pricing.plan.custom.f2">Volume tailored to your pipeline</li>
+          <li data-i18n="pricing.plan.custom.f3">Tailored onboarding</li>
+          <li data-i18n="pricing.plan.custom.f4">Priority support and SLA</li>
         </ul>
         <div class="scale-cta">
-          <p class="price"><span>Custom</span></p>
-          <p class="price-sub" data-m="per-deal volume, talk to us" data-y="per-deal volume, talk to us">per-deal volume, talk to us</p>
-          <a class="btn btn-ghost btn-sm" href="mailto:hello@aizu.app?subject=AIZU%20Custom%20plan">Talk to sales</a>
+          <p class="price"><span data-i18n="pricing.plan.custom.price">Custom</span></p>
+          <p class="price-sub" data-m="per-deal volume, talk to us" data-y="per-deal volume, talk to us" data-i18n-m="pricing.plan.custom.priceSub.m" data-i18n-y="pricing.plan.custom.priceSub.y">per-deal volume, talk to us</p>
+          <a class="btn btn-ghost btn-sm" href="mailto:hello@aizu.uz?subject=AIZU%20Custom%20plan" data-i18n="pricing.plan.custom.cta">Talk to sales</a>
         </div>
       </article>
     </div>
 
-    <p class="pricing-foot reveal">Leads are qualified customers delivered to your account each month. Upgrade, downgrade, or cancel anytime. No contracts, no lock-in.</p>
+    <p class="pricing-foot reveal" data-i18n="pricing.foot">Leads are qualified customers delivered to your account each month. Upgrade, downgrade, or cancel anytime. No contracts, no lock-in.</p>
   </div>
 </section>
 
 <!-- ================= FAQ ================= -->
 <section id="faq" aria-labelledby="faq-title">
   <div class="wrap">
-    <h2 class="sec-title reveal" id="faq-title">Fair questions, straight answers.</h2>
+    <h2 class="sec-title reveal" id="faq-title" data-i18n="faq.title">Fair questions, straight answers.</h2>
     <div class="faq-list reveal d1">
 
+      <!-- each <summary> pairs question text with a sibling .plusicon
+           span; the question goes on its own inner span so a
+           textContent write never destroys the icon -->
       <details open>
-        <summary>Where do the customers come from?<span class="plusicon" aria-hidden="true"></span></summary>
-        <p class="a">From public intent signals: people already asking, in public, for exactly what you offer. AIZU's job is to surface the ones that match your business while the moment is still live. What you get is the outcome: a qualified, ready-to-buy customer. The finding is our work, not yours.</p>
+        <summary><span data-i18n="faq.q1">Where do the customers come from?</span><span class="plusicon" aria-hidden="true"></span></summary>
+        <p class="a" data-i18n="faq.a1">From public intent signals: people already asking, in public, for exactly what you offer. AIZU's job is to surface the ones that match your business while the moment is still live. What you get is the outcome: a qualified, ready-to-buy customer. The finding is our work, not yours.</p>
       </details>
 
       <details>
-        <summary>What exactly do I get with each lead?<span class="plusicon" aria-hidden="true"></span></summary>
-        <p class="a">Each lead includes who they are, what they asked for in their own words, when they asked, and a direct way to respond. Enough to reach out the same day, with context. No guesswork, no digging.</p>
+        <summary><span data-i18n="faq.q2">What exactly do I get with each lead?</span><span class="plusicon" aria-hidden="true"></span></summary>
+        <p class="a" data-i18n="faq.a2">Each lead includes who they are, what they asked for in their own words, when they asked, and a direct way to respond. Enough to reach out the same day, with context. No guesswork, no digging.</p>
       </details>
 
       <details>
-        <summary>Is this cold outreach or a bought list?<span class="plusicon" aria-hidden="true"></span></summary>
-        <p class="a">No. AIZU doesn't sell contact databases, and it doesn't blast strangers. Every lead is a person who has already signaled, in public and on their own, that they're looking for what you sell. You're not interrupting anyone. You're answering.</p>
+        <summary><span data-i18n="faq.q3">Is this cold outreach or a bought list?</span><span class="plusicon" aria-hidden="true"></span></summary>
+        <p class="a" data-i18n="faq.a3">No. AIZU doesn't sell contact databases, and it doesn't blast strangers. Every lead is a person who has already signaled, in public and on their own, that they're looking for what you sell. You're not interrupting anyone. You're answering.</p>
       </details>
 
       <details>
-        <summary>How do I know the leads are actually qualified?<span class="plusicon" aria-hidden="true"></span></summary>
-        <p class="a">Because qualification is the product. Every lead matches what you sell and who you serve, and shows real, current intent to buy. If a lead isn't a fit, tell us; your list gets sharper.</p>
+        <summary><span data-i18n="faq.q4">How do I know the leads are actually qualified?</span><span class="plusicon" aria-hidden="true"></span></summary>
+        <p class="a" data-i18n="faq.a4">Because qualification is the product. Every lead matches what you sell and who you serve, and shows real, current intent to buy. If a lead isn't a fit, tell us; your list gets sharper.</p>
       </details>
 
       <details>
-        <summary>If a competitor uses AIZU too, do we get the same leads?<span class="plusicon" aria-hidden="true"></span></summary>
-        <p class="a">Leads are matched to your description, so two businesses with different offers get different lists. Where offers genuinely overlap, a lead can appear on more than one list; that's the honest answer. Your edge is timing: AIZU delivers while the moment is live, and the first thoughtful reply usually wins.</p>
+        <summary><span data-i18n="faq.q5">If a competitor uses AIZU too, do we get the same leads?</span><span class="plusicon" aria-hidden="true"></span></summary>
+        <p class="a" data-i18n="faq.a5">Leads are matched to your description, so two businesses with different offers get different lists. Where offers genuinely overlap, a lead can appear on more than one list; that's the honest answer. Your edge is timing: AIZU delivers while the moment is live, and the first thoughtful reply usually wins.</p>
       </details>
 
       <details>
-        <summary>How fast do I see results?<span class="plusicon" aria-hidden="true"></span></summary>
-        <p class="a">Your first leads typically arrive within days of describing your business, and then they keep coming, week after week. Start on Free: ten qualified leads a month is enough to feel the difference before you spend a dollar.</p>
+        <summary><span data-i18n="faq.q6">How fast do I see results?</span><span class="plusicon" aria-hidden="true"></span></summary>
+        <p class="a" data-i18n="faq.a6">Your first leads typically arrive within days of describing your business, and then they keep coming, week after week. Start on Free: ten qualified leads a month is enough to feel the difference before you spend a dollar.</p>
       </details>
 
       <details>
-        <summary>Can I cancel anytime?<span class="plusicon" aria-hidden="true"></span></summary>
-        <p class="a">Yes. Monthly plans cancel with one click, effective at the end of your billing period. No contracts, no exit calls. The Free plan needs no card at all.</p>
+        <summary><span data-i18n="faq.q7">Can I cancel anytime?</span><span class="plusicon" aria-hidden="true"></span></summary>
+        <p class="a" data-i18n="faq.a7">Yes. Monthly plans cancel with one click, effective at the end of your billing period. No contracts, no exit calls. The Free plan needs no card at all.</p>
       </details>
 
       <details>
-        <summary>Whose data is it?<span class="plusicon" aria-hidden="true"></span></summary>
-        <p class="a">Yours. The description of your business, and every lead AIZU delivers, belong to you: never sold, never shared, never used to help anyone else. If you leave, you take it all with you.</p>
+        <summary><span data-i18n="faq.q8">Whose data is it?</span><span class="plusicon" aria-hidden="true"></span></summary>
+        <p class="a" data-i18n="faq.a8">Yours. The description of your business, and every lead AIZU delivers, belong to you: never sold, never shared, never used to help anyone else. If you leave, you take it all with you.</p>
       </details>
     </div>
-    <p class="faq-escape reveal d2">Can't find your answer? <a href="mailto:hello@aizu.app">Write to hello@aizu.app</a>. A person replies.</p>
+    <p class="faq-escape reveal d2" data-i18n-html="faq.escape">Can't find your answer? <a href="mailto:hello@aizu.uz">Write to hello@aizu.uz</a>. A person replies.</p>
   </div>
 </section>
 
@@ -900,11 +935,11 @@ footer{border-top:1px solid var(--line);padding-block:44px;font-size:14px;color:
       <circle cx="52" cy="68" r="14" fill="currentColor"/>
       <path class="arc" pathLength="1" d="M74 26 A 46 46 0 0 1 99 51" fill="none" stroke="currentColor" stroke-width="7" stroke-linecap="round"/>
     </svg>
-    <h2 class="reveal d1" id="final-title">Your next customer may be asking right now.</h2>
-    <p class="sigline reveal d2">AIZU finds the signal. You win the customer.</p>
+    <h2 class="reveal d1" id="final-title" data-i18n="final.title">Your next customer may be asking right now.</h2>
+    <p class="sigline reveal d2" data-i18n="final.sigline">AIZU finds the signal. You win the customer.</p>
     <div class="hero-ctas reveal d3">
-      <a class="btn btn-lime" href="https://aizu.app/app">Start free</a>
-      <a class="btn btn-ghost" href="mailto:hello@aizu.app?subject=AIZU%20sales">Talk to sales</a>
+      <a class="btn btn-lime" href="https://aizu.uz/app" data-i18n="final.cta.primary">Start free</a>
+      <a class="btn btn-ghost" href="mailto:hello@aizu.uz?subject=AIZU%20sales" data-i18n="final.cta.secondary">Talk to sales</a>
     </div>
   </div>
 </section>
@@ -914,24 +949,24 @@ footer{border-top:1px solid var(--line);padding-block:44px;font-size:14px;color:
 <footer>
   <div class="wrap">
     <div class="foot-top">
-      <a class="foot-logo" href="#top" aria-label="AIZU, back to top">
+      <a class="foot-logo" href="#top" aria-label="AIZU, back to top" data-i18n-attr="aria-label:footer.logo.aria">
         <svg viewBox="0 0 32 32" aria-hidden="true">
           <circle cx="14" cy="18" r="4.5" fill="currentColor"/>
           <path d="M20.5 6.2 A 13.5 13.5 0 0 1 27.8 13.5" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round"/>
         </svg>
-        <span>AIZU</span><span class="jp" aria-hidden="true">合図</span><span class="jp">A signal to act.</span>
+        <span>AIZU</span><span class="jp" aria-hidden="true">合図</span><span class="jp" data-i18n="footer.tagline">A signal to act.</span>
       </a>
       <ul class="foot-links">
-        <li><a href="#pricing">Pricing</a></li>
-        <li><a href="#faq">FAQ</a></li>
-        <li><a href="https://aizu.app/terms">Terms</a></li>
-        <li><a href="https://aizu.app/privacy">Privacy</a></li>
-        <li><a href="mailto:hello@aizu.app">Contact: hello@aizu.app</a></li>
+        <li><a href="#pricing" data-i18n="footer.link.pricing">Pricing</a></li>
+        <li><a href="#faq" data-i18n="footer.link.faq">FAQ</a></li>
+        <li><a href="https://aizu.uz/terms" data-i18n="footer.link.terms">Terms</a></li>
+        <li><a href="https://aizu.uz/privacy" data-i18n="footer.link.privacy">Privacy</a></li>
+        <li><a href="mailto:hello@aizu.uz" data-i18n="footer.link.contact">Contact: hello@aizu.uz</a></li>
       </ul>
     </div>
     <div class="foot-bottom">
-      <p>Quiet. Respectful. Yours. Your data is never sold or shared.</p>
-      <p>© 2026 AIZU · aizu.app</p>
+      <p data-i18n="footer.blurb">Quiet. Respectful. Yours. Your data is never sold or shared.</p>
+      <p data-i18n="footer.copyright">© 2026 AIZU · aizu.uz</p>
     </div>
   </div>
 </footer>
@@ -939,14 +974,839 @@ footer{border-top:1px solid var(--line);padding-block:44px;font-size:14px;color:
 <!-- ================= STICKY CTA BAR ================= -->
 <div class="sticky-cta" id="sticky-cta" aria-hidden="true">
   <div class="sticky-cta-in">
-    <p class="txt">Your next customer may be asking right now.<span class="subline">10 qualified leads a month, free. No card.</span></p>
+    <p class="txt" data-i18n-html="sticky.text">Your next customer may be asking right now.<span class="subline">10 qualified leads a month, free. No card.</span></p>
     <div class="btns">
-      <a class="btn btn-ghost btn-sm" href="#pricing">See pricing</a>
-      <a class="btn btn-lime btn-sm" href="https://aizu.app/app">Start free</a>
+      <a class="btn btn-ghost btn-sm" href="#pricing" data-i18n="sticky.cta.secondary">See pricing</a>
+      <a class="btn btn-lime btn-sm" href="https://aizu.uz/app" data-i18n="sticky.cta.primary">Start free</a>
     </div>
   </div>
 </div>
 
+<script>
+/* ============================================================
+   i18n dictionaries. en is authoritative and mirrors the inline
+   English fallback text above byte-for-byte; ru/uz are filled in
+   by a separate pass and start as empty placeholders here.
+   ============================================================ */
+"use strict";
+var I18N = {
+  en: {
+    "meta.title": "AIZU: a signal to act",
+    "meta.desc": "Tell AIZU what you sell and who you serve. It returns a short list of qualified, ready-to-buy customers, every week. A pipeline that fills itself.",
+    "meta.ogTitle": "AIZU: a signal to act",
+    "meta.ogDesc": "Tell AIZU what you sell and who you serve. It returns a short list of qualified, ready-to-buy customers, every week.",
+
+    "skip.link": "Skip to content",
+
+    "nav.aria": "Main",
+    "nav.logo.aria": "AIZU home",
+    "nav.why": "Why AIZU",
+    "nav.how": "How it works",
+    "nav.pricing": "Pricing",
+    "nav.faq": "FAQ",
+    "nav.cta": "Start free",
+
+    "lang.aria": "Language",
+
+    "hero.h1": "Meet your next customers while they're still deciding.",
+    "hero.sub": "Tell AIZU what you sell and who you serve. It returns a short list of <strong>ready-to-buy customers</strong>, every week.",
+    "hero.cta.primary": "Start free",
+    "hero.cta.secondary": "See how it works",
+
+    "theater.aria": "Abstract animation. You describe what you sell and who you serve. AIZU finds the signal. Ready-to-buy customers appear, each showing who they are and what they asked for.",
+    "theater.label.input": "<b>you describe</b>",
+    "theater.prompt.sell": "sell ›",
+    "theater.prompt.serve": "serve ›",
+    "theater.label.output": "<b>ready-to-buy customers</b>",
+    "theater.tag.ready": "ready to buy",
+    "theater.caption": "Describe your business once. AIZU delivers the people already asking for it.",
+    /* static pre-animation content: no-JS / first-paint fallback,
+       byte-identical to I18N_EXAMPLES.en[0] below */
+    "theater.example.sell": "handmade ceramic tableware",
+    "theater.example.serve": "people furnishing a first home",
+    "theater.example.lead1.who": "K. · furnishing a first home",
+    "theater.example.lead1.ask": "\"Who makes a dinnerware set that lasts?\"",
+    "theater.example.lead2.who": "M. · just moved in",
+    "theater.example.lead2.ask": "\"Want handmade plates, any makers?\"",
+    "theater.example.lead3.who": "J. · gift for a new home",
+    "theater.example.lead3.ask": "\"Where do I find ceramic tableware?\"",
+
+    "audience.text": "Built for people who sell direct: e-commerce and DTC brands, agencies, service providers, coaches and creators, B2B sellers.",
+
+    "why.title": "They're already asking.",
+    "why.lead": "Right now, someone out there is looking for exactly what you sell, and asking who can help.",
+    "why.gone.title": "Gone before you find them.",
+    "why.gone.body": "By the time you'd ever find them, they've moved on. And you've spent hours you don't have: chasing, sorting, guessing.",
+    "why.diagram.aria": "Diagram of outcomes. Without AIZU, the moment a customer asks has passed by the time you find them. With AIZU, you are there while the moment is live.",
+    "why.diagram.without": "WITHOUT",
+    "why.diagram.moment": "the moment",
+    "why.diagram.without.found": "you find them",
+    "why.diagram.daysLater": "days later, gone",
+    "why.diagram.withAizu": "WITH AIZU",
+    "why.diagram.withAizu.tagline": "you're there, while it still counts",
+    "why.kicker": "The customer was real. The moment was real. <em>You just weren't there.</em>",
+
+    "payoff.lock": "AIZU <span class=\"jp\" lang=\"ja\">合図</span>. <em class=\"sig\">A signal to act.</em>",
+    "payoff.body1": "AIZU is Japanese for <strong>a signal to act</strong>. In all the noise online, it surfaces the one that matters: the customer worth reaching, right now.",
+    "payoff.body2": "<strong>Not more noise. Not another tab to check.</strong> One clear signal, delivered while it still counts.",
+
+    "get.title": "What you get.",
+    "get.precision.title": "5 qualified > 100 junk.",
+    "get.precision.body": "Not more leads. The right ones. A short list of people ready to buy, each one already looking for what you offer.",
+    "get.precision.diagram.aria": "Diagram: a field of grey dots with five lime dots. Five qualified beats one hundred junk.",
+    "get.momentum.title": "Stop chasing. Start winning.",
+    "get.momentum.body": "Tell AIZU what you sell and who you serve. It does the finding, quietly and continuously, so your hours go back into serving customers instead of hunting for them.",
+    "get.pipeline.title": "A pipeline that fills itself.",
+    "get.pipeline.body": "A steady stream of ready-to-buy customers, arriving week after week. Next month is already taken care of while you close this one.",
+    "get.pipeline.diagram.aria": "Diagram: bars rising week after week, each topped with a lime dot. A pipeline that keeps filling.",
+    "get.pipeline.diagram.w1": "w1",
+    "get.pipeline.diagram.w2": "w2",
+    "get.pipeline.diagram.w3": "w3",
+    "get.pipeline.diagram.w4": "w4",
+    "get.pipeline.diagram.w5": "w5",
+    "get.pipeline.diagram.w6": "w6",
+
+    "how.title": "How you use it.",
+    "how.intro": "Three steps. <strong>The middle one is ours.</strong>",
+    "how.step1.title": "Describe",
+    "how.step1.body": "Tell AIZU what you sell and who you serve. One short description in plain words. That's the whole setup.",
+    "how.step2.title": "Signal",
+    "how.step2.body": "Out in the open, people are already asking who can help. AIZU surfaces the ones that match you while the moment is live.",
+    "how.step3.title": "Customers",
+    "how.step3.body": "A short list lands in your account: who they are, what they asked for in their own words, and a direct way to respond. Next week, it refills.",
+    "how.closer": "You never see the noise. <em>You only see the signal.</em>",
+    "how.cta": "Start free",
+
+    "sample.title": "What lands in your account.",
+    "sample.intro": "Every lead answers three things: <strong>who they are, what they asked for in their own words, and when they asked.</strong> With a direct way to respond. A representative example:",
+    "sample.card.who": "K., furnishing a first apartment",
+    "sample.card.tag.aria": "Qualified: ready to buy",
+    "sample.card.tag": "ready to buy",
+    "sample.card.quote": "\"Looking for a handmade ceramic dinnerware set for our new place. Happy to pay more for something that lasts. Who should I talk to?\"",
+    "sample.card.when": "asked in public · surfaced 2h later",
+    "sample.card.reach": "Direct way to respond included",
+    "sample.note": "Details anonymized and illustrative. Every delivered lead carries these same fields, matched to what you sell.",
+
+    "trust.title": "Quiet. Respectful. Yours.",
+    "trust.quiet": "<strong>Quiet.</strong> AIZU works in the background. No dashboards demanding attention, nothing to babysit. It shows up when there's something worth acting on.",
+    "trust.respectful": "<strong>Respectful.</strong> Never pushy, never spam. AIZU finds people who are already looking; it doesn't manufacture interest that isn't there.",
+    "trust.yours": "<strong>Yours.</strong> What you tell AIZU about your business, and every lead it delivers, belongs to you. Never sold, never shared. Leave anytime and take it with you.",
+
+    "pricing.title": "Pay for customers, not software.",
+    "pricing.lead": "Every plan delivers the same thing: qualified, ready-to-buy customers, every month. The only question is how many you can handle.",
+    "pricing.toggle.aria": "Billing period",
+    "pricing.toggle.monthly": "Monthly",
+    "pricing.toggle.yearly": "Yearly <span class=\"save\">2 mo free</span>",
+
+    "pricing.plan.free.aria": "Free plan",
+    "pricing.plan.free.name": "Free",
+    "pricing.plan.free.for": "Try the signal for yourself. No card required.",
+    "pricing.plan.free.per.m": "/mo",
+    "pricing.plan.free.per.y": "/mo",
+    "pricing.plan.free.priceSub.m": "forever · no card",
+    "pricing.plan.free.priceSub.y": "forever · no card",
+    "pricing.plan.free.leads": "<strong>10</strong> qualified leads / mo",
+    "pricing.plan.free.cta": "Start free",
+    "pricing.plan.free.f1": "10 qualified, ready-to-buy leads every month",
+    "pricing.plan.free.f2": "One business description",
+    "pricing.plan.free.f3": "Fresh leads delivered weekly",
+    "pricing.plan.free.f4": "Nothing to cancel, ever",
+
+    "pricing.plan.starter.aria": "Starter plan, most popular",
+    "pricing.plan.starter.badge": "Most popular",
+    "pricing.plan.starter.name": "Starter",
+    "pricing.plan.starter.for": "For growing businesses: a pipeline that genuinely fills itself.",
+    "pricing.plan.starter.price.m": "$24.99",
+    "pricing.plan.starter.price.y": "$249",
+    "pricing.plan.starter.per.m": "/mo",
+    "pricing.plan.starter.per.y": "/yr",
+    "pricing.plan.starter.priceSub.m": "about $0.10 per qualified lead",
+    "pricing.plan.starter.priceSub.y": "about $20.75/mo, $0.08 per lead",
+    "pricing.plan.starter.leads": "<strong>250</strong> qualified leads / mo",
+    "pricing.plan.starter.cta": "Choose Starter",
+    "pricing.plan.starter.f1": "Everything in Free, plus:",
+    "pricing.plan.starter.f2": "250 qualified leads every month",
+    "pricing.plan.starter.f3": "Up to 3 offer profiles",
+    "pricing.plan.starter.f4": "Lead feedback: your list gets sharper",
+    "pricing.plan.starter.f5": "Priority support",
+
+    "pricing.plan.pro.aria": "Pro plan",
+    "pricing.plan.pro.name": "Pro",
+    "pricing.plan.pro.for": "For teams: volume without the junk. Every lead still qualified.",
+    "pricing.plan.pro.price.m": "$149",
+    "pricing.plan.pro.price.y": "$1,490",
+    "pricing.plan.pro.per.m": "/mo",
+    "pricing.plan.pro.per.y": "/yr",
+    "pricing.plan.pro.priceSub.m": "about $0.07 per qualified lead",
+    "pricing.plan.pro.priceSub.y": "about $124/mo, $0.06 per lead",
+    "pricing.plan.pro.leads": "<strong>2,000</strong> qualified leads / mo",
+    "pricing.plan.pro.cta": "Choose Pro",
+    "pricing.plan.pro.f1": "Everything in Starter, plus:",
+    "pricing.plan.pro.f2": "2,000 qualified leads every month",
+    "pricing.plan.pro.f3": "Unlimited offer profiles",
+    "pricing.plan.pro.f4": "Team seats",
+    "pricing.plan.pro.f5": "Dedicated support",
+
+    "pricing.plan.custom.aria": "Custom plan",
+    "pricing.plan.custom.name": "Custom",
+    "pricing.plan.custom.for": "For serious pipelines: volume tailored to what your team can handle, with onboarding and support to match.",
+    "pricing.plan.custom.f1": "Everything in Pro, plus:",
+    "pricing.plan.custom.f2": "Volume tailored to your pipeline",
+    "pricing.plan.custom.f3": "Tailored onboarding",
+    "pricing.plan.custom.f4": "Priority support and SLA",
+    "pricing.plan.custom.price": "Custom",
+    "pricing.plan.custom.priceSub.m": "per-deal volume, talk to us",
+    "pricing.plan.custom.priceSub.y": "per-deal volume, talk to us",
+    "pricing.plan.custom.cta": "Talk to sales",
+
+    "pricing.foot": "Leads are qualified customers delivered to your account each month. Upgrade, downgrade, or cancel anytime. No contracts, no lock-in.",
+
+    "faq.title": "Fair questions, straight answers.",
+    "faq.q1": "Where do the customers come from?",
+    "faq.a1": "From public intent signals: people already asking, in public, for exactly what you offer. AIZU's job is to surface the ones that match your business while the moment is still live. What you get is the outcome: a qualified, ready-to-buy customer. The finding is our work, not yours.",
+    "faq.q2": "What exactly do I get with each lead?",
+    "faq.a2": "Each lead includes who they are, what they asked for in their own words, when they asked, and a direct way to respond. Enough to reach out the same day, with context. No guesswork, no digging.",
+    "faq.q3": "Is this cold outreach or a bought list?",
+    "faq.a3": "No. AIZU doesn't sell contact databases, and it doesn't blast strangers. Every lead is a person who has already signaled, in public and on their own, that they're looking for what you sell. You're not interrupting anyone. You're answering.",
+    "faq.q4": "How do I know the leads are actually qualified?",
+    "faq.a4": "Because qualification is the product. Every lead matches what you sell and who you serve, and shows real, current intent to buy. If a lead isn't a fit, tell us; your list gets sharper.",
+    "faq.q5": "If a competitor uses AIZU too, do we get the same leads?",
+    "faq.a5": "Leads are matched to your description, so two businesses with different offers get different lists. Where offers genuinely overlap, a lead can appear on more than one list; that's the honest answer. Your edge is timing: AIZU delivers while the moment is live, and the first thoughtful reply usually wins.",
+    "faq.q6": "How fast do I see results?",
+    "faq.a6": "Your first leads typically arrive within days of describing your business, and then they keep coming, week after week. Start on Free: ten qualified leads a month is enough to feel the difference before you spend a dollar.",
+    "faq.q7": "Can I cancel anytime?",
+    "faq.a7": "Yes. Monthly plans cancel with one click, effective at the end of your billing period. No contracts, no exit calls. The Free plan needs no card at all.",
+    "faq.q8": "Whose data is it?",
+    "faq.a8": "Yours. The description of your business, and every lead AIZU delivers, belong to you: never sold, never shared, never used to help anyone else. If you leave, you take it all with you.",
+    "faq.escape": "Can't find your answer? <a href=\"mailto:hello@aizu.uz\">Write to hello@aizu.uz</a>. A person replies.",
+
+    "final.title": "Your next customer may be asking right now.",
+    "final.sigline": "AIZU finds the signal. You win the customer.",
+    "final.cta.primary": "Start free",
+    "final.cta.secondary": "Talk to sales",
+
+    "footer.logo.aria": "AIZU, back to top",
+    "footer.tagline": "A signal to act.",
+    "footer.link.pricing": "Pricing",
+    "footer.link.faq": "FAQ",
+    "footer.link.terms": "Terms",
+    "footer.link.privacy": "Privacy",
+    "footer.link.contact": "Contact: hello@aizu.uz",
+    "footer.blurb": "Quiet. Respectful. Yours. Your data is never sold or shared.",
+    "footer.copyright": "© 2026 AIZU · aizu.uz",
+
+    "sticky.text": "Your next customer may be asking right now.<span class=\"subline\">10 qualified leads a month, free. No card.</span>",
+    "sticky.cta.secondary": "See pricing",
+    "sticky.cta.primary": "Start free"
+  },
+  ru: {
+    "meta.title": "AIZU: сигнал к действию",
+    "meta.desc": "Скажите AIZU, что вы продаёте и кому. Он присылает короткий список качественных клиентов, готовых купить, каждую неделю. Воронка, которая наполняется сама.",
+    "meta.ogTitle": "AIZU: сигнал к действию",
+    "meta.ogDesc": "Скажите AIZU, что вы продаёте и кому. Он присылает короткий список качественных клиентов, готовых купить, каждую неделю.",
+
+    "skip.link": "Перейти к содержимому",
+
+    "nav.aria": "Главное",
+    "nav.logo.aria": "AIZU, на главную",
+    "nav.why": "Зачем AIZU",
+    "nav.how": "Как это работает",
+    "nav.pricing": "Тарифы",
+    "nav.faq": "FAQ",
+    "nav.cta": "Начать бесплатно",
+
+    "lang.aria": "Язык",
+
+    "hero.h1": "Встречайте клиентов, пока они ещё выбирают.",
+    "hero.sub": "Скажите AIZU, что вы продаёте и кому. Каждую неделю он присылает короткий список <strong>клиентов, готовых купить</strong>.",
+    "hero.cta.primary": "Начать бесплатно",
+    "hero.cta.secondary": "Как это устроено",
+
+    "theater.aria": "Абстрактная анимация. Вы описываете, что продаёте и кому. AIZU находит сигнал. Появляются клиенты, готовые купить, — у каждого указано, кто он и что он искал.",
+    "theater.label.input": "<b>вы описываете</b>",
+    "theater.prompt.sell": "продаёте ›",
+    "theater.prompt.serve": "кому ›",
+    "theater.label.output": "<b>клиенты, готовые купить</b>",
+    "theater.tag.ready": "к покупке",
+    "theater.caption": "Опишите бизнес один раз. AIZU находит тех, кто уже ищет именно это.",
+    /* static pre-animation content: no-JS / first-paint fallback,
+       byte-identical to I18N_EXAMPLES.en[0] below */
+    "theater.example.sell": "керамическая посуда ручной работы",
+    "theater.example.serve": "люди, обустраивающие первое жильё",
+    "theater.example.lead1.who": "К. · обустраивает первое жильё",
+    "theater.example.lead1.ask": "«Кто делает набор посуды, который прослужит долго?»",
+    "theater.example.lead2.who": "М. · только переехал",
+    "theater.example.lead2.ask": "«Ищу тарелки ручной работы, кто делает?»",
+    "theater.example.lead3.who": "Ж. · подарок на новоселье",
+    "theater.example.lead3.ask": "«Где найти керамическую посуду?»",
+
+    "audience.text": "Создано для тех, кто продаёт напрямую: e-commerce и DTC-бренды, агентства, поставщики услуг, коучи и авторы, B2B-продавцы.",
+
+    "why.title": "Они уже спрашивают.",
+    "why.lead": "Прямо сейчас кто-то ищет именно то, что вы продаёте, и спрашивает, кто может помочь.",
+    "why.gone.title": "Уходят раньше, чем вы их найдёте.",
+    "why.gone.body": "К тому времени, как вы их найдёте, они уже ушли дальше. А часы, которых у вас и не было, потрачены: в погоне, сортировке, догадках.",
+    "why.diagram.aria": "Диаграмма результатов. Без AIZU момент, когда клиент спрашивает, проходит раньше, чем вы его находите. С AIZU вы оказываетесь рядом, пока момент ещё длится.",
+    "why.diagram.without": "БЕЗ AIZU",
+    "why.diagram.moment": "момент",
+    "why.diagram.without.found": "вы их находите",
+    "why.diagram.daysLater": "дни спустя — их нет",
+    "why.diagram.withAizu": "С AIZU",
+    "why.diagram.withAizu.tagline": "вы рядом, пока это ещё важно",
+    "why.kicker": "Клиент был настоящим. Момент был настоящим. <em>Просто вас там не было.</em>",
+
+    "payoff.lock": "AIZU <span class=\"jp\" lang=\"ja\">合図</span>. <em class=\"sig\">Сигнал к действию.</em>",
+    "payoff.body1": "AIZU по-японски значит <strong>сигнал к действию</strong>. Среди всего шума в интернете он выделяет главное: клиента, до которого стоит достучаться прямо сейчас.",
+    "payoff.body2": "<strong>Не больше шума. Не ещё одна вкладка для проверки.</strong> Один чёткий сигнал, доставленный, пока это ещё важно.",
+
+    "get.title": "Что вы получаете.",
+    "get.precision.title": "5 качественных > 100 мусорных.",
+    "get.precision.body": "Не больше лидов. А нужные. Короткий список людей, готовых купить, — каждый уже ищет именно то, что вы предлагаете.",
+    "get.precision.diagram.aria": "Диаграмма: поле серых точек с пятью зелёными. Пять качественных лидов побеждают сто случайных.",
+    "get.momentum.title": "Хватит гнаться. Пора побеждать.",
+    "get.momentum.body": "Скажите AIZU, что вы продаёте и кому. Он тихо и непрерывно ищет клиентов, а ваши часы возвращаются к работе с ними — а не к охоте за ними.",
+    "get.pipeline.title": "Воронка, которая наполняется сама.",
+    "get.pipeline.body": "Стабильный поток клиентов, готовых купить, — неделя за неделей. Следующий месяц уже обеспечен, пока вы закрываете этот.",
+    "get.pipeline.diagram.aria": "Диаграмма: столбцы растут неделя за неделей, на каждом — зелёная точка. Воронка, которая не перестаёт наполняться.",
+    "get.pipeline.diagram.w1": "н1",
+    "get.pipeline.diagram.w2": "н2",
+    "get.pipeline.diagram.w3": "н3",
+    "get.pipeline.diagram.w4": "н4",
+    "get.pipeline.diagram.w5": "н5",
+    "get.pipeline.diagram.w6": "н6",
+
+    "how.title": "Как вы это используете.",
+    "how.intro": "Три шага. <strong>Средний — наш.</strong>",
+    "how.step1.title": "Опишите",
+    "how.step1.body": "Скажите AIZU, что вы продаёте и кому. Одно короткое описание простыми словами. Это и есть вся настройка.",
+    "how.step2.title": "Сигнал",
+    "how.step2.body": "В открытую люди уже спрашивают, кто может помочь. AIZU находит тех, кто подходит именно вам, пока момент ещё длится.",
+    "how.step3.title": "Клиенты",
+    "how.step3.body": "В вашем аккаунте — короткий список: кто эти люди, что они просили своими словами, и способ ответить напрямую. На следующей неделе список обновится.",
+    "how.closer": "Вы никогда не видите шум. <em>Вы видите только сигнал.</em>",
+    "how.cta": "Начать бесплатно",
+
+    "sample.title": "Что приходит в аккаунт.",
+    "sample.intro": "Каждый лид отвечает на три вопроса: <strong>кто эти люди, что они просили своими словами и когда они спросили.</strong> Плюс способ ответить напрямую. Наглядный пример:",
+    "sample.card.who": "К., обустраивает первую квартиру",
+    "sample.card.tag.aria": "Качественный: готов к покупке",
+    "sample.card.tag": "к покупке",
+    "sample.card.quote": "«Ищу набор посуды ручной работы для новой квартиры. Готовы заплатить больше за то, что прослужит долго. К кому обратиться?»",
+    "sample.card.when": "спросили публично · найдено через 2ч",
+    "sample.card.reach": "Есть способ ответить напрямую",
+    "sample.note": "Детали анонимизированы и приведены для примера. У каждого лида те же поля, подобранные под то, что вы продаёте.",
+
+    "trust.title": "Тихо. Уважительно. Ваше.",
+    "trust.quiet": "<strong>Тихо.</strong> AIZU работает в фоне. Никаких дашбордов, требующих внимания, никаких нянек. Он появляется, когда есть повод действовать.",
+    "trust.respectful": "<strong>Уважительно.</strong> Никакой навязчивости, никакого спама. AIZU находит тех, кто уже ищет сам, — и не выдумывает интерес там, где его нет.",
+    "trust.yours": "<strong>Ваше.</strong> То, что вы рассказали AIZU о своём бизнесе, и каждый переданный лид принадлежат вам. Никогда не продаются, никогда не передаются. Уйдите в любой момент и заберите всё с собой.",
+
+    "pricing.title": "Платите за клиентов, а не за софт.",
+    "pricing.lead": "Каждый тариф даёт одно и то же: качественных клиентов, готовых купить, каждый месяц. Вопрос лишь в том, сколько вы готовы обрабатывать.",
+    "pricing.toggle.aria": "Период оплаты",
+    "pricing.toggle.monthly": "Месяц",
+    "pricing.toggle.yearly": "Год <span class=\"save\">2 месяца бесплатно</span>",
+
+    "pricing.plan.free.aria": "Тариф Free",
+    "pricing.plan.free.name": "Free",
+    "pricing.plan.free.for": "Попробуйте сигнал сами. Карта не нужна.",
+    "pricing.plan.free.per.m": "/мес",
+    "pricing.plan.free.per.y": "/мес",
+    "pricing.plan.free.priceSub.m": "навсегда · без карты",
+    "pricing.plan.free.priceSub.y": "навсегда · без карты",
+    "pricing.plan.free.leads": "<strong>10</strong> качественных лидов / мес",
+    "pricing.plan.free.cta": "Начать бесплатно",
+    "pricing.plan.free.f1": "10 качественных лидов, готовых купить, каждый месяц",
+    "pricing.plan.free.f2": "Одно описание бизнеса",
+    "pricing.plan.free.f3": "Свежие лиды каждую неделю",
+    "pricing.plan.free.f4": "Нечего отменять — никогда",
+
+    "pricing.plan.starter.aria": "Тариф Starter, самый популярный",
+    "pricing.plan.starter.badge": "Самый популярный",
+    "pricing.plan.starter.name": "Starter",
+    "pricing.plan.starter.for": "Для растущего бизнеса: воронка, которая правда наполняется сама.",
+    "pricing.plan.starter.price.m": "$24.99",
+    "pricing.plan.starter.price.y": "$249",
+    "pricing.plan.starter.per.m": "/мес",
+    "pricing.plan.starter.per.y": "/год",
+    "pricing.plan.starter.priceSub.m": "около $0.10 за качественный лид",
+    "pricing.plan.starter.priceSub.y": "около $20.75/мес, $0.08 за лид",
+    "pricing.plan.starter.leads": "<strong>250</strong> качественных лидов / мес",
+    "pricing.plan.starter.cta": "Выбрать Starter",
+    "pricing.plan.starter.f1": "Всё из Free, плюс:",
+    "pricing.plan.starter.f2": "250 качественных лидов каждый месяц",
+    "pricing.plan.starter.f3": "До 3 профилей предложений",
+    "pricing.plan.starter.f4": "Обратная связь по лидам: список становится точнее",
+    "pricing.plan.starter.f5": "Приоритетная поддержка",
+
+    "pricing.plan.pro.aria": "Тариф Pro",
+    "pricing.plan.pro.name": "Pro",
+    "pricing.plan.pro.for": "Для команд: объём без мусора. Каждый лид всё так же качественный.",
+    "pricing.plan.pro.price.m": "$149",
+    "pricing.plan.pro.price.y": "$1,490",
+    "pricing.plan.pro.per.m": "/мес",
+    "pricing.plan.pro.per.y": "/год",
+    "pricing.plan.pro.priceSub.m": "около $0.07 за качественный лид",
+    "pricing.plan.pro.priceSub.y": "около $124/мес, $0.06 за лид",
+    "pricing.plan.pro.leads": "<strong>2,000</strong> качественных лидов / мес",
+    "pricing.plan.pro.cta": "Выбрать Pro",
+    "pricing.plan.pro.f1": "Всё из Starter, плюс:",
+    "pricing.plan.pro.f2": "2,000 качественных лидов каждый месяц",
+    "pricing.plan.pro.f3": "Безлимитные профили предложений",
+    "pricing.plan.pro.f4": "Места для команды",
+    "pricing.plan.pro.f5": "Персональная поддержка",
+
+    "pricing.plan.custom.aria": "Тариф Custom",
+    "pricing.plan.custom.name": "Custom",
+    "pricing.plan.custom.for": "Для серьёзных объёмов: масштаб под возможности вашей команды, с онбордингом и поддержкой под стать.",
+    "pricing.plan.custom.f1": "Всё из Pro, плюс:",
+    "pricing.plan.custom.f2": "Объём под вашу воронку",
+    "pricing.plan.custom.f3": "Индивидуальный онбординг",
+    "pricing.plan.custom.f4": "Приоритетная поддержка и SLA",
+    "pricing.plan.custom.price": "Custom",
+    "pricing.plan.custom.priceSub.m": "объём по договорённости, свяжитесь с нами",
+    "pricing.plan.custom.priceSub.y": "объём по договорённости, свяжитесь с нами",
+    "pricing.plan.custom.cta": "Связаться с продажами",
+
+    "pricing.foot": "Лиды — это качественные клиенты, которые приходят в ваш аккаунт каждый месяц. Меняйте тариф или отменяйте подписку в любой момент. Без контрактов и обязательств.",
+
+    "faq.title": "Честные вопросы, прямые ответы.",
+    "faq.q1": "Откуда берутся клиенты?",
+    "faq.a1": "Из публичных сигналов намерения: люди уже спрашивают, открыто, именно то, что вы предлагаете. Задача AIZU — найти тех, кто подходит вашему бизнесу, пока момент ещё длится. Вы получаете результат: качественного клиента, готового купить. Поиск — наша работа, а не ваша.",
+    "faq.q2": "Что именно я получаю с каждым лидом?",
+    "faq.a2": "Каждый лид включает: кто этот человек, что он просил своими словами, когда он спросил, и способ ответить напрямую. Достаточно, чтобы написать в тот же день, с полным контекстом. Без догадок и раскопок.",
+    "faq.q3": "Это холодные рассылки или купленная база?",
+    "faq.a3": "Нет. AIZU не продаёт базы контактов и не рассылает сообщения незнакомцам. Каждый лид — это человек, который сам, публично, уже дал понять, что ищет то, что вы продаёте. Вы никого не прерываете. Вы отвечаете.",
+    "faq.q4": "Как понять, что лиды действительно качественные?",
+    "faq.a4": "Потому что квалификация лида — это и есть продукт. Каждый лид соответствует тому, что вы продаёте, и тому, кому вы это продаёте, а также показывает реальное, актуальное намерение купить. Если лид не подошёл — скажите нам, и список станет точнее.",
+    "faq.q5": "Если конкурент тоже использует AIZU, получим ли мы одни и те же лиды?",
+    "faq.a5": "Лиды подбираются под ваше описание, поэтому у двух бизнесов с разными предложениями — разные списки. Там, где предложения действительно пересекаются, лид может попасть в оба списка — это честный ответ. Ваше преимущество — скорость: AIZU доставляет, пока момент ещё длится, а побеждает обычно первый вдумчивый ответ.",
+    "faq.q6": "Как быстро я увижу результат?",
+    "faq.a6": "Первые лиды обычно приходят через несколько дней после описания бизнеса, а дальше — каждую неделю. Начните с Free: десяти качественных лидов в месяц достаточно, чтобы почувствовать разницу, не потратив ни доллара.",
+    "faq.q7": "Можно ли отменить подписку в любой момент?",
+    "faq.a7": "Да. Помесячные тарифы отменяются в один клик и действуют до конца оплаченного периода. Без контрактов, без звонков «на удержание». Тариф Free вообще не требует карты.",
+    "faq.q8": "Чьи это данные?",
+    "faq.a8": "Ваши. Описание вашего бизнеса и каждый лид, который передаёт AIZU, принадлежат вам: их никогда не продают, не передают и не используют в интересах кого-то ещё. Если вы уйдёте, всё это уйдёт с вами.",
+    "faq.escape": "Не нашли ответ? <a href=\"mailto:hello@aizu.uz\">Напишите на hello@aizu.uz</a>. Отвечает человек.",
+
+    "final.title": "Ваш следующий клиент может спрашивать прямо сейчас.",
+    "final.sigline": "AIZU находит сигнал. Клиент достаётся вам.",
+    "final.cta.primary": "Начать бесплатно",
+    "final.cta.secondary": "Связаться с продажами",
+
+    "footer.logo.aria": "AIZU, наверх",
+    "footer.tagline": "Сигнал к действию.",
+    "footer.link.pricing": "Тарифы",
+    "footer.link.faq": "FAQ",
+    "footer.link.terms": "Условия",
+    "footer.link.privacy": "Конфиденциальность",
+    "footer.link.contact": "Контакты: hello@aizu.uz",
+    "footer.blurb": "Тихо. Уважительно. Ваше. Ваши данные никогда не продаются и не передаются.",
+    "footer.copyright": "© 2026 AIZU · aizu.uz",
+
+    "sticky.text": "Ваш следующий клиент может спрашивать прямо сейчас.<span class=\"subline\">10 качественных лидов в месяц бесплатно. Без карты.</span>",
+    "sticky.cta.secondary": "Смотреть тарифы",
+    "sticky.cta.primary": "Начать бесплатно"
+  },
+  uz: {
+    "meta.title": "AIZU: harakat qilish signali",
+    "meta.desc": "AIZUga nima sotishingizni va kimga xizmat qilishingizni ayting. U har hafta sifatli, sotib olishga tayyor mijozlarning qisqa roʻyxatini qaytaradi. Oʻzi toʻlib boradigan pipeline.",
+    "meta.ogTitle": "AIZU: harakat qilish signali",
+    "meta.ogDesc": "AIZUga nima sotishingizni va kimga xizmat qilishingizni ayting. U har hafta sifatli, sotib olishga tayyor mijozlarning qisqa roʻyxatini qaytaradi.",
+
+    "skip.link": "Kontentga oʻtish",
+
+    "nav.aria": "Asosiy",
+    "nav.logo.aria": "AIZU, bosh sahifa",
+    "nav.why": "Nega AIZU",
+    "nav.how": "Qanday ishlaydi",
+    "nav.pricing": "Narxlar",
+    "nav.faq": "FAQ",
+    "nav.cta": "Bepul boshlash",
+
+    "lang.aria": "Til",
+
+    "hero.h1": "Keyingi mijozlaringiz hali qaror qilayotganda, ular bilan tanishing.",
+    "hero.sub": "AIZUga nima sotishingizni va kimga xizmat qilishingizni ayting. U har hafta <strong>sotib olishga tayyor mijozlarning</strong> qisqa roʻyxatini qaytaradi.",
+    "hero.cta.primary": "Bepul boshlash",
+    "hero.cta.secondary": "Qanday ishlashini koʻring",
+
+    "theater.aria": "Mavhum animatsiya. Siz nima sotishingizni va kimga xizmat qilishingizni tasvirlaysiz. AIZU signalni topadi. Sotib olishga tayyor mijozlar paydo boʻladi — har biri kimligini va nima soʻraganini koʻrsatadi.",
+    "theater.label.input": "<b>siz taʼriflaysiz</b>",
+    "theater.prompt.sell": "sotish ›",
+    "theater.prompt.serve": "kimga ›",
+    "theater.label.output": "<b>sotib olishga tayyor mijozlar</b>",
+    "theater.tag.ready": "xaridga tayyor",
+    "theater.caption": "Biznesingizni bir marta taʼriflang. AIZU allaqachon soʻrayotgan odamlarni sizga yetkazadi.",
+    /* static pre-animation content: no-JS / first-paint fallback,
+       byte-identical to I18N_EXAMPLES.en[0] below */
+    "theater.example.sell": "qoʻlda ishlangan keramik idishlar",
+    "theater.example.serve": "birinchi uyini jihozlayotganlar",
+    "theater.example.lead1.who": "K. · birinchi uyini jihozlayapti",
+    "theater.example.lead1.ask": "«Chidamli idish toʻplamini kim yasaydi?»",
+    "theater.example.lead2.who": "M. · yaqinda koʻchib oʻtdi",
+    "theater.example.lead2.ask": "«Qoʻlda ishlangan likopcha kerak, kim yasaydi?»",
+    "theater.example.lead3.who": "J. · yangi uy uchun sovgʻa",
+    "theater.example.lead3.ask": "«Keramik idishlarni qayerdan topsam boʻladi?»",
+
+    "audience.text": "Toʻgʻridan-toʻgʻri sotadiganlar uchun: e-commerce va DTC brendlar, agentliklar, xizmat koʻrsatuvchilar, kouchlar va kreatorlar, B2B sotuvchilar.",
+
+    "why.title": "Ular allaqachon soʻrayapti.",
+    "why.lead": "Aynan hozir kimdir siz sotayotgan narsani qidiryapti va kim yordam bera olishini soʻrayapti.",
+    "why.gone.title": "Siz topguncha, ular ketadi.",
+    "why.gone.body": "Siz ularni topguningizcha, ular allaqachon ketib boʻlgan boʻladi. Va sizda yoʻq soatlaringizni sarflagansiz: quvish, saralash, taxmin qilish bilan.",
+    "why.diagram.aria": "Natijalar diagrammasi. AIZU boʻlmasa, mijoz soʻragan lahza siz uni topguningizcha oʻtib ketadi. AIZU bilan esa, lahza jonli boʻlganda aynan shu yerda boʻlasiz.",
+    "why.diagram.without": "AIZUSIZ",
+    "why.diagram.moment": "bu lahza",
+    "why.diagram.without.found": "siz topasiz",
+    "why.diagram.daysLater": "necha kundan keyin, ketgan",
+    "why.diagram.withAizu": "AIZU BILAN",
+    "why.diagram.withAizu.tagline": "siz hali ahamiyatli paytda aynan shu yerdasiz",
+    "why.kicker": "Mijoz haqiqiy edi. Lahza haqiqiy edi. <em>Shunchaki siz u yerda emas edingiz.</em>",
+
+    "payoff.lock": "AIZU <span class=\"jp\" lang=\"ja\">合図</span>. <em class=\"sig\">Harakat qilish signali.</em>",
+    "payoff.body1": "AIZU yaponchada <strong>harakat qilish signali</strong> degan maʼnoni anglatadi. Internetdagi barcha shov-shuv orasidan u ahamiyatlisini — aynan hozir murojaat qilishga arziydigan mijozni — ajratib beradi.",
+    "payoff.body2": "<strong>Yana bir shov-shuv emas. Tekshirish uchun yana bir tab emas.</strong> Ahamiyati bor paytdayoq yetkaziladigan bitta aniq signal.",
+
+    "get.title": "Siz nima olasiz.",
+    "get.precision.title": "5 sifatli > 100 keraksiz.",
+    "get.precision.body": "Koʻproq lid emas. Toʻgʻri lidlar. Sotib olishga tayyor odamlarning qisqa roʻyxati — har biri siz taklif qilayotgan narsani allaqachon qidirmoqda.",
+    "get.precision.diagram.aria": "Diagramma: kulrang nuqtalar maydonida beshta laym rangli nuqta. Beshta sifatli lid yuzta keraksizdan ustun.",
+    "get.momentum.title": "Quvishni bas qiling. Gʻalaba qozoning.",
+    "get.momentum.body": "AIZUga nima sotishingizni va kimga xizmat qilishingizni ayting. U qidiruvni jimgina va toʻxtovsiz davom ettiradi — shunda vaqtingiz mijoz izlash oʻrniga, ularga xizmat koʻrsatishga sarflanadi.",
+    "get.pipeline.title": "Oʻzi toʻlib boradigan pipeline.",
+    "get.pipeline.body": "Sotib olishga tayyor mijozlarning barqaror oqimi har hafta kelib turadi. Siz shu oyni yakunlayotganingizda, keyingi oy allaqachon taʼminlangan boʻladi.",
+    "get.pipeline.diagram.aria": "Diagramma: har hafta koʻtarilib boruvchi ustunlar, har biri laym rangli nuqta bilan yakunlanadi. Toʻlib turaveradigan pipeline.",
+    "get.pipeline.diagram.w1": "h1",
+    "get.pipeline.diagram.w2": "h2",
+    "get.pipeline.diagram.w3": "h3",
+    "get.pipeline.diagram.w4": "h4",
+    "get.pipeline.diagram.w5": "h5",
+    "get.pipeline.diagram.w6": "h6",
+
+    "how.title": "Qanday foydalanasiz.",
+    "how.intro": "Uch qadam. <strong>Oʻrtadagisi — bizning ishimiz.</strong>",
+    "how.step1.title": "Taʼriflang",
+    "how.step1.body": "AIZUga nima sotishingizni va kimga xizmat qilishingizni ayting. Oddiy soʻzlar bilan bitta qisqa taʼrif — sozlash shu bilan tugaydi.",
+    "how.step2.title": "Signal",
+    "how.step2.body": "Ochiqchasiga, odamlar allaqachon kim yordam bera olishini soʻrayapti. AIZU esa lahza jonli paytida sizga mos kelganlarini ochib beradi.",
+    "how.step3.title": "Mijozlar",
+    "how.step3.body": "Hisobingizga qisqa roʻyxat keladi: ular kim, oʻz soʻzlari bilan nima soʻragan va ular bilan bogʻlanishning toʻgʻridan-toʻgʻri usuli. Keyingi hafta u yana toʻldiriladi.",
+    "how.closer": "Siz shov-shuvni hech qachon koʻrmaysiz. <em>Faqat signalni koʻrasiz.</em>",
+    "how.cta": "Bepul boshlash",
+
+    "sample.title": "Hisobingizga nima keladi.",
+    "sample.intro": "Har bir lid uchta savolga javob beradi: <strong>ular kim, oʻz soʻzlari bilan nima soʻragan va qachon soʻragan.</strong> Bogʻlanishning toʻgʻridan-toʻgʻri usuli bilan birga. Namunaviy misol:",
+    "sample.card.who": "K. — birinchi kvartirasini jihozlayapti",
+    "sample.card.tag.aria": "Sifatli: xaridga tayyor",
+    "sample.card.tag": "xaridga tayyor",
+    "sample.card.quote": "«Yangi uyimiz uchun qoʻlda ishlangan keramik idish-tovoq toʻplami qidiryapman. Uzoq xizmat qiladigan narsa uchun koʻproq toʻlashga roziman. Kim bilan gaplashsam boʻladi?»",
+    "sample.card.when": "ommada soʻralgan · 2 soat oʻtib topildi",
+    "sample.card.reach": "Toʻgʻridan-toʻgʻri javob berish usuli mavjud",
+    "sample.note": "Tafsilotlar anonimlashtirilgan va namunaviy. Yetkazib beriladigan har bir lid xuddi shu maydonlarni oʻz ichiga oladi va sizning taklifingizga moslashtiriladi.",
+
+    "trust.title": "Jim. Hurmatli. Sizniki.",
+    "trust.quiet": "<strong>Jim.</strong> AIZU fonda ishlaydi. Diqqat talab qiladigan panellar yoʻq, qarab turishga hojat yoʻq. U harakat qilishga arzigulik narsa boʻlgandagina koʻrinadi.",
+    "trust.respectful": "<strong>Hurmatli.</strong> Hech qachon zoʻrma-zoʻraki, hech qachon spam emas. AIZU allaqachon qidirayotgan odamlarni topadi; mavjud boʻlmagan qiziqishni sunʼiy yaratmaydi.",
+    "trust.yours": "<strong>Sizniki.</strong> Biznesingiz haqida AIZUga aytganlaringiz va u yetkazib bergan har bir lid — sizga tegishli. Hech qachon sotilmaydi, hech kim bilan boʻlishilmaydi. Istalgan payt tark eting va hammasini oʻzingiz bilan olib keting.",
+
+    "pricing.title": "Dastur uchun emas, mijoz uchun toʻlang.",
+    "pricing.lead": "Har bir tarif bir xil natijani beradi: har oy sifatli, xaridga tayyor mijozlar. Yagona savol — qanchasini boshqara olasiz.",
+    "pricing.toggle.aria": "Toʻlov davri",
+    "pricing.toggle.monthly": "Oylik",
+    "pricing.toggle.yearly": "Yillik <span class=\"save\">2 oy bepul</span>",
+
+    "pricing.plan.free.aria": "Free tarifi",
+    "pricing.plan.free.name": "Free",
+    "pricing.plan.free.for": "Signalni oʻzingiz sinab koʻring. Karta talab qilinmaydi.",
+    "pricing.plan.free.per.m": "/oy",
+    "pricing.plan.free.per.y": "/oy",
+    "pricing.plan.free.priceSub.m": "abadiy · kartasiz",
+    "pricing.plan.free.priceSub.y": "abadiy · kartasiz",
+    "pricing.plan.free.leads": "<strong>10</strong> sifatli lid / oy",
+    "pricing.plan.free.cta": "Bepul boshlash",
+    "pricing.plan.free.f1": "Har oy 10 ta sifatli, xaridga tayyor lid",
+    "pricing.plan.free.f2": "Bitta biznes taʼrifi",
+    "pricing.plan.free.f3": "Har hafta yangi lidlar yetkaziladi",
+    "pricing.plan.free.f4": "Bekor qilinadigan hech narsa yoʻq",
+
+    "pricing.plan.starter.aria": "Starter tarifi, eng ommabop",
+    "pricing.plan.starter.badge": "Eng ommabop",
+    "pricing.plan.starter.name": "Starter",
+    "pricing.plan.starter.for": "Oʻsayotgan bizneslar uchun: haqiqatan oʻzi toʻlib boradigan pipeline.",
+    "pricing.plan.starter.price.m": "$24.99",
+    "pricing.plan.starter.price.y": "$249",
+    "pricing.plan.starter.per.m": "/oy",
+    "pricing.plan.starter.per.y": "/yil",
+    "pricing.plan.starter.priceSub.m": "har bir sifatli lid uchun ~$0.10",
+    "pricing.plan.starter.priceSub.y": "~$20.75/oy, lid uchun $0.08",
+    "pricing.plan.starter.leads": "<strong>250</strong> sifatli lid / oy",
+    "pricing.plan.starter.cta": "Starter tanlash",
+    "pricing.plan.starter.f1": "Free tarifidagi hammasi, va:",
+    "pricing.plan.starter.f2": "Har oy 250 sifatli lid",
+    "pricing.plan.starter.f3": "3 tagacha taklif profili",
+    "pricing.plan.starter.f4": "Lid boʻyicha fikr-mulohaza: roʻyxatingiz aniqroq boʻladi",
+    "pricing.plan.starter.f5": "Ustuvor qoʻllab-quvvatlash",
+
+    "pricing.plan.pro.aria": "Pro tarifi",
+    "pricing.plan.pro.name": "Pro",
+    "pricing.plan.pro.for": "Jamoalar uchun: ortiqchasiz hajm. Har bir lid baribir sifatli.",
+    "pricing.plan.pro.price.m": "$149",
+    "pricing.plan.pro.price.y": "$1,490",
+    "pricing.plan.pro.per.m": "/oy",
+    "pricing.plan.pro.per.y": "/yil",
+    "pricing.plan.pro.priceSub.m": "har bir sifatli lid uchun ~$0.07",
+    "pricing.plan.pro.priceSub.y": "~$124/oy, lid uchun $0.06",
+    "pricing.plan.pro.leads": "<strong>2,000</strong> sifatli lid / oy",
+    "pricing.plan.pro.cta": "Pro tanlash",
+    "pricing.plan.pro.f1": "Starter tarifidagi hammasi, va:",
+    "pricing.plan.pro.f2": "Har oy 2,000 sifatli lid",
+    "pricing.plan.pro.f3": "Cheksiz taklif profillari",
+    "pricing.plan.pro.f4": "Jamoa oʻrinlari",
+    "pricing.plan.pro.f5": "Shaxsiy qoʻllab-quvvatlash",
+
+    "pricing.plan.custom.aria": "Custom tarifi",
+    "pricing.plan.custom.name": "Custom",
+    "pricing.plan.custom.for": "Jiddiy pipeline uchun: jamoangiz koʻtara oladigan hajmga moslashtirilgan, mos onboarding va qoʻllab-quvvatlash bilan.",
+    "pricing.plan.custom.f1": "Pro tarifidagi hammasi, va:",
+    "pricing.plan.custom.f2": "Pipeline hajmi sizga moslashtiriladi",
+    "pricing.plan.custom.f3": "Individual onboarding",
+    "pricing.plan.custom.f4": "Ustuvor qoʻllab-quvvatlash va SLA",
+    "pricing.plan.custom.price": "Custom",
+    "pricing.plan.custom.priceSub.m": "bitim boʻyicha hajm, biz bilan bogʻlaning",
+    "pricing.plan.custom.priceSub.y": "bitim boʻyicha hajm, biz bilan bogʻlaning",
+    "pricing.plan.custom.cta": "Sotuv bilan bogʻlanish",
+
+    "pricing.foot": "Lidlar — har oy hisobingizga yetkaziladigan sifatli mijozlar. Istalgan payt tarifni oshiring, tushiring yoki bekor qiling. Shartnoma yoʻq, bogʻlanib qolish yoʻq.",
+
+    "faq.title": "Adolatli savollar, ochiq javoblar.",
+    "faq.q1": "Mijozlar qayerdan keladi?",
+    "faq.a1": "Ommaviy niyat signallaridan: odamlar ommada allaqachon aynan siz taklif qilayotgan narsani soʻrayapti. AIZUning vazifasi — lahza hali jonli paytda biznesingizga mos kelganlarini ochib berish. Siz natijaga ega boʻlasiz: sifatli, xaridga tayyor mijoz. Qidirish — bizning ishimiz, sizning emas.",
+    "faq.q2": "Har bir lid bilan aniq nima olaman?",
+    "faq.a2": "Har bir lidda: ular kim, oʻz soʻzlari bilan nima soʻragan, qachon soʻragan va ular bilan bogʻlanishning toʻgʻridan-toʻgʻri usuli bor. Shu kunning oʻzida kontekst bilan murojaat qilish uchun yetarli. Taxmin qilish yoʻq, qidirib yurish yoʻq.",
+    "faq.q3": "Bu sovuq murojaatmi yoki sotib olingan roʻyxatmi?",
+    "faq.a3": "Yoʻq. AIZU kontakt bazalarini sotmaydi va notanish odamlarga ommaviy xabar yubormaydi. Har bir lid — ommada, oʻz ixtiyori bilan, siz sotayotgan narsani qidirayotganini allaqachon bildirgan odam. Siz hech kimni bezovta qilmayapsiz. Siz javob berayapsiz.",
+    "faq.q4": "Lidlar haqiqatan sifatli ekanini qayerdan bilaman?",
+    "faq.a4": "Chunki sifat — bu bizning mahsulotimiz. Har bir lid siz sotayotgan narsa va xizmat qilayotgan auditoriyangizga mos keladi hamda haqiqiy, aktual xarid niyatini koʻrsatadi. Agar lid mos kelmasa, bizga ayting — roʻyxatingiz aniqroq boʻladi.",
+    "faq.q5": "Raqibim ham AIZUdan foydalansa, bir xil lidlarni olamizmi?",
+    "faq.a5": "Lidlar sizning taʼrifingizga mos ravishda tanlanadi, shuning uchun turli takliflarga ega ikkita biznes turli roʻyxatlar oladi. Takliflar haqiqatan mos kelgan hollarda, bitta lid bir nechta roʻyxatda paydo boʻlishi mumkin — bu ochiq javob. Sizning ustunligingiz — vaqt: AIZU lahza hali jonli paytda yetkazadi, va odatda birinchi boʻlib oʻylab javob bergan yutadi.",
+    "faq.q6": "Natijalarni qanchalik tez koʻraman?",
+    "faq.a6": "Birinchi lidlaringiz odatda biznesingizni taʼriflagandan keyin bir necha kun ichida keladi, keyin esa har hafta kelib turadi. Free tarifidan boshlang: bitta dollar sarflashdan oldin farqni his qilish uchun oyiga oʻnta sifatli lid yetarli.",
+    "faq.q7": "Istalgan payt bekor qila olamanmi?",
+    "faq.a7": "Ha. Oylik tariflar bir marta bosish bilan bekor qilinadi va toʻlov davri oxirida kuchga kiradi. Shartnoma yoʻq, chiqish uchun qoʻngʻiroq qilish shart emas. Free tarifi uchun karta umuman kerak emas.",
+    "faq.q8": "Bu maʼlumotlar kimniki?",
+    "faq.a8": "Sizniki. Biznesingiz taʼrifi va AIZU yetkazib bergan har bir lid sizga tegishli: hech qachon sotilmaydi, hech kim bilan boʻlishilmaydi, boshqa hech kimga foyda uchun ishlatilmaydi. Tark etsangiz, hammasini oʻzingiz bilan olib ketasiz.",
+    "faq.escape": "Javobingizni topa olmadingizmi? <a href=\"mailto:hello@aizu.uz\">hello@aizu.uz manziliga yozing</a>. Sizga odam javob beradi.",
+
+    "final.title": "Keyingi mijozingiz aynan hozir soʻrayotgan boʻlishi mumkin.",
+    "final.sigline": "AIZU signalni topadi. Siz mijozni yutasiz.",
+    "final.cta.primary": "Bepul boshlash",
+    "final.cta.secondary": "Sotuv bilan bogʻlanish",
+
+    "footer.logo.aria": "AIZU, tepaga qaytish",
+    "footer.tagline": "Harakat qilish signali.",
+    "footer.link.pricing": "Narxlar",
+    "footer.link.faq": "FAQ",
+    "footer.link.terms": "Shartlar",
+    "footer.link.privacy": "Maxfiylik",
+    "footer.link.contact": "Aloqa: hello@aizu.uz",
+    "footer.blurb": "Jim. Hurmatli. Sizniki. Maʼlumotlaringiz hech qachon sotilmaydi va boʻlishilmaydi.",
+    "footer.copyright": "© 2026 AIZU · aizu.uz",
+
+    "sticky.text": "Keyingi mijozingiz aynan hozir soʻrayotgan boʻlishi mumkin.<span class=\"subline\">Oyiga 10 ta sifatli lid, bepul. Kartasiz.</span>",
+    "sticky.cta.secondary": "Narxlarni koʻrish",
+    "sticky.cta.primary": "Bepul boshlash"
+  }
+};
+
+var I18N_EXAMPLES = {
+  en: [
+    { sell: "handmade ceramic tableware", serve: "people furnishing a first home", leads: [
+      { who: "K. · furnishing a first home", ask: "“Who makes a dinnerware set that lasts?”" },
+      { who: "M. · just moved in", ask: "“Want handmade plates, any makers?”" },
+      { who: "J. · gift for a new home", ask: "“Where do I find ceramic tableware?”" }
+    ]},
+    { sell: "done-for-you email marketing", serve: "DTC founders past first traction", leads: [
+      { who: "A. · DTC founder", ask: "“Need someone to run our email flows.”" },
+      { who: "R. · store owner", ask: "“Who actually does email marketing well?”" },
+      { who: "S. · brand lead", ask: "“Hiring help for lifecycle email.”" }
+    ]},
+    { sell: "online strength coaching", serve: "desk workers short on time", leads: [
+      { who: "D. · desk job, no time", ask: "“Any coach who does 30-minute sessions?”" },
+      { who: "T. · new parent", ask: "“Need a plan I can stick to. Who helps?”" },
+      { who: "P. · remote worker", ask: "“Looking for an online strength coach.”" }
+    ]},
+    { sell: "brand design sprints", serve: "startups about to launch", leads: [
+      { who: "L. · launching next month", ask: "“Need a brand ready in three weeks.”" },
+      { who: "N. · first-time founder", ask: "“Who does fast brand sprints?”" },
+      { who: "E. · seed-stage startup", ask: "“Looking for a launch identity. Recs?”" }
+    ]}
+  ],
+  ru: [
+    { sell: "керамическая посуда ручной работы", serve: "люди, обустраивающие первое жильё", leads: [
+      { who: "К. · обустраивает первое жильё", ask: "«Кто делает набор посуды, который прослужит долго?»" },
+      { who: "М. · только переехал", ask: "«Ищу тарелки ручной работы, кто делает?»" },
+      { who: "Ж. · подарок на новоселье", ask: "«Где найти керамическую посуду?»" }
+    ]},
+    { sell: "email-маркетинг под ключ", serve: "DTC-основатели после первых продаж", leads: [
+      { who: "А. · основатель DTC-бренда", ask: "«Нужен тот, кто настроит наши email-цепочки.»" },
+      { who: "Р. · владелец магазина", ask: "«Кто правда хорошо делает email-маркетинг?»" },
+      { who: "С. · руководитель бренда", ask: "«Ищу помощь с lifecycle-рассылками.»" }
+    ]},
+    { sell: "онлайн-тренировки на силу", serve: "офисные работники, у которых мало времени", leads: [
+      { who: "Д. · офисная работа, нет времени", ask: "«Есть тренер с занятиями по 30 минут?»" },
+      { who: "Т. · молодой родитель", ask: "«Нужен план, который я не брошу. Кто поможет?»" },
+      { who: "П. · удалённый сотрудник", ask: "«Ищу онлайн-тренера по силовым.»" }
+    ]},
+    { sell: "спринты по дизайну бренда", serve: "стартапы перед запуском", leads: [
+      { who: "Л. · запуск в следующем месяце", ask: "«Нужен бренд, готовый за три недели.»" },
+      { who: "Н. · начинающий основатель", ask: "«Кто делает быстрые брендинг-спринты?»" },
+      { who: "Е. · стартап на посевной стадии", ask: "«Ищу айдентику для запуска. Посоветуете?»" }
+    ]}
+  ],
+  uz: [
+    { sell: "qoʻlda ishlangan keramik idishlar", serve: "birinchi uyini jihozlayotganlar", leads: [
+      { who: "K. · birinchi uyini jihozlayapti", ask: "«Chidamli idish toʻplamini kim yasaydi?»" },
+      { who: "M. · yaqinda koʻchib oʻtdi", ask: "«Qoʻlda ishlangan likopcha kerak, kim yasaydi?»" },
+      { who: "J. · yangi uy uchun sovgʻa", ask: "«Keramik idishlarni qayerdan topsam boʻladi?»" }
+    ]},
+    { sell: "tayyor email-marketing xizmati", serve: "birinchi muvaffaqiyatga erishgan DTC asoschilari", leads: [
+      { who: "A. · DTC asoschisi", ask: "«Email oqimlarimizni yuritadigan kimdir kerak.»" },
+      { who: "R. · doʻkon egasi", ask: "«Email marketingni kim yaxshi qiladi?»" },
+      { who: "S. · brend rahbari", ask: "«Lifecycle email uchun yordamchi qidiryapman.»" }
+    ]},
+    { sell: "onlayn kuch mashgʻulotlari koutchingi", serve: "vaqti tanqis ofis xodimlari", leads: [
+      { who: "D. · ofis ishi, vaqti yoʻq", ask: "«30 daqiqalik seans oʻtkazadigan kouch bormi?»" },
+      { who: "T. · yangi ota-ona", ask: "«Ushlab tura oladigan reja kerak. Kim yordam beradi?»" },
+      { who: "P. · masofaviy xodim", ask: "«Onlayn kuch mashgʻuloti kouchini qidiryapman.»" }
+    ]},
+    { sell: "brend dizayni sprintlari", serve: "ishga tushishga tayyor startaplar", leads: [
+      { who: "L. · keyingi oy ishga tushadi", ask: "«Uch haftada tayyor brend kerak.»" },
+      { who: "N. · birinchi marta asoschi", ask: "«Tez brend sprintlarini kim qiladi?»" },
+      { who: "E. · dastlabki bosqich startapi", ask: "«Startap uchun brend qidiryapman. Tavsiyami?»" }
+    ]}
+  ]
+};
+</script>
+<script>
+/* ============================================================
+   i18n runtime. Resolves the active language, writes every
+   bound string into the DOM, and exposes window.AizuI18N -- a
+   small registry the pricing-toggle and signal-theater scripts
+   below use to re-apply their own state after a language switch.
+   ============================================================ */
+(function(){
+  "use strict";
+  var SUPPORTED = ["en", "ru", "uz"];
+  var DEFAULT_LANG = "en";
+  var STORAGE_KEY = "aizu.lang";
+  var OG_LOCALE = { en: "en_US", ru: "ru_RU", uz: "uz_UZ" };
+
+  var currentLang = DEFAULT_LANG;
+  var listeners = [];
+
+  /* (a) ?lang= -> (b) localStorage -> (c) navigator.language(s) -> (d) en.
+     Many Uzbek users' browsers report ru or en -- that is expected. */
+  function detectLang(){
+    try {
+      var q = new URLSearchParams(window.location.search).get("lang");
+      if (q && SUPPORTED.indexOf(q) !== -1) return q;
+    } catch (e) {}
+    try {
+      var stored = window.localStorage.getItem(STORAGE_KEY);
+      if (stored && SUPPORTED.indexOf(stored) !== -1) return stored;
+    } catch (e) {}
+    var navLangs = (navigator.languages && navigator.languages.length) ? navigator.languages : [navigator.language || ""];
+    for (var i = 0; i < navLangs.length; i++) {
+      var primary = String(navLangs[i] || "").split("-")[0].toLowerCase();
+      if (SUPPORTED.indexOf(primary) !== -1) return primary;
+    }
+    return DEFAULT_LANG;
+  }
+
+  /* missing-key safety: fall back to English, never write "undefined",
+     never blank an element that already has fallback text */
+  function text(key){
+    var dict = I18N[currentLang];
+    if (dict && Object.prototype.hasOwnProperty.call(dict, key) && dict[key] !== "") return dict[key];
+    var fallback = I18N[DEFAULT_LANG];
+    return (fallback && fallback[key] !== undefined) ? fallback[key] : "";
+  }
+
+  function applyBindings(){
+    document.querySelectorAll("[data-i18n]").forEach(function(el){
+      var val = text(el.getAttribute("data-i18n"));
+      if (val) el.textContent = val;
+    });
+    document.querySelectorAll("[data-i18n-html]").forEach(function(el){
+      var val = text(el.getAttribute("data-i18n-html"));
+      if (val) el.innerHTML = val;
+    });
+    document.querySelectorAll("[data-i18n-attr]").forEach(function(el){
+      el.getAttribute("data-i18n-attr").split(";").forEach(function(pair){
+        var parts = pair.split(":");
+        if (parts.length !== 2) return;
+        var val = text(parts[1]);
+        if (val) el.setAttribute(parts[0], val);
+      });
+    });
+    document.querySelectorAll("[data-i18n-m]").forEach(function(el){
+      var val = text(el.getAttribute("data-i18n-m"));
+      if (val) el.setAttribute("data-m", val);
+    });
+    document.querySelectorAll("[data-i18n-y]").forEach(function(el){
+      var val = text(el.getAttribute("data-i18n-y"));
+      if (val) el.setAttribute("data-y", val);
+    });
+  }
+
+  /* og:locale has no static tag in <head> to bind -- create it once */
+  function applyOgLocale(){
+    var el = document.querySelector('meta[property="og:locale"]');
+    if (!el) {
+      el = document.createElement("meta");
+      el.setAttribute("property", "og:locale");
+      document.head.appendChild(el);
+    }
+    el.setAttribute("content", OG_LOCALE[currentLang] || OG_LOCALE[DEFAULT_LANG]);
+  }
+
+  function updateSelector(){
+    document.querySelectorAll(".lang button[data-lang]").forEach(function(btn){
+      btn.setAttribute("aria-pressed", btn.getAttribute("data-lang") === currentLang ? "true" : "false");
+    });
+  }
+
+  function applyLang(lang){
+    currentLang = (SUPPORTED.indexOf(lang) !== -1) ? lang : DEFAULT_LANG;
+    document.documentElement.setAttribute("lang", currentLang);
+    applyBindings();   /* also rewrites data-m/data-y before listeners run */
+    applyOgLocale();
+    updateSelector();
+    try { window.localStorage.setItem(STORAGE_KEY, currentLang); } catch (e) {}
+    listeners.forEach(function(fn){
+      try { fn(currentLang); } catch (e) {}
+    });
+  }
+
+  document.querySelectorAll(".lang button[data-lang]").forEach(function(btn){
+    btn.addEventListener("click", function(){ applyLang(btn.getAttribute("data-lang")); });
+  });
+
+  /* run synchronously, right here, so there is no DOMContentLoaded
+     delay and therefore no visible English-then-translated flash */
+  applyLang(detectLang());
+
+  window.AizuI18N = {
+    lang: function(){ return currentLang; },
+    onChange: function(fn){ if (typeof fn === "function") listeners.push(fn); },
+    examples: function(){
+      var ex = I18N_EXAMPLES[currentLang];
+      return (ex && ex.length) ? ex : I18N_EXAMPLES[DEFAULT_LANG];
+    }
+  };
+})();
+</script>
 <script>
 (function(){
   "use strict";
@@ -968,19 +1828,36 @@ footer{border-top:1px solid var(--line);padding-block:44px;font-size:14px;color:
   /* ---------- pricing toggle ---------- */
   var billM = document.getElementById("bill-m");
   var billY = document.getElementById("bill-y");
+  /* the selected period used to live only in the DOM (aria-pressed);
+     it now has to survive a language switch too, so track it here */
+  var billingPeriod = "m";
   function setPeriod(p){
+    billingPeriod = p;
     document.querySelectorAll("[data-m]").forEach(function(el){
       el.textContent = (p === "m") ? el.getAttribute("data-m") : el.getAttribute("data-y");
     });
     document.querySelectorAll(".plans a[data-plan]").forEach(function(a){
-      a.href = "https://aizu.app/app?plan=" + a.getAttribute("data-plan") +
+      a.href = "https://aizu.uz/app?plan=" + a.getAttribute("data-plan") +
                "&billing=" + (p === "m" ? "monthly" : "yearly");
     });
     billM.setAttribute("aria-pressed", p === "m" ? "true" : "false");
     billY.setAttribute("aria-pressed", p === "y" ? "true" : "false");
   }
+  /* run once, unconditionally, right here -- so the very first render
+     (whatever language detectLang() resolved) picks up the already-
+     correct data-m/data-y values instead of only reacting to a later
+     click or onChange event. Mirrors the theater's unconditional
+     restart() call below. */
+  setPeriod(billingPeriod);
   billM.addEventListener("click", function(){ setPeriod("m"); });
   billY.addEventListener("click", function(){ setPeriod("y"); });
+  /* applyLang() rewrites the underlying data-m/data-y attributes to the
+     new language before this fires, so re-running setPeriod with the
+     period the visitor already had selected both re-translates the
+     price text and leaves the toggle's selection alone. */
+  if (window.AizuI18N) {
+    window.AizuI18N.onChange(function(){ setPeriod(billingPeriod); });
+  }
 
   /* ---------- faq: one open at a time ---------- */
   var faqs = document.querySelectorAll(".faq-list details");
@@ -1048,18 +1925,24 @@ footer{border-top:1px solid var(--line);padding-block:44px;font-size:14px;color:
   tio.observe(theater);
 
   function wait(ms){ return new Promise(function(r){ setTimeout(r, ms); }); }
-  function waitVisible(){
+  /* stale() lets the self-scheduling helpers below abandon their timer
+     chains the moment a language switch bumps the generation. Without it
+     an in-flight typeInto keeps writing the OLD language into the DOM
+     while the restarted loop types the new one beside it. */
+  function waitVisible(myGen){
     return new Promise(function(resolve){
       (function check(){
+        if (myGen !== undefined && myGen !== generation) return resolve();
         if (inView && !document.hidden) resolve();
         else setTimeout(check, 400);
       })();
     });
   }
-  function typeInto(el, text){
+  function typeInto(el, text, myGen){
     return new Promise(function(resolve){
       var i = 0;
       (function tick(){
+        if (myGen !== undefined && myGen !== generation) return resolve();
         el.textContent = text.slice(0, i);
         i++;
         if (i <= text.length) setTimeout(tick, 26 + Math.random() * 26);
@@ -1073,63 +1956,74 @@ footer{border-top:1px solid var(--line);padding-block:44px;font-size:14px;color:
     el.classList.add(cls);
   }
 
-  var EXAMPLES = [
-    { sell: "handmade ceramic tableware", serve: "people furnishing a first home", leads: [
-      { who: "K. · furnishing a first home", ask: "“Who makes a dinnerware set that lasts?”" },
-      { who: "M. · just moved in", ask: "“Want handmade plates, any makers?”" },
-      { who: "J. · gift for a new home", ask: "“Where do I find ceramic tableware?”" }
-    ]},
-    { sell: "done-for-you email marketing", serve: "DTC founders past first traction", leads: [
-      { who: "A. · DTC founder", ask: "“Need someone to run our email flows.”" },
-      { who: "R. · store owner", ask: "“Who actually does email marketing well?”" },
-      { who: "S. · brand lead", ask: "“Hiring help for lifecycle email.”" }
-    ]},
-    { sell: "online strength coaching", serve: "desk workers short on time", leads: [
-      { who: "D. · desk job, no time", ask: "“Any coach who does 30-minute sessions?”" },
-      { who: "T. · new parent", ask: "“Need a plan I can stick to. Who helps?”" },
-      { who: "P. · remote worker", ask: "“Looking for an online strength coach.”" }
-    ]},
-    { sell: "brand design sprints", serve: "startups about to launch", leads: [
-      { who: "L. · launching next month", ask: "“Need a brand ready in three weeks.”" },
-      { who: "N. · first-time founder", ask: "“Who does fast brand sprints?”" },
-      { who: "E. · seed-stage startup", ask: "“Looking for a launch identity. Recs?”" }
-    ]}
-  ];
+  /* the 4 examples come from I18N_EXAMPLES[currentLang] (see the i18n
+     runtime script above), not a hardcoded array, so the theater speaks
+     whichever language the visitor has selected */
+  function getExamples(){
+    if (window.AizuI18N) return window.AizuI18N.examples();
+    return (typeof I18N_EXAMPLES !== "undefined" && I18N_EXAMPLES.en) ? I18N_EXAMPLES.en : [];
+  }
 
-  async function loop(){
+  /* generation counter: applyLang() -> restart() bumps this, the loop
+     checks it after every await and bails the instant it's stale, so
+     at most one loop is ever running and no half-translated scene is
+     ever left on screen mid-switch */
+  var generation = 0;
+
+  function resetScene(){
+    cards.forEach(function(c){ c.classList.remove("lit"); });
+    theater.classList.remove("armed");
+    lineSell.classList.remove("active");
+    lineServe.classList.remove("active");
+    sellEl.textContent = "";
+    serveEl.textContent = "";
+  }
+
+  async function loop(myGen){
     var ex = 0;
     for (;;) {
-      await waitVisible();
-      var pair = EXAMPLES[ex % EXAMPLES.length];
+      if (myGen !== generation) return;
+      await waitVisible(myGen);
+      if (myGen !== generation) return;
+      var examples = getExamples();
+      if (!examples.length) { await wait(500); continue; }
+      var pair = examples[ex % examples.length];
       ex++;
 
       /* reset scene */
-      cards.forEach(function(c){ c.classList.remove("lit"); });
-      theater.classList.remove("armed");
-      sellEl.textContent = "";
-      serveEl.textContent = "";
+      resetScene();
       await wait(500);
+      if (myGen !== generation) return;
 
       /* type the description */
       lineSell.classList.add("active");
-      await typeInto(sellEl, pair.sell);
+      await typeInto(sellEl, pair.sell, myGen);
+      if (myGen !== generation) return;
       lineSell.classList.remove("active");
       lineServe.classList.add("active");
       await wait(180);
-      await typeInto(serveEl, pair.serve);
+      if (myGen !== generation) return;
+      await typeInto(serveEl, pair.serve, myGen);
+      if (myGen !== generation) return;
       lineServe.classList.remove("active");
       theater.classList.add("armed");
       await wait(600);
+      if (myGen !== generation) return;
 
       /* three pulses, three qualified customers */
       for (var i = 0; i < cards.length; i++) {
-        await waitVisible();
+        if (myGen !== generation) return;
+        await waitVisible(myGen);
+        if (myGen !== generation) return;
         replay(pulseIn, "go");
         await wait(820);
+        if (myGen !== generation) return;
         replay(blackbox, "fire");
         await wait(620);
+        if (myGen !== generation) return;
         replay(pulseOut, "go");
         await wait(820);
+        if (myGen !== generation) return;
         var lead = pair.leads[i];
         if (lead) {
           cards[i].querySelector(".l-who").textContent = lead.who;
@@ -1137,13 +2031,21 @@ footer{border-top:1px solid var(--line);padding-block:44px;font-size:14px;color:
         }
         cards[i].classList.add("lit");
         await wait(1050);
+        if (myGen !== generation) return;
       }
 
       /* hold the full scene, then move on */
       await wait(3000);
     }
   }
-  loop();
+
+  function restart(){
+    generation++;
+    resetScene();
+    loop(generation);
+  }
+  restart();
+  if (window.AizuI18N) window.AizuI18N.onChange(restart);
 })();
 </script>
 </body>

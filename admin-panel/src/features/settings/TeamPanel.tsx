@@ -150,8 +150,11 @@ function InviteLinkForm({ assignable }: { readonly assignable: readonly Role[] }
       { role },
       {
         onSuccess: (data) => {
-          // Hash router: the join URL is origin + '/#' + the returned path.
-          setLink(`${window.location.origin}/#${data.path}`);
+          // Hash router under /app/: the join URL is origin + '/app/#' + the returned
+          // path. The landing's legacy-hash shim would bounce a bare origin + '/#'
+          // link too, but an invite is a fresh link — generate it correctly at the
+          // source rather than leaning on a shim kept only for old bookmarks.
+          setLink(`${window.location.origin}/app/#${data.path}`);
         },
       },
     );

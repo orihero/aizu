@@ -51,27 +51,21 @@
   flex: none;
 }
 
+/* The mark is one shared <use href="#aizu-mark"> (sprite at the top of
+   index.html, geometry owned by admin-panel/src/shared/ui/BrandMark.tsx).
+   There are no .nav-logo__dot / .nav-logo__ring rules any more: ordinary
+   selectors cannot reach inside a <use> shadow tree, so colour travels in
+   through the two inherited custom properties instead. The values below are
+   the sprite's own defaults — BrandMark's "rail" tone — restated here only so
+   the nav's intent stays readable at the point of use. */
 .nav-logo__mark {
-  /* sized against the wordmark rather than as a glyph: the mark now reads as
+  /* sized against the wordmark rather than as a glyph: the mark reads as
      the logo, not as a letter inside it */
   width: 1.45em;
   height: 1.45em;
-  /* the ping mark is the one lime element in the nav */
-  color: var(--lime);
   flex: none;
-}
-
-/* the arc of the ping mark (was the CoreShift "C" ring, hence the name) */
-.nav-logo__ring {
-  fill: none;
-  stroke: currentColor;
-  /* 2.6 on the canonical 32-unit box, matching the live site exactly */
-  stroke-width: 2.6;
-  stroke-linecap: round;
-}
-
-.nav-logo__dot {
-  fill: currentColor;
+  --aizu-dot: var(--lime);
+  --aizu-arc: #ffffff;
 }
 
 .nav-logo__text {
@@ -89,6 +83,13 @@
   color: var(--muted);
   margin-left: 7px;
   line-height: 1;
+}
+
+/* The pill is fixed at top: 22px and 64px tall, so an anchor that scrolled its
+   target flush to the viewport top would drop the section's heading behind it.
+   Every linkable section reserves that much clearance instead. */
+.section[id] {
+  scroll-margin-top: 104px;
 }
 
 /* ---------- links ---------- */
@@ -148,10 +149,12 @@
   color: var(--ink);
 }
 
-.nav-btn--cta {
-  /* pokes ~6px past the pill's fixed height / flat bottom edge */
-  margin-top: 6px;
-}
+/* No margin-top here on purpose. CoreShift's CTA carried `margin-top: 6px` so
+   it poked past the pill's FLAT bottom edge — a deliberate detail of that
+   design. This pill is a 999px round-ended capsule with align-items: center,
+   so there is no flat edge to overhang: the margin only pushed the button 3px
+   below "Log in" and read as a misalignment. Both actions now sit on one
+   centre line. */
 
 /* ---------- responsive ---------- */
 @media (max-width: 860px) {

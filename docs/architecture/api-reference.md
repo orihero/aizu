@@ -1,13 +1,13 @@
 # Aizu Bridge Server — HTTP API Reference
 
-The bridge server is a stdlib-only `ThreadingHTTPServer` (default `http://127.0.0.1:8765`) that serves the built React panel and a JSON API under `/api/*`. All routing is hand-dispatched in `engine/aizu/server.py` inside `PanelHandler.do_GET` / `do_POST` / `do_OPTIONS` — there is no framework and no decorator-based route table.
+The bridge server is a stdlib-only `ThreadingHTTPServer` (default `http://127.0.0.1:8765`) that serves the static marketing landing, the built React panel, and a JSON API under `/api/*`. All routing is hand-dispatched in `engine/aizu/server.py` inside `PanelHandler.do_GET` / `do_POST` / `do_OPTIONS` — there is no framework and no decorator-based route table.
 
 > `engine/aizu/core/router.py` is the **LLM model router**, not an HTTP router — it defines no `/api/*` routes.
 
 ## Base URL & prefix
 
 - Base URL: `http://127.0.0.1:8765` (loopback by default).
-- All API paths are under the `/api` prefix. Every other GET path falls back to the SPA `index.html` (client-side routing); real static files under `/assets`, the favicon, etc. serve directly.
+- All API paths are under the `/api` prefix. `/` and `/index.html` serve the static marketing landing (`dist/index.html`). `/app`, `/app/`, and any unknown non-API path under `/app/` fall back to the SPA shell (`dist/app/index.html`, client-side hash routing). Any other unknown non-API path falls back to the landing. Real static files under `/assets`, `/landing`, the favicon, etc. serve directly.
 - Unknown `/api/*` paths return a JSON `404 {"ok": false, "error": "unknown endpoint"}` rather than the SPA shell.
 
 ## Response envelopes

@@ -12,7 +12,7 @@ import type { Billing, BillingInterval, BillingTier } from '@/shared/types/domai
 
 /** Where the Scale "Talk to sales" CTA points. Single constant so it is easy to
  * change without hunting through JSX. */
-const SALES_EMAIL = 'sales@aizu.app';
+const SALES_EMAIL = 'sales@aizu.uz';
 
 /** Subscription status → badge tone. Fails to neutral for any unrecognized status
  * (mirrors the server's closed-set allow-list philosophy — unknown ≠ healthy). */

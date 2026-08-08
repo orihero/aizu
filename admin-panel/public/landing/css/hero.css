@@ -213,16 +213,10 @@
   flex: none;
 }
 
-.hero-tile__mark-dot {
-  fill: var(--lime);
-}
-
-.hero-tile__mark-ring {
-  fill: none;
-  stroke: var(--lime);
-  stroke-width: 2.6;
-  stroke-linecap: round;
-}
+/* The dot/ring rules are gone: this is now one shared <use href="#aizu-mark">
+   and selectors cannot cross into a <use> shadow tree. The sprite's default
+   rail tone (lime dot, white arc) applies; override --aizu-dot / --aizu-arc
+   here if this chip ever needs a different pairing. */
 
 .hero-tile__label {
   font-family: var(--font-mono);

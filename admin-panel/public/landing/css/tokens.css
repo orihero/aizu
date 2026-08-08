@@ -21,12 +21,12 @@
    ============================================================ */
 
 /* AIZU is Inter Tight (display + sans) and JetBrains Mono (labels,
-   numerals). Both are self-hosted under assets/fonts/ — no CDN, no
+   numerals). Both are self-hosted under landing/fonts/ — no CDN, no
    external request — so this import is the only way they load;
    without it the page silently falls back to the system stack.
    The Geist/Outfit .woff2 files themselves were deleted from disk as
    part of this rebrand (see README.md); nothing else imports them. */
-@import url('../assets/fonts/fonts.css');
+@import url('../fonts/fonts.css');
 
 /* ---------- CSS reset ---------- */
 *,

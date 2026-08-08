@@ -703,6 +703,15 @@ def cmd_panel(args: argparse.Namespace) -> int:
               "(cd admin-panel && npm run build), or pass --panel-dir",
               file=sys.stderr)
         return 2
+    # The landing (index.html) and the SPA shell (app/index.html) are two separate
+    # Vite entries as of the aizu.uz split; a multi-entry misconfiguration can emit
+    # one without the other, which would otherwise only surface as a silent 404/500
+    # the first time someone hits /app/ in production.
+    if not (panel_dir / "app" / "index.html").exists():
+        print(f"error: no app/index.html under {panel_dir} — build the panel first "
+              "(cd admin-panel && npm run build), or pass --panel-dir",
+              file=sys.stderr)
+        return 2
     httpd = serve(args.db, str(panel_dir), args.config, host=args.host, port=args.port)
     url = f"http://{args.host}:{args.port}/"
     log.success("Panel serving %s at %s (db=%s)", panel_dir, url, args.db)

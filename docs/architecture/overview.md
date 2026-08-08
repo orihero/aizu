@@ -48,8 +48,9 @@ plus a React SPA and a Tauri desktop shell. Two console scripts are packaged:
 
 | App / role | How it starts | What it does |
 |---|---|---|
-| **Engine bridge** (`aizu panel`) | `aizu panel` → `server.serve()` | Long-lived stdlib `ThreadingHTTPServer` (no web framework). Serves the built React SPA **and** the `/api/*` JSON control plane. Spawns on-demand runs, hosts the scheduler + reclaim daemons, enforces auth/RBAC and billing. |
-| **Admin panel** | built to `admin-panel/dist`, served by the bridge (dev: Vite proxy → `127.0.0.1:8765`) | React 19 + Vite + TS SPA. Pure client over the bridge API; the operator surface for campaigns, leads, reports, team, settings, billing, and the superadmin console. |
+| **Engine bridge** (`aizu panel`) | `aizu panel` → `server.serve()` | Long-lived stdlib `ThreadingHTTPServer` (no web framework). Serves the static marketing landing at `/`, the built React SPA at `/app/`, **and** the `/api/*` JSON control plane. Spawns on-demand runs, hosts the scheduler + reclaim daemons, enforces auth/RBAC and billing. |
+| **Admin panel** | built to `admin-panel/dist/app`, served by the bridge at `/app/` (dev: Vite proxy → `127.0.0.1:8765`) | React 19 + Vite + TS SPA. Pure client over the bridge API; the operator surface for campaigns, leads, reports, team, settings, billing, and the superadmin console. |
+| **Marketing landing** | built from `admin-panel/public/` (CoreShift design, sourced from `mockups/coreshift-landing/`) to `admin-panel/dist/index.html`, served by the bridge at `/` | Static HTML/CSS/JS, no React. Its "Log in" / "Start free" CTAs link into the SPA at `/app/#/login` and `/app/#/signup`. |
 | **On-demand run** (`aizu run` / `run-all`) | bridge `POST /api/run` → `RunManager.launch` → `subprocess.Popen` of `aizu.cli`; or a direct CLI invocation | The crawler itself. One-shot: builds `(feed, router, pacer)`, dispatches to a per-platform engine, writes leads + run-events to the DB, prints a JSON summary, exits. |
 
 The bridge also runs two background daemons on the default path:

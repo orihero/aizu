@@ -1,0 +1,425 @@
+/* ===== Footer section ===== */
+
+.section--footer {
+  background: var(--surface);
+  /* No padding/space below the footer depends on viewport height, and
+     none is added after it -- the wordmark's per-character entrance
+     (js/footer.js) is a played-once ScrollTrigger keyed to the panel
+     scrolling into view, not a scrubbed one keyed to trailing scroll
+     travel, so it needs no extra room below the section. */
+  padding: 140px 0 96px;
+}
+
+.footer-container {
+  /* uses .container sizing from base.css */
+}
+
+.footer-panel {
+  position: relative;
+  background: var(--white);
+  border-radius: var(--radius-panel);
+  overflow: hidden;
+  /* copy/columns start close to the panel's top edge, not ~200px down */
+  padding-top: clamp(24px, 2.2vw, 40px);
+  isolation: isolate;
+}
+
+/* ---------- top content row ---------- */
+
+.footer-top {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 40px;
+  padding: 0 64px 56px;
+}
+
+.footer-block--copy {
+  flex: 0 1 300px;
+  min-width: 220px;
+}
+
+.footer-tagline {
+  font-family: var(--font-sans);
+  font-weight: 500;
+  font-size: 15px;
+  line-height: 1.55;
+  color: var(--ink);
+}
+
+.footer-linkgrid {
+  flex: 1 1 auto;
+  display: flex;
+  /* tight cluster in the middle third -- justify-content: center only
+     insets the whole group, so this gap is the actual column spacing */
+  gap: clamp(24px, 2.6vw, 40px);
+  justify-content: center;
+}
+
+.footer-col {
+  display: flex;
+  flex-direction: column;
+  min-width: 96px;
+}
+
+.footer-col-title {
+  font-family: var(--font-sans);
+  font-weight: 600;
+  font-size: 15px;
+  letter-spacing: -0.01em;
+  color: var(--ink-2);
+  margin-bottom: 18px;
+}
+
+.footer-col-list {
+  display: flex;
+  flex-direction: column;
+  gap: 13px;
+}
+
+.footer-link {
+  font-family: var(--font-sans);
+  font-weight: 400;
+  font-size: 15px;
+  color: var(--muted);
+  transition: color 0.2s var(--ease-out);
+}
+
+.footer-link:hover,
+.footer-link:focus-visible {
+  color: var(--ink);
+}
+
+.footer-block--social {
+  flex: 0 0 auto;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+}
+
+.footer-social-title {
+  font-family: var(--font-sans);
+  font-weight: 600;
+  font-size: 15px;
+  letter-spacing: -0.01em;
+  color: var(--ink-2);
+  margin-bottom: 18px;
+}
+
+.footer-social-icons {
+  display: flex;
+  gap: 10px;
+}
+
+.footer-social-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 34px;
+  height: 34px;
+  border-radius: 26%;
+  background: var(--tile);
+  color: var(--ink-2);
+  transition: background 0.2s var(--ease-out), transform 0.2s var(--ease-out), color 0.2s var(--ease-out);
+}
+
+.footer-social-btn:hover,
+.footer-social-btn:focus-visible {
+  background: var(--line);
+  color: var(--ink);
+  transform: translateY(-2px);
+}
+
+.footer-social-btn svg {
+  display: block;
+}
+
+/* ---------- giant wordmark ---------- */
+
+.footer-wordmark-wrap {
+  position: relative;
+  width: calc(100% + 160px);
+  margin-left: -80px;
+  font-size: clamp(120px, 15.5vw, 260px);
+  /* This box's height (not its own overflow) is what sets where the crop
+     line falls: tall enough to clear the full letterforms (cap-height
+     ~0.72em) with only a small sliver of the descender zone cropped --
+     not cropped through the middle of the letters. Overflow is left
+     visible here on purpose -- each character's entrance animation
+     (js/footer.js) drops it in from above its final position, and that
+     needs to be visible rising up over the content above (matching the
+     source video). The actual crop -- both this sliver at the bottom and
+     the horizontal bleed past the panel's edges -- comes from
+     .footer-panel's own `overflow: hidden` below, since this wrap's
+     declared height still stops contributing to the panel's own layout
+     height at exactly this line, whether or not it clips locally. */
+  height: 0.9em;
+  overflow: visible;
+  line-height: 1;
+  pointer-events: none;
+}
+
+.footer-wordmark {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  display: block;
+  text-align: center;
+  font-family: var(--font-sans);
+  font-weight: 700;
+  font-size: 1em;
+  line-height: 1;
+  letter-spacing: -0.03em;
+  color: var(--coral);
+  white-space: nowrap;
+  will-change: filter, opacity;
+}
+
+/* ---------- liquid blur lens over the wordmark ----------
+   A soft, irregular mass that drifts across "AIZU" and blurs the letters
+   behind it, leaving the rest of the word sharp. The blobs have no fill and
+   no content of their own: the whole effect is backdrop-filter, which is why
+   the markup puts them AFTER .footer-wordmark — backdrop-filter can only act
+   on what is already painted beneath the element.
+
+   The mask is the part that matters. A single rectangular pane with a
+   left-to-right fade reads as a mechanical wipe; instead each blob's mask is
+   the union of two or three offset soft-edged ellipses (multiple mask layers
+   composite additively by default), so its silhouette is a lopsided droplet
+   rather than a band, and none of its edges are straight.
+
+   "Liquid" then comes from motion, not from the shape alone. All three blobs
+   share the same box and the same 19s traverse, so they stay a single cluster,
+   but each gets its own path, its own easing, and its own out-of-phase
+   squash/stretch and rotation cycles on periods that never line up (6.5/8.3/
+   5.1s and 11/14.5/9.3s against 19s). The mass therefore stretches, lags,
+   folds and re-gathers as it crosses, and the composite never visibly repeats.
+   Only `translate`/`scale`/`rotate` animate — all compositor-side, no mask or
+   filter is re-rasterized per frame — and they are separate properties from
+   `transform`, which is what lets three independent cycles run on one element.
+
+   Where blobs overlap the backdrop is sampled twice, so the core of the mass
+   blurs harder than its fringes. That is deliberate: it gives the mass depth
+   instead of a flat uniform smear. The per-blob blur radii do the same.
+
+   Every dimension here is in `em`, i.e. relative to the wrap's clamped
+   font-size, never to the wrap's width. The wrap is far wider than the word
+   (the word is only its middle third, and that fraction shifts with the
+   viewport once the font-size clamp bites), so anything sized against the wrap
+   would drift over empty background for most of its cycle at one width and
+   swamp the letters at another. Sized in em, the mass keeps a fixed
+   relationship to the letterforms at every breakpoint — which is also why
+   there is no separate mobile override for it.
+
+   .footer-panel already sets `isolation: isolate` and `overflow: hidden`, so
+   the backdrop is scoped to the panel and the blobs cannot bleed past its
+   rounded corners. */
+.footer-wordmark-blur {
+  position: absolute;
+  /* Overshoots the wrap vertically: the wrap is 0.9em tall but the letters
+     spill slightly past it, and a lens that stopped at the box edge would
+     leave a visibly sharp strip along the top and bottom of the blurred band.
+     The box is also kept near-square so that rotating it never swings the
+     blob out of the wordmark band and up into the footer links. */
+  top: -0.18em;
+  height: 1.26em;
+  /* Centred on the wrap by layout (margin-left is exactly half the width), so
+     a translate of 0 sits the blob dead centre on the word and the drift
+     keyframes below are a symmetric swing either side of it. */
+  left: 50%;
+  width: 1.5em;
+  margin-left: -0.75em;
+  /* How far from centre a blob travels, as a share of its own width. "AIZU"
+     is ~2.17em wide, so its edge is 1.085em from centre; clearing it takes
+     that plus the blob's own half-width (0.75em) = 1.22 box-widths. 135% adds
+     a little margin past the last letter before the swing turns around. */
+  --lens-reach: 135%;
+  pointer-events: none;
+  animation-iteration-count: infinite;
+  animation-direction: alternate, alternate, alternate;
+}
+
+/* The uneven horizontal spacing between drift keyframes is what makes the
+   glide speed up and slow down instead of tracking linearly.
+
+   Slow on purpose. The brand's motion rule is that the signal moves slowly and
+   settles while noise moves fast and blurs — an ambient mass sweeping quickly
+   across the logo would read as noise. One pass takes ~19s. */
+
+.footer-wordmark-blur--a {
+  -webkit-backdrop-filter: blur(0.08em);
+  backdrop-filter: blur(0.08em);
+  -webkit-mask-image:
+    radial-gradient(46% 40% at 44% 50%, #000 0%, #000 40%, transparent 74%),
+    radial-gradient(30% 34% at 66% 38%, #000 0%, rgba(0, 0, 0, 0.94) 36%, transparent 72%),
+    radial-gradient(26% 30% at 34% 72%, #000 0%, rgba(0, 0, 0, 0.9) 34%, transparent 70%);
+  mask-image:
+    radial-gradient(46% 40% at 44% 50%, #000 0%, #000 40%, transparent 74%),
+    radial-gradient(30% 34% at 66% 38%, #000 0%, rgba(0, 0, 0, 0.94) 36%, transparent 72%),
+    radial-gradient(26% 30% at 34% 72%, #000 0%, rgba(0, 0, 0, 0.9) 34%, transparent 70%);
+  animation-name: footer-lens-drift-a, footer-lens-squash-a, footer-lens-turn-a;
+  animation-duration: 19s, 6.5s, 11s;
+  animation-timing-function: cubic-bezier(0.45, 0, 0.55, 1), ease-in-out, ease-in-out;
+}
+
+.footer-wordmark-blur--b {
+  -webkit-backdrop-filter: blur(0.046em);
+  backdrop-filter: blur(0.046em);
+  -webkit-mask-image:
+    radial-gradient(34% 30% at 30% 32%, #000 0%, rgba(0, 0, 0, 0.96) 38%, transparent 74%),
+    radial-gradient(22% 26% at 58% 20%, #000 0%, rgba(0, 0, 0, 0.88) 34%, transparent 70%);
+  mask-image:
+    radial-gradient(34% 30% at 30% 32%, #000 0%, rgba(0, 0, 0, 0.96) 38%, transparent 74%),
+    radial-gradient(22% 26% at 58% 20%, #000 0%, rgba(0, 0, 0, 0.88) 34%, transparent 70%);
+  animation-name: footer-lens-drift-b, footer-lens-squash-b, footer-lens-turn-b;
+  animation-duration: 19s, 8.3s, 14.5s;
+  animation-timing-function: cubic-bezier(0.62, 0, 0.38, 1), ease-in-out, ease-in-out;
+}
+
+.footer-wordmark-blur--c {
+  -webkit-backdrop-filter: blur(0.1em);
+  backdrop-filter: blur(0.1em);
+  -webkit-mask-image:
+    radial-gradient(30% 26% at 70% 74%, #000 0%, rgba(0, 0, 0, 0.94) 36%, transparent 72%),
+    radial-gradient(20% 22% at 48% 86%, #000 0%, rgba(0, 0, 0, 0.85) 32%, transparent 68%);
+  mask-image:
+    radial-gradient(30% 26% at 70% 74%, #000 0%, rgba(0, 0, 0, 0.94) 36%, transparent 72%),
+    radial-gradient(20% 22% at 48% 86%, #000 0%, rgba(0, 0, 0, 0.85) 32%, transparent 68%);
+  animation-name: footer-lens-drift-c, footer-lens-squash-c, footer-lens-turn-c;
+  animation-duration: 19s, 5.1s, 9.3s;
+  animation-timing-function: cubic-bezier(0.3, 0, 0.7, 1), ease-in-out, ease-in-out;
+}
+
+@keyframes footer-lens-drift-a {
+  0%   { translate: calc(var(--lens-reach) * -1) 3%; }
+  32%  { translate: calc(var(--lens-reach) * -0.46) -4%; }
+  64%  { translate: calc(var(--lens-reach) * 0.44) 5%; }
+  100% { translate: var(--lens-reach) -2%; }
+}
+
+@keyframes footer-lens-drift-b {
+  0%   { translate: calc(var(--lens-reach) * -1.08) -4%; }
+  30%  { translate: calc(var(--lens-reach) * -0.55) 5%; }
+  66%  { translate: calc(var(--lens-reach) * 0.55) -6%; }
+  100% { translate: calc(var(--lens-reach) * 1.04) 3%; }
+}
+
+@keyframes footer-lens-drift-c {
+  0%   { translate: calc(var(--lens-reach) * -0.94) 5%; }
+  36%  { translate: calc(var(--lens-reach) * -0.36) -6%; }
+  68%  { translate: calc(var(--lens-reach) * 0.34) 4%; }
+  100% { translate: calc(var(--lens-reach) * 1.1) -4%; }
+}
+
+/* Non-uniform scale — the mass is squashed on one axis exactly when it is
+   stretched on the other, which is what makes it read as a volume of fluid
+   rather than something growing and shrinking. */
+@keyframes footer-lens-squash-a {
+  from { scale: 1.06 0.92; }
+  to   { scale: 0.9 1.14; }
+}
+
+@keyframes footer-lens-squash-b {
+  from { scale: 0.94 1.08; }
+  to   { scale: 1.12 0.9; }
+}
+
+@keyframes footer-lens-squash-c {
+  from { scale: 1.1 1.02; }
+  to   { scale: 0.88 1.16; }
+}
+
+/* Small angles only. The blob masks sit inside the box's inscribed circle at
+   these amounts; a larger swing would push the droplets past the top of the
+   wordmark band and start blurring the footer links above it. */
+@keyframes footer-lens-turn-a {
+  from { rotate: -9deg; }
+  to   { rotate: 11deg; }
+}
+
+@keyframes footer-lens-turn-b {
+  from { rotate: 13deg; }
+  to   { rotate: -7deg; }
+}
+
+@keyframes footer-lens-turn-c {
+  from { rotate: -14deg; }
+  to   { rotate: 6deg; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  /* Parked rather than removed: the point of the elements is that part of the
+     word is blurred, so they hold a fixed position over the middle of the
+     traverse instead of freezing wherever the global reduced-motion rule
+     happened to stop them — which would be off the right edge, i.e. no blur at
+     all. The three are left slightly apart, at their starting rotations, so the
+     parked mass keeps the irregular silhouette rather than stacking into one
+     symmetrical smudge. */
+  .footer-wordmark-blur {
+    animation: none;
+    scale: 1;
+  }
+
+  .footer-wordmark-blur--a {
+    translate: calc(var(--lens-reach) * -0.06) 0;
+    rotate: -6deg;
+  }
+
+  .footer-wordmark-blur--b {
+    translate: calc(var(--lens-reach) * 0.14) -3%;
+    rotate: 9deg;
+  }
+
+  .footer-wordmark-blur--c {
+    translate: calc(var(--lens-reach) * -0.18) 4%;
+    rotate: -11deg;
+  }
+}
+
+/* ---------- responsive ---------- */
+
+@media (max-width: 1100px) {
+  .footer-top {
+    flex-wrap: wrap;
+    row-gap: 40px;
+  }
+
+  .footer-linkgrid {
+    flex: 1 1 100%;
+    justify-content: flex-start;
+    order: 3;
+    gap: 40px;
+  }
+
+  .footer-block--social {
+    order: 2;
+    margin-left: auto;
+  }
+}
+
+@media (max-width: 640px) {
+  .section--footer {
+    padding: 100px 0 64px;
+  }
+
+  .footer-panel {
+    padding-top: clamp(24px, 6vw, 40px);
+  }
+
+  .footer-top {
+    padding: 0 28px 40px;
+  }
+
+  .footer-linkgrid {
+    flex-wrap: wrap;
+    gap: 24px 32px;
+  }
+
+  .footer-wordmark-wrap {
+    width: calc(100% + 80px);
+    margin-left: -40px;
+    font-size: clamp(64px, 24vw, 120px);
+  }
+}
+

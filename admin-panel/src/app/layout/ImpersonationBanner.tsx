@@ -24,7 +24,9 @@ export function ImpersonationBanner() {
     // Best-effort end; then hard-navigate back to the admin console regardless so the
     // operator is never stranded in an org they can no longer act in.
     await repository.endImpersonation();
-    window.location.assign('/admin/orgs');
+    // '/app/' prefix, not a bare '/admin/orgs': the SPA is served under /app/ (the
+    // marketing landing owns '/'), and the admin console is a hash route inside it.
+    window.location.assign('/app/#/admin/orgs');
   }
 
   return (

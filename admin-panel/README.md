@@ -21,10 +21,11 @@ cd ../engine
 ./.venv/bin/python -m aizu.cli --db aizu.db panel \
     --panel-dir ../admin-panel/dist --config config --port 8765
 
-# 2a. Production: open http://127.0.0.1:8765/  (after `npm run build`)
+# 2a. Production: open http://127.0.0.1:8765/app/  (after `npm run build`; "/" serves the
+#     marketing landing, not this app)
 # 2b. Development: hot-reloading dev server proxying /api to the bridge
 npm install
-npm run dev          # http://localhost:5173
+npm run dev          # http://localhost:5173/app/  (the bare "/" serves the static landing)
 ```
 
 ## Scripts

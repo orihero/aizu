@@ -1,0 +1,898 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AIZU — a signal to act</title>
+<meta name="description" content="Tell AIZU what you sell and who you serve. It returns a short list of qualified, ready-to-buy customers, every week.">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Crect width='100' height='100' rx='22' fill='%2316161a'/%3E%3Ccircle cx='42' cy='60' r='13' fill='%23d9f24f'/%3E%3Cpath d='M48 36 A26 26 0 0 1 68 69' fill='none' stroke='%23ffffff' stroke-width='7' stroke-linecap='round'/%3E%3C/svg%3E">
+
+<script>
+  // LEGACY-BOOKMARK SHIM - this page ("/") used to BE the React SPA shell
+  // (hash router mounted at the site root), so old bookmarks/links look like
+  // aizu.uz/#/dashboard, aizu.uz/#/login, etc. Now "/" serves this static
+  // marketing landing and the SPA moved to "/app/". If the incoming hash
+  // looks like an SPA route (starts with "#/") rather than one of this
+  // page's own in-page anchors (#hero, #core-hr, #integrations,
+  // #testimonials, #plans, #faq, or none at all), bounce straight into the
+  // app shell with the same hash intact. Must run before anything else
+  // paints so there's no flash of the landing page for those visitors.
+  (function () {
+    var hash = window.location.hash;
+    if (hash.indexOf('#/') === 0) {
+      window.location.replace('/app/' + hash);
+    }
+  })();
+</script>
+
+<script>
+  // TRANSLATION PAINT GUARD - see landing/css/i18n.css for the rule this
+  // attribute drives and landing/js/i18n.js for what clears it. The page's
+  // source language is English and it ships inlined in the markup below, so
+  // an ru/uz visitor would otherwise see English for a frame before the
+  // dictionary lands. Hiding the body for the length of the parse is
+  // cheaper than that flash.
+  //
+  // Both fallbacks below exist so a broken, blocked, or 404ing i18n.js can
+  // never leave a visitor staring at a blank page: worst case they get the
+  // untranslated English original, which is a complete page in its own right.
+  (function () {
+    var root = document.documentElement;
+    root.setAttribute('data-i18n-pending', '');
+    var clear = function () { root.removeAttribute('data-i18n-pending'); };
+    window.setTimeout(clear, 1500);
+    window.addEventListener('load', clear);
+  })();
+</script>
+
+<!-- Dictionaries first, engine second: CS.t() reads window.CS_I18N at call
+     time but the engine translates on DOMContentLoaded, and both must be in
+     place before any section script touches the text nodes. All three locales
+     ship on every visit - together they are a fraction of the GSAP bundle
+     already below, and it keeps the switcher a synchronous, no-fetch swap. -->
+<script src="landing/i18n/en.js"></script>
+<script src="landing/i18n/ru.js"></script>
+<script src="landing/i18n/uz.js"></script>
+<script src="landing/js/i18n.js"></script>
+
+<link rel="stylesheet" href="landing/css/tokens.css">
+<link rel="stylesheet" href="landing/css/base.css">
+<link rel="stylesheet" href="landing/css/nav.css">
+<link rel="stylesheet" href="landing/css/hero.css">
+<link rel="stylesheet" href="landing/css/core-hr.css">
+<link rel="stylesheet" href="landing/css/bento.css">
+<link rel="stylesheet" href="landing/css/integrations.css">
+<link rel="stylesheet" href="landing/css/testimonials.css">
+<link rel="stylesheet" href="landing/css/footer.css">
+<link rel="stylesheet" href="landing/css/plans-faq.css">
+<link rel="stylesheet" href="landing/css/i18n.css">
+</head>
+<body>
+
+<!--
+  THE AIZU MARK - defined once, referenced everywhere via <use href="#aizu-mark">.
+  Do not draw this by hand again anywhere on the page.
+
+  Geometry is copied verbatim from the app's own component,
+  admin-panel/src/shared/ui/BrandMark.tsx, which is the single source of truth
+  for the logo. If the mark ever changes, change it there and re-copy these two
+  elements; nothing else in this file needs touching.
+
+  Colour is driven by two custom properties rather than baked in, because CSS
+  custom properties inherit into a <use> shadow tree while ordinary selectors
+  cannot reach inside it. Defaults are BrandMark's "rail" tone (the one used on
+  the panel's always-dark nav rail): lime dot, white arc. Override per context
+  with --aizu-dot / --aizu-arc on the <svg> that carries the <use>.
+-->
+<svg width="0" height="0" aria-hidden="true" focusable="false" style="position:absolute">
+  <symbol id="aizu-mark" viewBox="0 0 100 100">
+    <circle cx="40" cy="60" r="16" fill="var(--aizu-dot, #d9f24f)"/>
+    <path d="M47 31 A31 31 0 0 1 71 72" fill="none" stroke="var(--aizu-arc, #ffffff)"
+          stroke-width="8.5" stroke-linecap="round"/>
+  </symbol>
+</svg>
+
+<section class="section section--nav" id="nav">
+  <div class="nav-pill" data-nav-pill>
+    <!-- Wordmark - links to the hero, the top of this same page, not a route. -->
+    <a href="#hero" class="nav-logo" data-i18n-attr="aria-label:nav.home">
+      <svg class="nav-logo__mark" viewBox="0 0 100 100" aria-hidden="true" focusable="false"><use href="#aizu-mark"/></svg>
+      <span class="nav-logo__text">AIZU</span><span class="nav-logo__jp" aria-hidden="true">合図</span>
+    </a>
+
+    <ul class="nav-links">
+      <li><a href="#core-hr" class="nav-link"><span class="nav-link__label" data-i18n="nav.why">Why AIZU</span></a></li>
+      <li><a href="#integrations" class="nav-link"><span class="nav-link__label" data-i18n="nav.where">Where we look</span></a></li>
+      <li><a href="#testimonials" class="nav-link"><span class="nav-link__label" data-i18n="nav.how">How it behaves</span></a></li>
+      <li><a href="#plans" class="nav-link"><span class="nav-link__label" data-i18n="nav.pricing">Pricing</span></a></li>
+      <li><a href="#faq" class="nav-link"><span class="nav-link__label" data-i18n="nav.faq">FAQ</span></a></li>
+    </ul>
+
+    <div class="nav-actions">
+      <!--
+        Language switcher. Real <button>s, not links: the choice is persisted
+        to localStorage and the page reloads, it is not a navigation. The
+        labels are the ISO codes themselves, so they read the same whichever
+        language you arrive in; the accessible name carries the language name
+        in the CURRENT locale (see nav.lang.* in landing/i18n/).
+
+        Plain markup on purpose - with JS off these buttons simply do nothing
+        and the page stays in its inlined English, which is the honest outcome
+        since the switch itself needs JS.
+      -->
+      <div class="lang-switch" role="group" data-i18n-attr="aria-label:nav.lang" aria-label="Language">
+        <button type="button" class="lang-option" data-lang-option="en" data-i18n-attr="title:nav.lang.en">EN</button>
+        <button type="button" class="lang-option" data-lang-option="ru" data-i18n-attr="title:nav.lang.ru">RU</button>
+        <button type="button" class="lang-option" data-lang-option="uz" data-i18n-attr="title:nav.lang.uz">UZ</button>
+      </div>
+
+      <!-- Auth CTAs hand off into the React SPA shell, mounted at /app/. -->
+      <a href="/app/#/login" class="btn btn--ghost nav-btn nav-btn--signin" data-i18n="nav.login">Log in</a>
+      <a href="/app/#/signup" class="btn btn--dark nav-btn nav-btn--cta" data-i18n="nav.cta">Start free</a>
+    </div>
+  </div>
+</section>
+
+<section class="section section--hero" id="hero">
+  <div class="container hero-inner">
+
+    <div class="hero-graph" aria-hidden="true">
+      <svg class="hero-connectors" viewBox="0 0 1440 420" preserveAspectRatio="xMidYMid meet">
+        <path class="hero-line" data-line="trunk-left" d="M632 200 L254 200"></path>
+        <path class="hero-line" data-line="trunk-right" d="M808 200 L1190 200"></path>
+        <path class="hero-line hero-line--diag" data-line="diag-left-up" d="M511 200 L432 96 L367 93"></path>
+        <path class="hero-line hero-line--diag" data-line="diag-left-down" d="M557 200 L486 283 L420 283"></path>
+        <path class="hero-line hero-line--diag" data-line="diag-right-up" d="M881 200 L956 112 L1016 112"></path>
+        <path class="hero-line hero-line--diag" data-line="diag-right-down" d="M923 200 L1003 307 L1069 307"></path>
+        <circle class="hero-dot" data-dot="left-up" cx="432" cy="96" r="3"></circle>
+        <circle class="hero-dot" data-dot="left-down" cx="486" cy="283" r="3"></circle>
+        <circle class="hero-dot" data-dot="right-up" cx="956" cy="112" r="3"></circle>
+        <circle class="hero-dot" data-dot="right-down" cx="1003" cy="307" r="3"></circle>
+      </svg>
+
+      <!-- Centre node -->
+      <div class="hero-tile-pos" data-tile="center" style="--x:720;--y:200;--size:176">
+        <div class="hero-tile-parallax" data-depth="0.3">
+          <div class="hero-tile hero-tile--center">
+            <div class="hero-roulette">
+              <span class="hero-roulette-icon" data-icon="scan">
+                <svg viewBox="0 0 24 24"><path d="M4 8V5a1 1 0 0 1 1-1h3"></path><path d="M16 4h3a1 1 0 0 1 1 1v3"></path><path d="M20 16v3a1 1 0 0 1-1 1h-3"></path><path d="M8 20H5a1 1 0 0 1-1-1v-3"></path></svg>
+              </span>
+              <span class="hero-roulette-icon" data-icon="sparkle-x">
+                <svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"></path></svg>
+              </span>
+              <span class="hero-roulette-icon" data-icon="slash">
+                <svg viewBox="0 0 24 24"><path d="M7 17L17 7"></path></svg>
+              </span>
+              <span class="hero-roulette-icon" data-icon="plus">
+                <svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"></path></svg>
+              </span>
+              <span class="hero-roulette-icon" data-icon="backslash">
+                <svg viewBox="0 0 24 24"><path d="M7 7l10 10"></path></svg>
+              </span>
+              <span class="hero-roulette-icon" data-icon="star">
+                <svg viewBox="0 0 24 24"><path d="M12 3.5c.7 3.2 2 5.7 4.9 6.5-2.9.8-4.2 3.3-4.9 6.5-.7-3.2-2-5.7-4.9-6.5 2.9-.8 4.2-3.3 4.9-6.5z"></path></svg>
+              </span>
+              <span class="hero-roulette-icon" data-icon="orbit">
+                <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"></circle><ellipse cx="12" cy="12" rx="9.5" ry="3.6" transform="rotate(-22 12 12)"></ellipse></svg>
+              </span>
+              <span class="hero-roulette-icon" data-icon="check">
+                <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"></circle><path d="M8 12.4l2.6 2.6L16 9.4"></path></svg>
+              </span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Left signal chip: AIZU ping mark (dot + arc), same as nav/favicon -->
+      <div class="hero-tile-pos" data-tile="portrait-left" style="--x:179;--y:200;--size:150">
+        <div class="hero-tile-parallax" data-depth="1">
+          <div class="hero-tile hero-tile--signal">
+            <svg class="hero-tile__mark" viewBox="0 0 100 100" aria-hidden="true" focusable="false"><use href="#aizu-mark"/></svg>
+            <span class="hero-tile__label" data-i18n="hero.tile.ask">Ask</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- Yellow lightbulb -->
+      <div class="hero-tile-pos" data-tile="yellow" style="--x:324;--y:85;--size:86">
+        <div class="hero-tile-parallax" data-depth="0.78">
+          <div class="hero-tile hero-tile--yellow">
+            <svg viewBox="0 0 24 24"><path d="M9 18h6M10 21h4M12 3a6 6 0 0 0-3 11.2c.6.4 1 1.1 1 1.8h4c0-.7.4-1.4 1-1.8A6 6 0 0 0 12 3z"></path></svg>
+          </div>
+        </div>
+      </div>
+
+      <!-- Cyan balloons -->
+      <div class="hero-tile-pos" data-tile="cyan" style="--x:365;--y:284;--size:110">
+        <div class="hero-tile-parallax" data-depth="0.7">
+          <div class="hero-tile hero-tile--cyan">
+            <svg viewBox="0 0 24 24">
+              <ellipse cx="9" cy="8.2" rx="3.3" ry="4.1"></ellipse>
+              <path d="M9 12.3l-.5 2M9 12.3l.7 1.6-1 1.4 1 1"></path>
+              <ellipse cx="15.6" cy="11" rx="2.6" ry="3.2"></ellipse>
+              <path d="M15.6 14.2l.4 1.7M15.6 14.2l-.5 1.2.9 1-.6 1"></path>
+            </svg>
+          </div>
+        </div>
+      </div>
+
+      <!-- Red shield -->
+      <div class="hero-tile-pos" data-tile="red" style="--x:1075;--y:95;--size:118">
+        <div class="hero-tile-parallax" data-depth="0.7">
+          <div class="hero-tile hero-tile--red">
+            <svg viewBox="0 0 24 24">
+              <path class="hero-shield-outline" d="M12 3.2l6.5 2.6v4.6c0 4.6-3.1 7.6-6.5 8.6-3.4-1-6.5-4-6.5-8.6V5.8L12 3.2z"></path>
+              <path class="hero-bolt" d="M13.1 7.6l-3.4 5h2.4l-.9 3.8 3.9-5.4h-2.4l2.4-3.4z"></path>
+            </svg>
+          </div>
+        </div>
+      </div>
+
+      <!-- Lower right signal chip: AIZU ping mark (dot + arc), same as nav/favicon -->
+      <div class="hero-tile-pos" data-tile="portrait-right" style="--x:1117;--y:312;--size:96">
+        <div class="hero-tile-parallax" data-depth="0.78">
+          <div class="hero-tile hero-tile--signal">
+            <svg class="hero-tile__mark" viewBox="0 0 100 100" aria-hidden="true" focusable="false"><use href="#aizu-mark"/></svg>
+            <span class="hero-tile__label" data-i18n="hero.tile.match">Match</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- Far right eyes tile -->
+      <div class="hero-tile-pos" data-tile="eyes" style="--x:1260;--y:200;--size:140">
+        <div class="hero-tile-parallax" data-depth="1">
+          <div class="hero-tile hero-tile--eyes">
+            <svg viewBox="0 0 48 24">
+              <ellipse cx="13" cy="12" rx="8.2" ry="9.6"></ellipse>
+              <circle class="hero-pupil" cx="15.6" cy="12.4" r="4.3"></circle>
+              <ellipse cx="35" cy="12" rx="8.2" ry="9.6"></ellipse>
+              <circle class="hero-pupil" cx="37.6" cy="12.4" r="4.3"></circle>
+            </svg>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="hero-copy">
+      <h1 class="h1 hero-heading" data-i18n-html="hero.heading.html">Meet customers<br>while they decide</h1>
+      <p class="lead hero-lead" data-i18n="hero.lead">Tell AIZU what you sell and who you serve. It returns a short list of ready-to-buy customers, every week.</p>
+      <a href="/app/#/signup" class="btn btn--coral hero-cta" data-i18n="hero.cta">Start free</a>
+    </div>
+
+  </div>
+</section>
+
+<section class="section section--core-hr surface" id="core-hr">
+  <!--
+    Engagement glyphs and platform marks, defined once and referenced by every
+    card. Every one is HAND-DRAWN here as an approximation - no official brand
+    asset is vendored. Card photography is real, licensed stock under
+    landing/photos/; per-file source and licence are recorded in
+    mockups/coreshift-landing/README.md (this page's design-reference home).
+    See its "Platform skins" note before treating this mockup as shippable.
+  -->
+  <svg class="cs-sprite" width="0" height="0" aria-hidden="true" focusable="false" style="position:absolute">
+    <symbol id="cs-i-heart" viewBox="0 0 16 16"><path d="M8 13.6C5.7 12 2.6 9.7 2.6 6.9a2.9 2.9 0 0 1 5.4-1.6 2.9 2.9 0 0 1 5.4 1.6c0 2.8-3.1 5.1-5.4 6.7z" fill="none" stroke="currentColor" stroke-width="1.3"/></symbol>
+    <symbol id="cs-i-bubble" viewBox="0 0 16 16"><path d="M13.6 8.2c0 2.6-2.5 4.7-5.6 4.7-.7 0-1.4-.1-2-.3l-3 1.1 1-2.5A4.4 4.4 0 0 1 2.4 8.2c0-2.6 2.5-4.7 5.6-4.7s5.6 2.1 5.6 4.7z" fill="none" stroke="currentColor" stroke-width="1.3"/></symbol>
+    <symbol id="cs-i-send" viewBox="0 0 16 16"><path d="M14.2 2.2 1.9 6.9l4.4 1.6 1.6 4.5zM14.2 2.2 6.3 8.5" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"/></symbol>
+    <symbol id="cs-i-repost" viewBox="0 0 16 16"><path d="M4.4 5.6V4.7c0-.7.6-1.2 1.2-1.2h5V1.9l2.6 2.2-2.6 2.2V4.7H5.6v.9zM11.6 10.4v.9c0 .7-.6 1.2-1.2 1.2h-5v1.6l-2.6-2.2 2.6-2.2v1.6h5v-.9z" fill="currentColor"/></symbol>
+    <symbol id="cs-i-thumb" viewBox="0 0 16 16"><path d="M5.9 14V6.6l3-4.6c.6.1 1 .6 1 1.2l-.5 2.6h3.3c.8 0 1.4.7 1.2 1.5l-1 4.8c-.1.6-.7 1-1.3 1zM2.4 6.6h2.4V14H2.4z" fill="currentColor"/></symbol>
+    <symbol id="cs-i-thumbdown" viewBox="0 0 16 16"><g transform="rotate(180 8 8)"><path d="M5.9 14V6.6l3-4.6c.6.1 1 .6 1 1.2l-.5 2.6h3.3c.8 0 1.4.7 1.2 1.5l-1 4.8c-.1.6-.7 1-1.3 1zM2.4 6.6h2.4V14H2.4z" fill="currentColor"/></g></symbol>
+    <symbol id="cs-i-up" viewBox="0 0 16 16"><path d="M8 2.6l5.2 5.6h-3V13H5.8V8.2h-3z" fill="currentColor"/></symbol>
+    <symbol id="cs-i-down" viewBox="0 0 16 16"><g transform="rotate(180 8 8)"><path d="M8 2.6l5.2 5.6h-3V13H5.8V8.2h-3z" fill="currentColor"/></g></symbol>
+    <symbol id="cs-i-check" viewBox="0 0 16 16"><path d="M1.8 8.2 4 10.4l4.6-4.8M7.4 10.4l.9.9 4.8-5" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+    <symbol id="cs-i-play" viewBox="0 0 16 16"><path d="M4 2.5 13 8l-9 5.5z" fill="currentColor"/></symbol>
+    <symbol id="cs-m-ig" viewBox="0 0 16 16"><rect x="1.2" y="1.2" width="13.6" height="13.6" rx="4" fill="none" stroke="currentColor" stroke-width="1.5"/><circle cx="8" cy="8" r="3.2" fill="none" stroke="currentColor" stroke-width="1.5"/><circle cx="11.9" cy="4.1" r="1" fill="currentColor"/></symbol>
+    <symbol id="cs-m-li" viewBox="0 0 16 16"><rect width="16" height="16" rx="3" fill="#0a66c2"/><rect x="3.1" y="6.2" width="2" height="6.7" fill="#fff"/><circle cx="4.1" cy="4.2" r="1.2" fill="#fff"/><path d="M7 6.2h1.9v.9a2.1 2.1 0 0 1 1.9-1c2 0 2.4 1.3 2.4 3v3.8h-2V9.5c0-.8 0-1.8-1.1-1.8s-1.2.9-1.2 1.8v3.4H7z" fill="#fff"/></symbol>
+    <symbol id="cs-m-x" viewBox="0 0 16 16"><path d="M12.2 1.6h2.2l-4.8 5.5 5.7 7.5h-4.5L7.3 10l-4 4.6H1.1l5.2-5.9L.8 1.6h4.6l3.2 4.2zm-.8 12.1h1.2L4.7 2.8H3.4z" fill="currentColor"/></symbol>
+    <symbol id="cs-m-rd" viewBox="0 0 16 16"><circle cx="8" cy="8" r="8" fill="#ff4500"/><circle cx="5.7" cy="8.2" r="1.05" fill="#fff"/><circle cx="10.3" cy="8.2" r="1.05" fill="#fff"/><path d="M5.5 10.8c1.5 1.1 3.5 1.1 5 0" fill="none" stroke="#fff" stroke-width="1" stroke-linecap="round"/></symbol>
+    <symbol id="cs-m-yt" viewBox="0 0 24 16"><rect width="24" height="16" rx="4.4" fill="#f00"/><path d="M9.6 4.6 16 8l-6.4 3.4z" fill="#fff"/></symbol>
+    <symbol id="cs-m-tg" viewBox="0 0 16 16"><circle cx="8" cy="8" r="8" fill="#2aabee"/><path d="M3.5 7.9 11.6 4.6c.4-.15.75.1.62.66l-1.38 6.5c-.1.46-.38.57-.77.36L7.9 10.6l-1.05 1a.42.42 0 0 1-.34.16l.12-1.72 3.14-2.84c.14-.12-.03-.19-.21-.07L5.7 9.2l-1.67-.52c-.36-.11-.37-.36.07-.53z" fill="#fff"/></symbol>
+  </svg>
+
+  <div class="core-hr-orbits" aria-hidden="true">
+
+    <div class="core-hr-ellipse core-hr-ellipse--l" data-cx="0" data-parallax="-14">
+      <i class="core-hr-metrics" aria-hidden="true"></i>
+      <div class="core-hr-card"><article class="cs-card cs-card--ig cs-card--media"><div class="cs-card__row"><span class="cs-card__av">M</span><span class="cs-card__who"><span class="cs-card__name">mayabuilds</span></span><svg class="cs-card__mark" aria-hidden="true"><use href="#cs-m-ig"/></svg></div><div class="cs-card__media"><img src="landing/photos/dinnerware.jpg" alt="A stack of handmade ceramic bowls and plates" data-i18n-attr="alt:card.ig1.alt" loading="lazy" decoding="async"></div><div class="cs-card__acts"><svg aria-hidden="true"><use href="#cs-i-heart"/></svg><svg aria-hidden="true"><use href="#cs-i-bubble"/></svg><svg aria-hidden="true"><use href="#cs-i-send"/></svg></div><p class="cs-card__likes" data-i18n="card.ig1.likes">128 likes</p><p class="cs-card__body" data-i18n="card.ig1.body">found this dinner set at a market — anyone know a maker who does these?</p><p class="cs-card__time" data-i18n="card.ig1.time">2 minutes ago</p></article><span class="core-hr-card-blur"></span><span class="core-hr-card-blur core-hr-card-blur--2"></span></div>
+      <div class="core-hr-card"><article class="cs-card cs-card--li"><div class="cs-card__row"><span class="cs-card__av">D</span><span class="cs-card__who"><span class="cs-card__name">Dan K.</span><span class="cs-card__sub" data-i18n="card.li1.role">Ops Lead · 6m</span></span><svg class="cs-card__mark" aria-hidden="true"><use href="#cs-m-li"/></svg></div><p class="cs-card__body" data-i18n="card.li1.body">Can anyone recommend a customs broker for EU shipments?</p><div class="cs-card__acts"><span class="cs-card__stat"><span class="cs-card__reaction"><svg aria-hidden="true"><use href="#cs-i-thumb"/></svg></span>42</span><span data-i18n="card.li1.comments">8 comments</span></div></article><span class="core-hr-card-blur"></span><span class="core-hr-card-blur core-hr-card-blur--2"></span></div>
+      <div class="core-hr-card"><article class="cs-card cs-card--x cs-card--media"><div class="cs-card__row"><span class="cs-card__av">J</span><span class="cs-card__who"><span class="cs-card__name">Jonas W.</span><span class="cs-card__sub" data-i18n="card.x1.handle">@jonasw · 3m</span></span><svg class="cs-card__mark" aria-hidden="true"><use href="#cs-m-x"/></svg></div><p class="cs-card__body" data-i18n="card.x1.body">anyone selling a used camera body? this is the one I&rsquo;m after</p><div class="cs-card__media"><img src="landing/photos/camera.jpg" alt="A DSLR camera body on a table" data-i18n-attr="alt:card.x1.alt" loading="lazy" decoding="async"></div><div class="cs-card__acts"><span class="cs-card__stat"><svg aria-hidden="true"><use href="#cs-i-bubble"/></svg>5</span><span class="cs-card__stat"><svg aria-hidden="true"><use href="#cs-i-repost"/></svg>2</span><span class="cs-card__stat"><svg aria-hidden="true"><use href="#cs-i-heart"/></svg>11</span></div></article><span class="core-hr-card-blur"></span><span class="core-hr-card-blur core-hr-card-blur--2"></span></div>
+      <div class="core-hr-card"><article class="cs-card cs-card--rd cs-card--media"><div class="cs-card__row"><span class="cs-card__av cs-card__av--plain"><svg aria-hidden="true"><use href="#cs-m-rd"/></svg></span><span class="cs-card__who"><span class="cs-card__name">r/Frugal</span><span class="cs-card__sub" data-i18n="card.rd1.sub">· 24m</span></span></div><p class="cs-card__body" data-i18n="card.rd1.body">Is this a fair quote for a bathroom retile?</p><div class="cs-card__media"><img src="landing/photos/bathroom.jpg" alt="A bathroom with grey subway tiles" data-i18n-attr="alt:card.rd1.alt" loading="lazy" decoding="async"></div><div class="cs-card__acts"><span class="cs-card__vote"><svg aria-hidden="true"><use href="#cs-i-up"/></svg>214<svg aria-hidden="true"><use href="#cs-i-down"/></svg></span><span class="cs-card__stat"><svg aria-hidden="true"><use href="#cs-i-bubble"/></svg>63</span></div></article><span class="core-hr-card-blur"></span><span class="core-hr-card-blur core-hr-card-blur--2"></span></div>
+      <div class="core-hr-card"><article class="cs-card cs-card--yt"><div class="cs-card__row"><span class="cs-card__av">P</span><span class="cs-card__who"><span class="cs-card__name">@priyaships</span><span class="cs-card__sub" data-i18n="card.yt1.time">15 minutes ago</span></span><svg class="cs-card__mark cs-card__mark--wide" aria-hidden="true"><use href="#cs-m-yt"/></svg></div><p class="cs-card__body" data-i18n="card.yt1.body">which lens did you use here? looking to buy one</p><div class="cs-card__acts"><span class="cs-card__stat"><svg aria-hidden="true"><use href="#cs-i-thumb"/></svg>6</span><svg aria-hidden="true"><use href="#cs-i-thumbdown"/></svg><span class="cs-card__reply" data-i18n="card.reply">Reply</span></div></article><span class="core-hr-card-blur"></span><span class="core-hr-card-blur core-hr-card-blur--2"></span></div>
+      <div class="core-hr-card"><article class="cs-card cs-card--tg"><div class="cs-card__row"><svg class="cs-card__mark" aria-hidden="true"><use href="#cs-m-tg"/></svg></div><div class="cs-card__bubble"><span class="cs-card__name">Nour A.</span><p class="cs-card__body" data-i18n="card.tg1.body">does anyone have a cleaner they trust for a 2-bed?</p><div class="cs-card__acts">14:32<svg aria-hidden="true"><use href="#cs-i-check"/></svg></div></div></article><span class="core-hr-card-blur"></span><span class="core-hr-card-blur core-hr-card-blur--2"></span></div>
+    </div>
+
+    <div class="core-hr-ellipse core-hr-ellipse--r" data-cx="100" data-parallax="-8">
+      <i class="core-hr-metrics" aria-hidden="true"></i>
+      <div class="core-hr-card"><article class="cs-card cs-card--ig cs-card--media"><div class="cs-card__row"><span class="cs-card__av">S</span><span class="cs-card__who"><span class="cs-card__name">sofia.b</span></span><svg class="cs-card__mark" aria-hidden="true"><use href="#cs-m-ig"/></svg></div><div class="cs-card__media"><img src="landing/photos/packaging.jpg" alt="Plain kraft cardboard packaging boxes" data-i18n-attr="alt:card.ig2.alt" loading="lazy" decoding="async"></div><div class="cs-card__acts"><svg aria-hidden="true"><use href="#cs-i-heart"/></svg><svg aria-hidden="true"><use href="#cs-i-bubble"/></svg><svg aria-hidden="true"><use href="#cs-i-send"/></svg></div><p class="cs-card__likes" data-i18n="card.ig2.likes">64 likes</p><p class="cs-card__body" data-i18n="card.ig2.body">need eco packaging for a small candle brand — recs?</p><p class="cs-card__time" data-i18n="card.ig2.time">22 minutes ago</p></article><span class="core-hr-card-blur"></span><span class="core-hr-card-blur core-hr-card-blur--2"></span></div>
+      <div class="core-hr-card"><article class="cs-card cs-card--li"><div class="cs-card__row"><span class="cs-card__av">A</span><span class="cs-card__who"><span class="cs-card__name">Amara O.</span><span class="cs-card__sub" data-i18n="card.li2.role">Founder · 9m</span></span><svg class="cs-card__mark" aria-hidden="true"><use href="#cs-m-li"/></svg></div><p class="cs-card__body" data-i18n="card.li2.body">Looking for a bookkeeper who works with early-stage startups.</p><div class="cs-card__acts"><span class="cs-card__stat"><span class="cs-card__reaction"><svg aria-hidden="true"><use href="#cs-i-thumb"/></svg></span>57</span><span data-i18n="card.li2.comments">12 comments</span></div></article><span class="core-hr-card-blur"></span><span class="core-hr-card-blur core-hr-card-blur--2"></span></div>
+      <div class="core-hr-card"><article class="cs-card cs-card--x"><div class="cs-card__row"><span class="cs-card__av">K</span><span class="cs-card__who"><span class="cs-card__name">Kaito N.</span><span class="cs-card__sub" data-i18n="card.x2.handle">@kaiton · 27m</span></span><svg class="cs-card__mark" aria-hidden="true"><use href="#cs-m-x"/></svg></div><p class="cs-card__body" data-i18n="card.x2.body">who&rsquo;s your go-to for contract review? need it done this week</p><div class="cs-card__acts"><span class="cs-card__stat"><svg aria-hidden="true"><use href="#cs-i-bubble"/></svg>6</span><span class="cs-card__stat"><svg aria-hidden="true"><use href="#cs-i-repost"/></svg>3</span><span class="cs-card__stat"><svg aria-hidden="true"><use href="#cs-i-heart"/></svg>13</span></div></article><span class="core-hr-card-blur"></span><span class="core-hr-card-blur core-hr-card-blur--2"></span></div>
+      <div class="core-hr-card"><article class="cs-card cs-card--rd cs-card--media"><div class="cs-card__row"><span class="cs-card__av cs-card__av--plain"><svg aria-hidden="true"><use href="#cs-m-rd"/></svg></span><span class="cs-card__who"><span class="cs-card__name">r/BuyItForLife</span><span class="cs-card__sub" data-i18n="card.rd2.sub">· 11m</span></span></div><p class="cs-card__body" data-i18n="card.rd2.body">Best desk chair that actually lasts?</p><div class="cs-card__media"><img src="landing/photos/chair.jpg" alt="A mesh-backed desk chair beside a wooden desk" data-i18n-attr="alt:card.rd2.alt" loading="lazy" decoding="async"></div><div class="cs-card__acts"><span class="cs-card__vote"><svg aria-hidden="true"><use href="#cs-i-up"/></svg>178<svg aria-hidden="true"><use href="#cs-i-down"/></svg></span><span class="cs-card__stat"><svg aria-hidden="true"><use href="#cs-i-bubble"/></svg>41</span></div></article><span class="core-hr-card-blur"></span><span class="core-hr-card-blur core-hr-card-blur--2"></span></div>
+      <div class="core-hr-card"><article class="cs-card cs-card--yt"><div class="cs-card__row"><span class="cs-card__av">E</span><span class="cs-card__who"><span class="cs-card__name">@elifd</span><span class="cs-card__sub" data-i18n="card.yt2.time">35 minutes ago</span></span><svg class="cs-card__mark cs-card__mark--wide" aria-hidden="true"><use href="#cs-m-yt"/></svg></div><p class="cs-card__body" data-i18n="card.yt2.body">where can I get this desk? been searching for weeks</p><div class="cs-card__acts"><span class="cs-card__stat"><svg aria-hidden="true"><use href="#cs-i-thumb"/></svg>7</span><svg aria-hidden="true"><use href="#cs-i-thumbdown"/></svg><span class="cs-card__reply" data-i18n="card.reply">Reply</span></div></article><span class="core-hr-card-blur"></span><span class="core-hr-card-blur core-hr-card-blur--2"></span></div>
+      <div class="core-hr-card"><article class="cs-card cs-card--tg cs-card--media"><div class="cs-card__row"><svg class="cs-card__mark" aria-hidden="true"><use href="#cs-m-tg"/></svg></div><div class="cs-card__bubble"><span class="cs-card__name">Tomas L.</span><div class="cs-card__media cs-card__media--video"><img src="landing/photos/photographer.jpg" alt="A photographer shooting at an outdoor event" data-i18n-attr="alt:card.tg2.alt" loading="lazy" decoding="async"><span class="cs-card__play"><svg aria-hidden="true"><use href="#cs-i-play"/></svg></span><span class="cs-card__dur">0:12</span></div><p class="cs-card__body" data-i18n="card.tg2.body">need a photographer for a small event next month</p><div class="cs-card__acts">09:14<svg aria-hidden="true"><use href="#cs-i-check"/></svg></div></div></article><span class="core-hr-card-blur"></span><span class="core-hr-card-blur core-hr-card-blur--2"></span></div>
+    </div>
+
+  </div>
+
+  <div class="container core-hr-container">
+    <div class="core-hr-content">
+      <div class="core-hr-badge">
+        <svg class="core-hr-badge-icon" viewBox="0 0 24 24" width="40" height="40" aria-hidden="true" focusable="false">
+          <circle cx="12" cy="8.4" r="3.6"></circle>
+          <path d="M4.8 20.4c0-4.42 3.22-8 7.2-8s7.2 3.58 7.2 8"></path>
+        </svg>
+      </div>
+      <h2 class="h2 core-hr-heading" data-i18n-html="corehr.heading.html">Someone is searching<br>for what you sell</h2>
+      <p class="lead core-hr-sub" data-i18n="corehr.sub">Right now, on some platform you don&rsquo;t have time to watch. AIZU collects them from every social and brings you the ones ready to buy.</p>
+      <!-- Scroll-down CTA, not an auth CTA: sends visitors to the product
+           mechanics section (#bento) further down this same page. -->
+      <a href="#bento" class="btn btn--violet core-hr-cta" data-i18n="corehr.cta">See how it works</a>
+    </div>
+  </div>
+</section>
+
+<section class="section section--bento" id="bento">
+  <div class="container bento-head">
+    <h2 class="h2 bento-title" data-i18n="bento.title">Built for people who sell direct</h2>
+    <p class="lead bento-sub" data-i18n-html="bento.sub.html">E-commerce and DTC brands, agencies, service providers,<br>coaches and creators, B2B sellers.</p>
+  </div>
+
+  <div class="container bento-grid">
+
+    <div class="bento-row bento-row--top">
+    <!-- Card 1 : One brief, every check -->
+    <article class="bento-card bento-card--hr">
+      <div class="bento-visual bento-visual--brief">
+        <div class="bento-ghost bento-ghost--left" aria-hidden="true"></div>
+        <div class="bento-ghost bento-ghost--right" aria-hidden="true"></div>
+
+        <div class="bento-dash">
+          <div class="bento-dash__head">
+            <span class="bento-dash__title">
+              <svg class="bento-dash__ico" viewBox="0 0 16 16" width="12" height="12" fill="none" aria-hidden="true"><path d="M2 4h12M2 8h12M2 12h8" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg>
+              <span data-i18n="bento.c1.report">Match Report</span>
+            </span>
+            <span class="bento-chip bento-chip--dropdown"><span data-i18n="bento.c1.weekly">Weekly</span>
+              <svg viewBox="0 0 10 6" width="8" height="5" aria-hidden="true"><path d="M1 1l4 3.5L9 1" stroke="currentColor" stroke-width="1.4" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg>
+            </span>
+          </div>
+
+          <div class="bento-chart">
+            <div class="bento-chart__rows" aria-hidden="true">
+              <span class="bento-chart__label" data-i18n="bento.day.mon">Mon</span>
+              <span class="bento-chart__label" data-i18n="bento.day.tue">Tue</span>
+              <span class="bento-chart__label" data-i18n="bento.day.wed">Wed</span>
+              <span class="bento-chart__label" data-i18n="bento.day.thu">Thu</span>
+              <span class="bento-chart__label" data-i18n="bento.day.fri">Fri</span>
+            </div>
+            <!--
+              Three groups of two stacked bars, matching ref/t5.09.jpg: the
+              middle group's violet bar is the peak that the dashed average
+              line and the +17% pill both sit on.
+            -->
+            <div class="bento-chart__bars">
+              <!-- both live inside the plot box so they anchor to the peak
+                   bar's top (--h:100%) regardless of the header's height -->
+              <div class="bento-chart__avg" aria-hidden="true"></div>
+              <div class="bento-chart__pill">+17%</div>
+              <div class="bento-bargroup">
+                <span class="bento-bar bento-bar--violet" style="--h:85%"></span>
+                <span class="bento-bar bento-bar--coral" style="--h:60%"></span>
+              </div>
+              <div class="bento-bargroup">
+                <span class="bento-bar bento-bar--violet" style="--h:100%"></span>
+                <span class="bento-bar bento-bar--coral" style="--h:85%"></span>
+              </div>
+              <div class="bento-bargroup">
+                <span class="bento-bar bento-bar--violet" style="--h:73%"></span>
+                <span class="bento-bar bento-bar--coral" style="--h:45%"></span>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+      <h3 class="card-title bento-card__title" data-i18n="bento.c1.title">One brief, every check</h3>
+      <p class="body bento-card__body" data-i18n="bento.c1.body">Write what you sell and who you serve once. AIZU checks every candidate against it, not the other way around.</p>
+    </article>
+
+    <!-- Card 2 : For managers & leaders -->
+    <article class="bento-card bento-card--mgr">
+      <div class="bento-visual bento-visual--mgr">
+        <div class="bento-radar" aria-hidden="true">
+          <span class="bento-radar__ring bento-radar__ring--1"></span>
+          <span class="bento-radar__ring bento-radar__ring--2"></span>
+          <span class="bento-radar__ring bento-radar__ring--3"></span>
+        </div>
+
+        <div class="bento-roller">
+          <div class="bento-roller__track" data-bento-roller-track></div>
+        </div>
+      </div>
+      <h3 class="card-title bento-card__title" data-i18n="bento.c2.title">Know what a lead cost you</h3>
+      <p class="body bento-card__body" data-i18n="bento.c2.body">CPL trend, channel comparison, spend by stage. The numbers that decide where to spend next.</p>
+    </article>
+
+    <!-- Card 3 : Careful by construction -->
+    <article class="bento-card bento-card--legal">
+      <div class="bento-visual bento-visual--legal">
+        <div class="bento-rules" aria-hidden="true">
+          <span></span><span></span><span></span><span></span><span></span><span></span>
+        </div>
+        <div class="bento-doc bento-doc--back" aria-hidden="true">
+          <span class="bento-doc__mark"></span>
+          <span class="bento-doc__line"></span>
+          <span class="bento-doc__line"></span>
+        </div>
+        <div class="bento-doc bento-doc--front" aria-hidden="true">
+          <span class="bento-doc__mark"></span>
+          <span class="bento-doc__line"></span>
+          <span class="bento-doc__line"></span>
+        </div>
+        <div class="bento-badge bento-badge--shield">
+          <svg viewBox="0 0 24 24" width="26" height="26" fill="none" aria-hidden="true">
+            <path d="M12 3l7 3v5.2c0 4.6-3 8-7 9.8-4-1.8-7-5.2-7-9.8V6l7-3z" fill="rgba(255,255,255,.10)" stroke="var(--paper)" stroke-width="1.6" stroke-linejoin="round"/>
+            <path d="M8.6 12.2l2.2 2.2 4.4-4.6" stroke="var(--lime)" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
+          </svg>
+        </div>
+      </div>
+      <h3 class="card-title bento-card__title" data-i18n="bento.c3.title">Careful by construction</h3>
+      <p class="body bento-card__body" data-i18n="bento.c3.body">Daytime pacing, spend caps, cooperative pause. Every run stays inside the limits you set.</p>
+    </article>
+    </div>
+
+    <div class="bento-row bento-row--bottom">
+    <!-- Card 4 : Every lead, one drawer -->
+    <article class="bento-card bento-card--data">
+      <div class="bento-visual bento-visual--data">
+        <div class="bento-doctile" aria-hidden="true">
+          <svg viewBox="0 0 24 24" width="26" height="26" fill="none"><path d="M6 3h9l3 3v15a1 1 0 01-1 1H6a1 1 0 01-1-1V4a1 1 0 011-1z" stroke="var(--coral)" stroke-width="1.6" stroke-linejoin="round"/><path d="M15 3v3a1 1 0 001 1h3" stroke="var(--coral)" stroke-width="1.6" stroke-linejoin="round"/><path d="M8 12h8M8 15h8M8 18h5" stroke="var(--coral)" stroke-width="1.4" stroke-linecap="round"/></svg>
+        </div>
+
+        <div class="bento-panel bento-panel--leads">
+          <div class="bento-panel__head">
+            <span class="bento-panel__title">
+              <svg viewBox="0 0 16 16" width="12" height="12" fill="none" aria-hidden="true"><path d="M2 4h12M2 8h12M2 12h8" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg>
+              <span data-i18n="bento.leads">Leads</span>
+            </span>
+            <span class="bento-panel__link" data-i18n="bento.seeall">See all</span>
+          </div>
+          <div class="bento-tabs">
+            <span class="bento-tab bento-tab--active"><span data-i18n="bento.tab.new">New</span> <em>24</em></span>
+            <span class="bento-tab"><span data-i18n="bento.tab.qualified">Qualified</span> <em>11</em></span>
+            <span class="bento-tab" data-i18n="bento.tab.contacted">Contacted</span>
+          </div>
+          <ul class="bento-leadlist">
+            <li class="bento-leadrow">
+              <span class="bento-avatar bento-avatar--mark" aria-hidden="true"><svg viewBox="0 0 100 100" aria-hidden="true"><use href="#aizu-mark"/></svg></span>
+              <span class="bento-leadrow__name"><span data-i18n="bento.row.new.name">New lead</span><em data-i18n="bento.row.new.sub">Just matched</em></span>
+              <button class="bento-envelope" type="button" aria-label="Message new lead" data-i18n-attr="aria-label:bento.row.new.aria">
+                <svg viewBox="0 0 16 16" width="13" height="13" fill="none"><rect x="2" y="4" width="12" height="8.5" rx="1.4" stroke="currentColor" stroke-width="1.3"/><path d="M2.6 4.8l5.4 4 5.4-4" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/></svg>
+              </button>
+            </li>
+            <li class="bento-leadrow">
+              <span class="bento-avatar bento-avatar--mark" aria-hidden="true"><svg viewBox="0 0 100 100" aria-hidden="true"><use href="#aizu-mark"/></svg></span>
+              <span class="bento-leadrow__name"><span data-i18n="bento.row.qualified.name">Qualified</span><em data-i18n="bento.row.qualified.sub">Ready to buy</em></span>
+              <button class="bento-envelope" type="button" aria-label="Message qualified lead" data-i18n-attr="aria-label:bento.row.qualified.aria">
+                <svg viewBox="0 0 16 16" width="13" height="13" fill="none"><rect x="2" y="4" width="12" height="8.5" rx="1.4" stroke="currentColor" stroke-width="1.3"/><path d="M2.6 4.8l5.4 4 5.4-4" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/></svg>
+              </button>
+            </li>
+            <li class="bento-leadrow">
+              <span class="bento-avatar bento-avatar--mark" aria-hidden="true"><svg viewBox="0 0 100 100" aria-hidden="true"><use href="#aizu-mark"/></svg></span>
+              <span class="bento-leadrow__name"><span data-i18n="bento.row.contacted.name">Contacted</span><em data-i18n="bento.row.contacted.sub">Reply sent</em></span>
+              <button class="bento-envelope" type="button" aria-label="Message contacted lead" data-i18n-attr="aria-label:bento.row.contacted.aria">
+                <svg viewBox="0 0 16 16" width="13" height="13" fill="none"><rect x="2" y="4" width="12" height="8.5" rx="1.4" stroke="currentColor" stroke-width="1.3"/><path d="M2.6 4.8l5.4 4 5.4-4" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/></svg>
+              </button>
+            </li>
+          </ul>
+        </div>
+
+        <div class="bento-panel bento-panel--response">
+          <div class="bento-panel__head">
+            <span class="bento-panel__title">
+              <svg viewBox="0 0 16 16" width="12" height="12" fill="none" aria-hidden="true"><path d="M2 4h12M2 8h12M2 12h8" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg>
+              <span data-i18n="bento.response">Response Rate</span>
+            </span>
+            <span class="bento-segmented">
+              <span class="bento-seg" data-i18n="bento.seg.daily">Daily</span>
+              <span class="bento-seg" data-i18n="bento.seg.weekly">Weekly</span>
+              <span class="bento-seg bento-seg--active" data-i18n="bento.seg.monthly">Monthly</span>
+            </span>
+          </div>
+          <div class="bento-trainchart">
+            <div class="bento-trainchart__axis" aria-hidden="true">
+              <span>100%</span><span>80%</span><span>60%</span><span>40%</span><span>20%</span>
+            </div>
+            <div class="bento-trainchart__bars">
+              <span class="bento-trainbar__pill">46%</span>
+              <span class="bento-trainbar" style="--h:62%"></span>
+              <span class="bento-trainbar" style="--h:38%"></span>
+              <span class="bento-trainbar" style="--h:48%"></span>
+              <span class="bento-trainbar bento-trainbar--active" style="--h:78%"></span>
+              <span class="bento-trainbar" style="--h:56%"></span>
+            </div>
+          </div>
+        </div>
+      </div>
+      <h3 class="card-title bento-card__title" data-i18n="bento.c4.title">Every lead, one drawer</h3>
+      <p class="body bento-card__body" data-i18n="bento.c4.body">Who they are, what they asked for in their own words, when they asked, and a direct way to respond.</p>
+    </article>
+
+    <!-- Card 5 : For teams & roles -->
+    <article class="bento-card bento-card--team">
+      <div class="bento-visual bento-visual--team">
+        <div class="bento-ring" aria-hidden="true">
+          <div class="bento-ring__avatar" style="--i:0"><div class="bento-ring__avatar-inner"><span class="bento-ring__dot"></span></div></div>
+          <div class="bento-ring__avatar" style="--i:1"><div class="bento-ring__avatar-inner"><span class="bento-ring__dot"></span></div></div>
+          <div class="bento-ring__avatar" style="--i:2"><div class="bento-ring__avatar-inner"><span class="bento-ring__dot"></span></div></div>
+          <div class="bento-ring__avatar" style="--i:3"><div class="bento-ring__avatar-inner"><span class="bento-ring__dot"></span></div></div>
+          <div class="bento-ring__avatar" style="--i:4"><div class="bento-ring__avatar-inner"><span class="bento-ring__dot"></span></div></div>
+          <div class="bento-ring__avatar" style="--i:5"><div class="bento-ring__avatar-inner"><span class="bento-ring__dot"></span></div></div>
+          <div class="bento-ring__avatar" style="--i:6"><div class="bento-ring__avatar-inner"><span class="bento-ring__dot"></span></div></div>
+          <div class="bento-ring__avatar" style="--i:7"><div class="bento-ring__avatar-inner"><span class="bento-ring__dot"></span></div></div>
+        </div>
+        <div class="bento-ring__centre">
+          <svg viewBox="0 0 24 24" width="26" height="26" fill="none" aria-hidden="true">
+            <circle cx="8.5" cy="7" r="2.2" fill="currentColor"/>
+            <circle cx="16" cy="8.2" r="1.8" fill="currentColor"/>
+            <path d="M4 18c0-2.8 2-4.6 4.5-4.6S13 15.2 13 18" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/>
+            <path d="M13.5 18c0-2.2 1.6-3.6 3.5-3.6S20.5 15.8 20.5 18" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/>
+          </svg>
+        </div>
+      </div>
+      <h3 class="card-title bento-card__title" data-i18n="bento.c5.title">Roles that actually mean something</h3>
+      <p class="body bento-card__body" data-i18n="bento.c5.body">Owner, admin, member, viewer. Each sees exactly what their role allows, enforced on the server.</p>
+    </article>
+    </div>
+
+  </div>
+</section>
+
+<section class="section section--integrations surface" id="integrations">
+  <div class="container integrations-container">
+    <div class="integrations-panel">
+
+      <div class="integrations-badge" aria-hidden="true">
+        <svg viewBox="0 0 24 24" width="27" height="27" fill="none">
+          <defs>
+            <rect id="integrations-tooth-lg" x="7.6" y="1.6" width="2.0" height="2.8" rx="0.55"></rect>
+            <rect id="integrations-tooth-sm" x="15.45" y="11.2" width="1.5" height="2.1" rx="0.45"></rect>
+          </defs>
+          <g fill="var(--coral)">
+            <use href="#integrations-tooth-lg" transform="rotate(0 8.6 8.6)"></use>
+            <use href="#integrations-tooth-lg" transform="rotate(45 8.6 8.6)"></use>
+            <use href="#integrations-tooth-lg" transform="rotate(90 8.6 8.6)"></use>
+            <use href="#integrations-tooth-lg" transform="rotate(135 8.6 8.6)"></use>
+            <use href="#integrations-tooth-lg" transform="rotate(180 8.6 8.6)"></use>
+            <use href="#integrations-tooth-lg" transform="rotate(225 8.6 8.6)"></use>
+            <use href="#integrations-tooth-lg" transform="rotate(270 8.6 8.6)"></use>
+            <use href="#integrations-tooth-lg" transform="rotate(315 8.6 8.6)"></use>
+          </g>
+          <circle cx="8.6" cy="8.6" r="5.0" fill="var(--coral)"></circle>
+          <circle cx="8.6" cy="8.6" r="2.0" fill="var(--ground)"></circle>
+
+          <g fill="var(--coral)">
+            <use href="#integrations-tooth-sm" transform="rotate(0 16.2 16.2)"></use>
+            <use href="#integrations-tooth-sm" transform="rotate(60 16.2 16.2)"></use>
+            <use href="#integrations-tooth-sm" transform="rotate(120 16.2 16.2)"></use>
+            <use href="#integrations-tooth-sm" transform="rotate(180 16.2 16.2)"></use>
+            <use href="#integrations-tooth-sm" transform="rotate(240 16.2 16.2)"></use>
+            <use href="#integrations-tooth-sm" transform="rotate(300 16.2 16.2)"></use>
+          </g>
+          <circle cx="16.2" cy="16.2" r="3.4" fill="var(--coral)"></circle>
+          <circle cx="16.2" cy="16.2" r="1.3" fill="var(--ground)"></circle>
+        </svg>
+      </div>
+
+      <h2 class="h2 integrations-title" data-i18n-html="integrations.title.html">Six places<br>people ask</h2>
+
+      <div class="integrations-arc">
+        <div class="integrations-arc__stage">
+
+          <div class="integrations-tile" data-i18n-attr="data-name:integrations.1.name|data-desc:integrations.1.desc" data-name="Social posts" data-desc="Comments under posts about what you sell.">
+            <svg class="integrations-tile__mark" viewBox="0 0 24 24" fill="none"
+                 stroke="currentColor" stroke-width="1.7" stroke-linecap="round"
+                 stroke-linejoin="round" aria-hidden="true"><rect x="2.6" y="4.4" width="18.8" height="12.4" rx="4"/><path d="M8.4 16.8 L8.4 20.4 L12.4 16.8"/><circle cx="8.2" cy="10.6" r="0.9" fill="currentColor" stroke="none"/><circle cx="12" cy="10.6" r="0.9" fill="currentColor" stroke="none"/><circle cx="15.8" cy="10.6" r="0.9" fill="currentColor" stroke="none"/></svg>
+          </div>
+          <div class="integrations-tile" data-i18n-attr="data-name:integrations.2.name|data-desc:integrations.2.desc" data-name="Professional network" data-desc="Buying signals in professional threads.">
+            <svg class="integrations-tile__mark" viewBox="0 0 24 24" fill="none"
+                 stroke="currentColor" stroke-width="1.7" stroke-linecap="round"
+                 stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="5.2" r="2.4"/><circle cx="5.6" cy="17.6" r="2.4"/><circle cx="18.4" cy="17.6" r="2.4"/><path d="M10.3 7.1 L7.3 15.7 M13.7 7.1 L16.7 15.7 M8 17.6 L16 17.6"/></svg>
+          </div>
+          <div class="integrations-tile" data-i18n-attr="data-name:integrations.3.name|data-desc:integrations.3.desc" data-name="Public feed" data-desc="Public asks, in real time.">
+            <svg class="integrations-tile__mark" viewBox="0 0 24 24" fill="none"
+                 stroke="currentColor" stroke-width="1.7" stroke-linecap="round"
+                 stroke-linejoin="round" aria-hidden="true"><path d="M3 12 h4 l2 -6.4 l4 12.8 l2 -6.4 h6"/></svg>
+          </div>
+          <div class="integrations-tile" data-i18n-attr="data-name:integrations.4.name|data-desc:integrations.4.desc" data-name="Video comments" data-desc="Comments under reviews and how-tos.">
+            <svg class="integrations-tile__mark" viewBox="0 0 24 24" fill="none"
+                 stroke="currentColor" stroke-width="1.7" stroke-linecap="round"
+                 stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9.4"/><path d="M10 8.6 L16 12 L10 15.4 Z" fill="currentColor" stroke="none"/></svg>
+          </div>
+          <div class="integrations-tile" data-i18n-attr="data-name:integrations.5.name|data-desc:integrations.5.desc" data-name="Community threads" data-desc="Recommendation threads, niche by niche.">
+            <svg class="integrations-tile__mark" viewBox="0 0 24 24" fill="none"
+                 stroke="currentColor" stroke-width="1.7" stroke-linecap="round"
+                 stroke-linejoin="round" aria-hidden="true"><circle cx="6" cy="7" r="1.3" fill="currentColor" stroke="none"/><path d="M10 7 h10"/><circle cx="6" cy="12" r="1.3" fill="currentColor" stroke="none"/><path d="M10 12 h10"/><circle cx="6" cy="17" r="1.3" fill="currentColor" stroke="none"/><path d="M10 17 h7"/></svg>
+          </div>
+          <div class="integrations-tile" data-i18n-attr="data-name:integrations.6.name|data-desc:integrations.6.desc" data-name="Messaging groups" data-desc="Open groups where buyers ask first.">
+            <svg class="integrations-tile__mark" viewBox="0 0 24 24" fill="none"
+                 stroke="currentColor" stroke-width="1.7" stroke-linecap="round"
+                 stroke-linejoin="round" aria-hidden="true"><circle cx="9" cy="10" r="4.4"/><circle cx="16" cy="13" r="3.2"/></svg>
+          </div>
+
+
+
+
+
+        </div>
+
+        <div class="integrations-caption">
+          <p class="integrations-caption__name" data-i18n="integrations.3.name">Public feed</p>
+          <p class="integrations-caption__desc" data-i18n="integrations.3.desc">Public asks, in real time.</p>
+        </div>
+      </div>
+
+    </div>
+  </div>
+</section>
+
+<section class="section section--testimonials" id="testimonials">
+  <div class="container testimonials-container">
+
+    <div class="testimonials-head">
+      <h2 class="h2 testimonials-title" data-i18n="testimonials.title">How AIZU behaves</h2>
+      <p class="lead testimonials-lead" data-i18n-html="testimonials.lead.html">Not promises. What actually runs,<br>every time.</p>
+    </div>
+
+    <div class="testimonials-stage">
+
+      <!-- ===== envelope reveal (scroll-triggered, then discarded) =====
+           back to front: back panel, (the card sits behind the pocket but
+           is a separate sibling below, see .testimonials-card), side
+           flaps, front pocket -- see css/testimonials.css for the
+           z-index contract that makes the pocket occlude the card. ===== -->
+      <div class="testimonials-envelope" aria-hidden="true">
+        <div class="testimonials-envelope-body"></div>
+        <div class="testimonials-flap testimonials-flap--left"></div>
+        <div class="testimonials-flap testimonials-flap--right"></div>
+        <div class="testimonials-pocket"></div>
+      </div>
+
+      <!-- ===== 3D carousel (cards are direct children of .testimonials-stage
+           so the stage's `perspective` applies to their 3D transforms) ===== -->
+      <article class="testimonials-card" data-idx="0">
+          <div class="testimonials-card-content">
+            <div class="testimonials-card-avatar testimonials-card-avatar--mark"><svg viewBox="0 0 100 100" aria-hidden="true"><use href="#aizu-mark"/></svg></div>
+            <h3 class="testimonials-card-name" data-i18n="testimonials.1.name">Attach, never launch</h3>
+            <p class="testimonials-card-role" data-i18n="testimonials.1.role">Session safety</p>
+            
+            <p class="testimonials-card-quote" data-i18n="testimonials.1.quote">AIZU only ever attaches to a browser session you already opened. It never launches or owns one itself.</p>
+          </div>
+        </article>
+
+        <article class="testimonials-card" data-idx="1">
+          <div class="testimonials-card-content">
+            <div class="testimonials-card-avatar testimonials-card-avatar--mark"><svg viewBox="0 0 100 100" aria-hidden="true"><use href="#aizu-mark"/></svg></div>
+            <h3 class="testimonials-card-name" data-i18n="testimonials.2.name">Daytime pacing</h3>
+            <p class="testimonials-card-role" data-i18n="testimonials.2.role">Rate discipline</p>
+            
+            <p class="testimonials-card-quote" data-i18n="testimonials.2.quote">Every run paces itself to normal hours. No overnight bursts, no three-in-the-morning spikes.</p>
+          </div>
+        </article>
+
+        <article class="testimonials-card" data-idx="2">
+          <div class="testimonials-card-content">
+            <div class="testimonials-card-avatar testimonials-card-avatar--mark"><svg viewBox="0 0 100 100" aria-hidden="true"><use href="#aizu-mark"/></svg></div>
+            <h3 class="testimonials-card-name" data-i18n="testimonials.3.name">Spend caps</h3>
+            <p class="testimonials-card-role" data-i18n="testimonials.3.role">Cost control</p>
+            
+            <p class="testimonials-card-quote" data-i18n="testimonials.3.quote">Every model call in a run is budgeted against a cap you set on the campaign. Not an afterthought.</p>
+          </div>
+        </article>
+
+    </div>
+
+    <div class="testimonials-controls">
+      <button class="testimonials-btn testimonials-btn--prev" type="button" aria-label="Previous testimonial" data-i18n-attr="aria-label:testimonials.prev">
+        <svg viewBox="0 0 24 24"><path d="M14.5 6l-6 6 6 6" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      </button>
+      <button class="testimonials-btn testimonials-btn--next" type="button" aria-label="Next testimonial" data-i18n-attr="aria-label:testimonials.next">
+        <svg viewBox="0 0 24 24"><path d="M9.5 6l6 6-6 6" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      </button>
+    </div>
+
+  </div>
+</section>
+
+<section class="section section--plans" id="plans">
+  <div class="container">
+    <div class="plans-head">
+      <h2 class="h2 plans-title" data-i18n="plans.title">Pay for customers, not software</h2>
+      <p class="lead plans-sub" data-i18n="plans.sub">Every plan delivers the same thing: qualified, ready-to-buy
+        customers, every month. The only question is how many you can handle.</p>
+    </div>
+
+    <div class="plans-grid">
+      <article class="plan">
+        <h3 class="plan__name" data-i18n="plans.free.name">Free</h3>
+        <p class="plan__price"><span class="plan__amount">$0</span><span class="plan__period"></span></p>
+        <p class="plan__year" data-i18n="plans.free.note">no card needed</p>
+        <p class="plan__leads"><strong>10</strong><span data-i18n="plans.free.leads">qualified leads a month</span></p>
+        <div class="plan__cta-wrap"><a href="/app/#/signup" class="btn btn--ghost" data-i18n="plans.free.cta">Start free</a></div>
+      </article>
+      <article class="plan plan--featured">
+        <span class="plan__badge" data-i18n="plans.badge">Most popular</span><h3 class="plan__name" data-i18n="plans.starter.name">Starter</h3>
+        <p class="plan__price"><span class="plan__amount">$24.99</span><span class="plan__period" data-i18n="plans.period">/mo</span></p>
+        <p class="plan__year" data-i18n="plans.starter.year">$249 billed yearly</p>
+        <p class="plan__leads"><strong>250</strong><span data-i18n="plans.starter.leads">qualified leads a month</span></p>
+        <div class="plan__cta-wrap"><a href="/app/#/signup" class="btn btn--coral" data-i18n="plans.starter.cta">Choose Starter</a></div>
+      </article>
+      <article class="plan">
+        <h3 class="plan__name" data-i18n="plans.pro.name">Pro</h3>
+        <p class="plan__price"><span class="plan__amount">$149</span><span class="plan__period" data-i18n="plans.period">/mo</span></p>
+        <p class="plan__year" data-i18n="plans.pro.year">$1,490 billed yearly</p>
+        <p class="plan__leads"><strong>2,000</strong><span data-i18n="plans.pro.leads">qualified leads a month</span></p>
+        <div class="plan__cta-wrap"><a href="/app/#/signup" class="btn btn--ghost" data-i18n="plans.pro.cta">Choose Pro</a></div>
+      </article>
+      <article class="plan">
+        <h3 class="plan__name" data-i18n="plans.scale.name">Scale</h3>
+        <p class="plan__price"><span class="plan__amount" data-i18n="plans.scale.amount">Custom</span><span class="plan__period"></span></p>
+        <p class="plan__year" data-i18n="plans.scale.year">negotiated cap</p>
+        <p class="plan__leads"><strong data-i18n="plans.scale.number">Your number</strong><span data-i18n="plans.scale.leads">agreed up front</span></p>
+        <!-- Sales contact, not a signup CTA: same address as the FAQ's contact line below. -->
+        <div class="plan__cta-wrap"><a href="mailto:hello@aizu.uz" class="btn btn--ghost" data-i18n="plans.scale.cta">Talk to sales</a></div>
+      </article>
+    </div>
+
+    <p class="plans-foot" data-i18n="plans.foot">Leads are qualified customers delivered to your account each month.
+      Upgrade, downgrade, or cancel anytime. No contracts, no lock-in.</p>
+  </div>
+</section>
+
+<section class="section section--faq" id="faq">
+  <div class="container faq-layout">
+    <div class="faq-aside">
+      <h2 class="h2 faq-title" data-i18n-html="faq.title.html">Fair questions,<br>straight answers</h2>
+      <p class="lead faq-aside-note" data-i18n-html="faq.note.html">Can’t find your answer?
+        Write to <a href="mailto:hello@aizu.uz">hello@aizu.uz</a>. A person replies.</p>
+    </div>
+
+    <div class="faq-list">
+        <details class="faq-item">
+          <summary><span data-i18n="faq.1.q">Where do the customers come from?</span><span class="faq-icon" aria-hidden="true"></span></summary>
+          <p class="body faq-answer" data-i18n="faq.1.a">From public intent signals: people already asking, in public, for exactly what you offer. AIZU’s job is to surface the ones that match your business while the moment is still live. What you get is the outcome: a qualified, ready-to-buy customer. The finding is our work, not yours.</p>
+        </details>
+        <details class="faq-item">
+          <summary><span data-i18n="faq.2.q">What exactly do I get with each lead?</span><span class="faq-icon" aria-hidden="true"></span></summary>
+          <p class="body faq-answer" data-i18n="faq.2.a">Each lead includes who they are, what they asked for in their own words, when they asked, and a direct way to respond. Enough to reach out the same day, with context. No guesswork, no digging.</p>
+        </details>
+        <details class="faq-item">
+          <summary><span data-i18n="faq.3.q">Is this cold outreach or a bought list?</span><span class="faq-icon" aria-hidden="true"></span></summary>
+          <p class="body faq-answer" data-i18n="faq.3.a">No. AIZU doesn’t sell contact databases, and it doesn’t blast strangers. Every lead is a person who has already signaled, in public and on their own, that they’re looking for what you sell. You’re not interrupting anyone. You’re answering.</p>
+        </details>
+        <details class="faq-item">
+          <summary><span data-i18n="faq.4.q">How do I know the leads are actually qualified?</span><span class="faq-icon" aria-hidden="true"></span></summary>
+          <p class="body faq-answer" data-i18n="faq.4.a">Because qualification is the product. Every lead matches what you sell and who you serve, and shows real, current intent to buy. If a lead isn’t a fit, tell us; your list gets sharper.</p>
+        </details>
+        <details class="faq-item">
+          <summary><span data-i18n="faq.5.q">How fast do I see results?</span><span class="faq-icon" aria-hidden="true"></span></summary>
+          <p class="body faq-answer" data-i18n="faq.5.a">Your first leads typically arrive within days of describing your business, and then they keep coming, week after week. Start on Free: ten qualified leads a month is enough to feel the difference before you spend a dollar.</p>
+        </details>
+        <details class="faq-item">
+          <summary><span data-i18n="faq.6.q">Can I cancel anytime?</span><span class="faq-icon" aria-hidden="true"></span></summary>
+          <p class="body faq-answer" data-i18n="faq.6.a">Yes. Monthly plans cancel with one click, effective at the end of your billing period. No contracts, no exit calls. The Free plan needs no card at all.</p>
+        </details>
+    </div>
+  </div>
+</section>
+
+<section class="section section--footer" id="footer">
+  <div class="container footer-container">
+    <div class="footer-panel">
+      <div class="footer-top">
+
+        <div class="footer-block footer-block--copy">
+          <p class="footer-tagline" data-i18n-html="footer.tagline.html">AIZU 合図 is a signal to act<br>&mdash; not another platform<br>to check.</p>
+        </div>
+
+        <nav class="footer-linkgrid" aria-label="Footer" data-i18n-attr="aria-label:footer.nav">
+          <div class="footer-col">
+            <h4 class="footer-col-title" data-i18n="footer.col.product">Product</h4>
+            <ul class="footer-col-list">
+              <!-- Mirrors the nav's in-page anchors; "How it works" points at
+                   the same #bento section as the core-hr CTA above. -->
+              <li><a href="#core-hr" class="footer-link" data-i18n="footer.link.why">Why AIZU</a></li>
+              <li><a href="#bento" class="footer-link" data-i18n="footer.link.how">How it works</a></li>
+              <li><a href="#plans" class="footer-link" data-i18n="footer.link.pricing">Pricing</a></li>
+              <li><a href="#faq" class="footer-link" data-i18n="footer.link.faq">FAQ</a></li>
+            </ul>
+          </div>
+
+          <div class="footer-col">
+            <h4 class="footer-col-title" data-i18n="footer.col.features">Features</h4>
+            <ul class="footer-col-list">
+              <!-- TODO: no Docs/Privacy/Terms pages exist yet anywhere in the
+                   repo. Left as deliberate placeholders until those pages
+                   ship, rather than inventing URLs that would 404. -->
+              <li><a href="#" class="footer-link" data-i18n="footer.link.docs">Docs</a></li>
+              <li><a href="#" class="footer-link" data-i18n="footer.link.privacy">Privacy</a></li>
+              <li><a href="#" class="footer-link" data-i18n="footer.link.terms">Terms</a></li>
+            </ul>
+          </div>
+
+          <div class="footer-col">
+            <h4 class="footer-col-title" data-i18n="footer.col.pricing">Pricing</h4>
+            <ul class="footer-col-list"></ul>
+          </div>
+
+          <div class="footer-col">
+            <h4 class="footer-col-title" data-i18n="footer.col.resources">Resources</h4>
+            <ul class="footer-col-list"></ul>
+          </div>
+        </nav>
+
+        <div class="footer-block footer-block--social">
+          <h4 class="footer-social-title" data-i18n="footer.social">Follow us</h4>
+          <!-- TODO: no real AIZU social profiles exist yet on any of these
+               platforms. Left as deliberate placeholders until the accounts
+               are live, rather than inventing profile URLs. -->
+          <div class="footer-social-icons">
+            <a href="#" class="footer-social-btn" aria-label="Instagram">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="16" height="16">
+                <rect x="2" y="2" width="20" height="20" rx="5" ry="5"/>
+                <path d="M16 11.37A4 4 0 1 1 12.63 8 4 4 0 0 1 16 11.37z"/>
+                <line x1="17.5" x2="17.51" y1="6.5" y2="6.5"/>
+              </svg>
+            </a>
+            <a href="#" class="footer-social-btn" aria-label="X">
+              <svg viewBox="0 0 24 24" fill="currentColor" width="14" height="14">
+                <path d="M18.244 2.25h3.308l-7.227 8.26 8.502 11.24H16.17l-5.214-6.817L4.99 21.75H1.68l7.73-8.835L1.254 2.25H8.08l4.713 6.231zm-1.161 17.52h1.833L7.084 4.126H5.117z"/>
+              </svg>
+            </a>
+            <a href="#" class="footer-social-btn" aria-label="TikTok">
+              <svg viewBox="0 0 24 24" fill="none" width="16" height="16">
+                <g transform="scale(1.5)" fill="currentColor">
+                  <path d="M9 0h1.98c.144.715.54 1.617 1.235 2.512C12.895 3.389 13.797 4 15 4v2c-1.753 0-3.07-.814-4-1.829V11a5 5 0 1 1-5-5v2a3 3 0 1 0 3 3V0Z"/>
+                </g>
+              </svg>
+            </a>
+          </div>
+        </div>
+
+      </div>
+
+      <div class="footer-wordmark-wrap" aria-hidden="true">
+        <span class="footer-wordmark">AIZU</span>
+      <!--
+          The liquid blur lens: three overlapping soft blobs that drift across
+          the word as one gooey mass. Must stay AFTER .footer-wordmark in the
+          DOM -- they carry no content of their own and work purely by
+          backdrop-filter, so they can only blur what is already painted
+          beneath them.
+        -->
+        <span class="footer-wordmark-blur footer-wordmark-blur--a"></span>
+        <span class="footer-wordmark-blur footer-wordmark-blur--b"></span>
+        <span class="footer-wordmark-blur footer-wordmark-blur--c"></span>
+      </div>
+    </div>
+  </div>
+</section>
+
+<script src="landing/vendor/gsap.min.js"></script>
+<script src="landing/vendor/ScrollTrigger.min.js"></script>
+<script src="landing/vendor/lenis.min.js"></script>
+
+<script src="landing/js/split.js"></script>
+<script src="landing/js/reveal.js"></script>
+<script src="landing/js/nav.js"></script>
+<script src="landing/js/hero.js"></script>
+<script src="landing/js/core-hr.js"></script>
+<script src="landing/js/bento.js"></script>
+<script src="landing/js/integrations.js"></script>
+<script src="landing/js/testimonials.js"></script>
+<script src="landing/js/footer.js"></script>
+<script src="landing/js/plans-faq.js"></script>
+<script src="landing/js/main.js"></script>
+
+</body>
+</html>

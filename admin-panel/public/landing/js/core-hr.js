@@ -110,6 +110,13 @@ CS.initCoreHR = function () {
         rx = box.width;
         ry = box.height;
       }
+      /* Edge-anchored centres (data-cx 0 and 100). With x = cx + rx*cos(t)
+         the whole cos(t) < 0 half of each ring sits outside the section and
+         overflow-x: hidden clips it, so the orbits sit well clear of the
+         centre copy and read as two half-visible rings swinging in from the
+         edges. That clipping is the intended look — an earlier attempt to fit
+         each ring into the gutter beside the copy pulled both orbits inward
+         and flattened the effect. */
       group.orbit.cx = width * group.cxPct;
       group.orbit.cy = height / 2;
       group.orbit.rx = isNaN(rx) || !rx ? group.orbit.rx : rx;

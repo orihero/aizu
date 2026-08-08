@@ -10,23 +10,38 @@ window.CS = window.CS || {};
 (function () {
   'use strict';
 
-  var DECK = [
-    { name: 'Social posts', desc: 'Comments under posts about what you sell.' },
-    { name: 'Professional network', desc: 'Buying signals in professional threads.' },
-    { name: 'Public feed', desc: 'Public asks, in real time.' },
-    { name: 'Video comments', desc: 'Comments under reviews and how-tos.' },
-    { name: 'Community threads', desc: 'Recommendation threads, niche by niche.' },
-    { name: 'Messaging groups', desc: 'Open groups where buyers ask first.' }
-  ];
+  // The caption deck is rewritten on every rotation step, so its copy cannot
+  // live on a data-i18n hook in the markup — it reads the active dictionary
+  // through CS.t instead. Built on first use rather than at parse time so the
+  // dependency on i18n.js having run is satisfied by call order, not by where
+  // this <script> happens to sit in index.html.
+  var DECK = null;
+
+  function deck() {
+    if (!DECK) {
+      DECK = [1, 2, 3, 4, 5, 6].map(function (n) {
+        return {
+          name: CS.t('integrations.' + n + '.name'),
+          desc: CS.t('integrations.' + n + '.desc')
+        };
+      });
+    }
+    return DECK;
+  }
 
   // Tiles sit on slots 16deg apart, centred on 0; the deck is exactly as long
   // as the slot list, so the "wheel" is a closed loop: every tile keeps its own
-  // identity forever, only its angle changes each step. When a tile's angle
-  // rolls past the left edge it is bumped by (slots * 16deg), which lands it
-  // exactly on the mirrored right-edge slot — the "recycle" — and because that
-  // always happens while the tile is fully faded out, the jump is invisible.
-  // This keeps the whole thing a genuine rotating wheel (per-frame angle ->
-  // position) rather than hard-coded keyframes.
+  // identity forever, only its angle changes each step. This keeps the whole
+  // thing a genuine rotating wheel (per-frame angle -> position) rather than
+  // hard-coded keyframes.
+  //
+  // The recycle is deliberately TWO-PHASE. A tile leaving the left end first
+  // rolls on to -48deg with everything else, fading to nothing on the way, and
+  // is only bumped by (slots * 16deg) onto the mirrored +48deg slot once that
+  // roll has finished. Both -48 and +48 render at opacity 0, so the bump itself
+  // is unobservable. Doing it in one phase — bumping at the start of the step —
+  // is what used to empty the leftmost visible slot for the first ~250ms of
+  // every cycle, since the replacement tile is still easing across.
   //
   // AIZU rebrand: the deck grew from 5 to 6 (one per source platform). Slots
   // beyond +-48deg render at opacity 0, so the 6th slot is simply parked
@@ -172,7 +187,7 @@ window.CS = window.CS || {};
     }
 
     function updateCaption(centerDeckIndex, animate) {
-      var item = DECK[centerDeckIndex];
+      var item = deck()[centerDeckIndex];
       if (!nameEl || !descEl) return;
       if (!animate) {
         nameEl.textContent = item.name;
@@ -200,29 +215,30 @@ window.CS = window.CS || {};
       step += 1;
       updateCaption((step + 2) % SLOT_ANGLES.length, true);
 
+      // Tiles leaving the left edge this step. They are NOT relocated yet —
+      // see the onComplete below.
+      var leaving = [];
+
       tiles.forEach(function (tile) {
         var nextAngle = tile.angle - STEP_DEG;
+        tile.angle = nextAngle;
+
         if (nextAngle <= WRAP_THRESHOLD) {
-          // This tile would fall off the left edge this step — recycle it to
-          // the right-hand slot now (its new logical target) and snap its
-          // proxy one step further right than that, which is where
-          // stateForAngle reports opacity 0. The shared tween below then
-          // carries it inward from there, so it animates IN and fades up
-          // exactly like every other tile instead of popping in after.
-          tile.angle = nextAngle + SLOT_ANGLES.length * STEP_DEG;
-          setProxyToAngle(tile, tile.angle + STEP_DEG);
-          // stateForAngle() reports opacity 0 one step out, and the shared
-          // tween eases with power3.inOut -- which is under 3% for the first
-          // quarter of the roll. From literally nothing, that still reads as
-          // the tile appearing late. Seed it faintly visible instead so it is
-          // present from the first frame of the roll and simply strengthens.
-          tile.proxy.opacity = 0.18;
-          // push the recycled position to the DOM now, so the element never
-          // renders one stale frame at the left edge before the tween's first
-          // onUpdate lands.
-          applyTile(tile);
-        } else {
-          tile.angle = nextAngle;
+          // This tile is walking off the left end. It used to be teleported
+          // straight to the right-hand slot right here, on the first frame of
+          // the step — which emptied the leftmost visible slot instantly while
+          // its replacement only slid across over the following second. Under
+          // power3.inOut that replacement covers under 3% of the distance in
+          // the first quarter of the roll, so the far-left tile read as simply
+          // vanishing for ~250ms of every cycle.
+          //
+          // Instead it now rolls on to -48deg like any other tile, which is
+          // exactly where stateForAngle() reports opacity 0, so it dissolves in
+          // place. Only once it is invisible (onComplete) does it jump to the
+          // mirrored +48deg parking slot, ready to fade back in from the right
+          // on the next step. The jump is unobservable because both ends of it
+          // are fully transparent.
+          leaving.push(tile);
         }
       });
 
@@ -252,7 +268,24 @@ window.CS = window.CS || {};
           },
           duration: STEP_DURATION,
           ease: 'power3.inOut',
-          onUpdate: applyAll
+          onUpdate: applyAll,
+          onComplete: function () {
+            // Park each departed tile on the mirrored right-hand slot. Both
+            // -48deg (where it just faded out) and +48deg (where it lands)
+            // render at opacity 0, so this is invisible.
+            leaving.forEach(function (tile) {
+              tile.angle += SLOT_ANGLES.length * STEP_DEG; // -48 -> +48
+              setProxyToAngle(tile, tile.angle);
+              applyTile(tile);
+            });
+
+            // Snap every tile onto its exact resting state, so repeated steps
+            // can't accumulate easing float drift.
+            tiles.forEach(function (tile) {
+              setProxyToAngle(tile, tile.angle);
+            });
+            applyAll();
+          }
         }
       );
     }

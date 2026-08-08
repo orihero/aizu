@@ -1530,15 +1530,32 @@ class PanelHandler(SimpleHTTPRequestHandler):
     def log_message(self, *args):  # default warnings/errors → our logger
         log.debug("http: " + (args[0] if args else ""), *args[1:])
 
-    def _serve_index(self) -> None:
-        # Serve the SPA shell as-is; the React app fetches /api/state itself.
-        payload = (Path(self.panel_dir) / "index.html").read_bytes()
+    def _serve_html_file(self, relative_path: str) -> None:
+        # Shared read/send for the two top-level HTML shells (landing + SPA). Both
+        # get Cache-Control: no-store rather than letting the browser/any front proxy
+        # cache them: neither is fingerprinted (unlike /assets/*, which is hashed by
+        # Vite and safe to cache forever), so a stale cached copy after a deploy would
+        # otherwise stick around for the browser's default heuristic lifetime. The
+        # hashed sub-resources they reference (/assets/*, /landing/*) are still cached
+        # normally by the static-file path below.
+        payload = (Path(self.panel_dir) / relative_path).read_bytes()
         self.send_response(200)
         self.send_header("Content-Type", "text/html; charset=utf-8")
         self.send_header("Content-Length", str(len(payload)))
         self.send_header("Cache-Control", "no-store")
         self.end_headers()
         self.wfile.write(payload)
+
+    def _serve_index(self) -> None:
+        # Public marketing home page ("/", "/index.html"). No auth required — it must
+        # be reachable by anonymous visitors, which is the entire point of the split.
+        self._serve_html_file("index.html")
+
+    def _serve_app_index(self) -> None:
+        # The React SPA shell, now hosted under /app/ instead of "/". The app fetches
+        # /api/state (and everything else) itself once loaded; this just returns the
+        # shell HTML for any /app path the hash router will resolve client-side.
+        self._serve_html_file("app/index.html")
 
     def _send_cors_headers(self) -> None:
         origin = self.headers.get("Origin", "")
@@ -2781,9 +2798,11 @@ class PanelHandler(SimpleHTTPRequestHandler):
             return
         # Land on the Billing settings tab (a real, auth-gated route — NOT the bare
         # origin root) with a ?checkout=success marker so the panel shows the
-        # celebration + plan-summary modal. The hash fragment is the SPA route; the
-        # query after it is read via react-router search params on that route.
-        success_url = self._billing_return_base() + "/#/settings/billing?checkout=success"
+        # celebration + plan-summary modal. The SPA is hosted at /app/ (the origin
+        # root now serves the marketing landing page), so the return URL must land
+        # there, not at "/". The hash fragment is the SPA route; the query after it
+        # is read via react-router search params on that route.
+        success_url = self._billing_return_base() + "/app/#/settings/billing?checkout=success"
         try:
             result = provider.create_checkout(
                 fields["tier"], fields["interval"], user["orgId"],
@@ -3979,18 +3998,39 @@ class PanelHandler(SimpleHTTPRequestHandler):
         if parsed.path in ("/", "/index.html"):
             self._serve_index()
             return
+        # The SPA lives at /app/ (the landing owns "/" and its nav is in-page anchors,
+        # which createHashRouter would otherwise swallow as routes — see repo docs).
+        # "/app/index.html" is included here too: it IS a real file under panel_dir
+        # once the panel is built, so without this it would fall through to the
+        # generic _maps_to_existing_file branch below and be served by plain
+        # SimpleHTTPRequestHandler statics — which never sets Cache-Control, unlike
+        # every other path that reaches this shell. Naming it explicitly keeps
+        # no-store consistent no matter how a client spells the request. No redirect
+        # from "/app" to "/app/": the hash fragment (e.g. "#/leads") never reaches the
+        # server either way, so a 301 round trip buys nothing.
+        if parsed.path in ("/app", "/app/", "/app/index.html"):
+            self._serve_app_index()
+            return
         # Any other /api/* GET is an unknown endpoint, not a client route — answer
-        # with a JSON 404. Falling through to the SPA shell here would return
+        # with a JSON 404. Falling through to an HTML shell here would return
         # 200 text/html for a request the panel parses as JSON, surfacing as an
         # opaque "unparseable response" instead of a clear 404.
         if parsed.path == "/api" or parsed.path.startswith("/api/"):
             self._send_json(404, False, error="unknown endpoint")
             return
-        # Real files (hashed JS/CSS under /assets, favicon, etc.) serve directly.
+        # Real files (hashed JS/CSS under /assets, landing's own css/js/vendor/fonts/
+        # photos under /landing, favicon, etc.) serve directly.
         if self._maps_to_existing_file(self.path):
             super().do_GET()
             return
-        # Unknown non-API path → SPA history fallback so client routes resolve.
+        # An unknown path under /app/ (e.g. a stale path-based bookmark from before
+        # this split, or someone typing a route by hand) still resolves to the SPA
+        # shell so createHashRouter gets a chance to parse the fragment client-side.
+        if parsed.path.startswith("/app/"):
+            self._serve_app_index()
+            return
+        # Any other unknown non-API path → soft-landing fallback on the marketing
+        # page (not the SPA shell — the SPA no longer lives at "/").
         self._serve_index()
 
     def _default_campaign_for_org(self, store: Store, cfg: Path,

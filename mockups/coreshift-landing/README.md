@@ -1,5 +1,14 @@
 # AIZU landing page (mockup, CoreShift structure)
 
+> **This directory is design reference only.** The live, runtime copy of this landing page
+> now ships from `admin-panel/public/` (served by the bridge at `https://aizu.uz/`) — see
+> `admin-panel/public/index.html` and `admin-panel/public/landing/{css,js,vendor,fonts,photos}/`.
+> Edit the shipped copy there for anything user-facing. What stays behind here is design
+> source material only: [`SPEC.md`](./SPEC.md) (the motion spec), `sections/` (the nine
+> section markups, kept standalone for reference/re-editing), and `ref/` (the original
+> capture video and extracted stills this prototype was reverse-engineered from). None of
+> those three are loaded at runtime by anything.
+
 A pixel-oriented, fully-animated landing-page prototype — plain HTML/CSS/JS, no build step,
 no framework, no backend. The layout and motion were reverse-engineered from a 19.47s
 auto-scroll capture video (`ref/source.mp4`) plus extracted still frames (`ref/*.jpg`) of a
@@ -11,9 +20,10 @@ The CoreShift *structure, layout, radii and every animation* are unchanged; the 
 typography, marks and copy are now AIZU's. Two sections with no CoreShift analog — Plans and
 FAQ — were added afterward; see the section table below and the SPEC.md addendum.
 
-This lives under `mockups/` in the Aizu repo and is **not** part of the Aizu product build.
-It is a design prototype only — the real landing page is `marketing/website/index.html`,
-which this does **not** touch.
+This directory lives under `mockups/` in the Aizu repo and is **not** part of the Aizu
+product build — see the note at the top of this file for where the live copy now lives.
+`marketing/website/index.html` is a separate landing-page project under `marketing/`;
+this move does not touch it.
 
 ## Rebrand: CoreShift → AIZU
 
@@ -22,7 +32,7 @@ which this does **not** touch.
 | Ground | white `#ffffff` / `#f0f4f5` | ink `#16161a`, with a raised panel/card ladder |
 | Accents | coral, violet, yellow, cyan, red, star-gold | lime `#d9f24f` **only**, as signal; everything else on an ink/grey scale |
 | Type | Geist (display) + Outfit (sans) | Inter Tight throughout, JetBrains Mono for labels and data beats |
-| Logo | the CoreShift "C" ring glyph | the AIZU ping mark (dot + arc), matching aizu.uz |
+| Logo | the CoreShift "C" ring glyph | the AIZU ping mark (dot + arc) — see [The mark](#the-mark-one-definition-only) |
 | Copy | HR SaaS (attendance, onboarding, payroll) | AIZU lead discovery |
 
 Notes on how the port was done, since they matter if you edit this:
@@ -56,6 +66,39 @@ Notes on how the port was done, since they matter if you edit this:
   they read as native to the page rather than bolted on. Motion for both is documented in
   `SPEC.md`'s addendum.
 
+### The mark: one definition only
+
+The AIZU mark is defined **once**, as an SVG `<symbol id="aizu-mark">` in the sprite at the top
+of `index.html`, and used everywhere else through `<use href="#aizu-mark">` — nav, both hero
+signal chips, three bento lead rows, three testimonial avatars. **Do not draw it inline again.**
+
+Its geometry is copied verbatim from the application's own component,
+[`admin-panel/src/shared/ui/BrandMark.tsx`](../../admin-panel/src/shared/ui/BrandMark.tsx),
+which is the single source of truth for the logo:
+
+```
+viewBox 0 0 100 100
+circle cx=40 cy=60 r=16                      the lead
+path   M47 31 A31 31 0 0 1 71 72             the cue arc breaking off it
+       stroke-width 8.5, round cap
+```
+
+Colour arrives through two inherited custom properties, `--aizu-dot` and `--aizu-arc`, rather
+than being baked into the symbol. That is not a style preference: CSS custom properties inherit
+into a `<use>` shadow tree, while ordinary selectors cannot reach inside one, so per-element
+rules like the old `.nav-logo__dot` would silently stop working. Defaults are BrandMark's
+`rail` tone — lime dot, white arc — the pairing the panel itself uses on its dark nav rail.
+
+Before this, the mark was hand-drawn inline **nine times in two different geometries** (a
+32-unit box in the nav and hero, a 24-unit box in the bento and testimonials), and neither
+matched the panel: both used a proportionally smaller dot and a lime rather than white arc. The
+favicon now carries the panel's own `favicon.svg` geometry, which is a slightly tighter inset
+because it sits inside a rounded square.
+
+**Still divergent, outside this mockup:** `marketing/website/index.html` — the real landing page
+— draws the old 32-unit mark inline four more times, plus a fifth larger variant. Aligning it is
+a separate change to a shipping file and has not been made here.
+
 ### De-personalization: what replaced the portraits
 
 The reference design used real portrait photography in four slots. AIZU has no customers to
@@ -65,14 +108,16 @@ the brand mark instead of being re-shot:
 | Slot (was) | Now | Where |
 |---|---|---|
 | Hero satellite portraits (2 tiles) | "Signal chip" tiles: the AIZU ping mark (dot + arc, lime on ink) plus a short mono label (`Ask`, `Match`) | `index.html` hero, `.hero-tile--signal` in `css/hero.css` |
-| Core-HR flanking marquees (12 portrait cards) | Cards styled as **platform-native posts** — two each for Instagram, LinkedIn, X, Reddit, YouTube and Telegram, reproducing each surface's layout, palette and type conventions around a fabricated public intent signal (e.g. *"anyone know a good CRM for a 5-person team?"*). Monogram avatars, never photography. See [Platform skins](#platform-skins-in-one-signal-not-a-feed) for the trademark position | `index.html` core-hr, `.cs-card` in `css/core-hr.css` |
+| Core-HR flanking marquees (12 portrait cards) | Cards styled as **platform-native posts** — two each for Instagram, LinkedIn, X, Reddit, YouTube and Telegram, reproducing each surface's layout, palette and type conventions around a fabricated public intent signal. Six ask about a **product** (*"found this dinner set at a market — anyone know a maker who does these?"*), six about a **service** (*"can anyone recommend a customs broker for EU shipments?"*), and six carry **media**: five real licensed photos plus a sixth used as a video poster with a duration chip. There are **no drawn or placeholder graphics left in the card media** — every attachment is a real photograph from `assets/photos/`, see [Assets](#assets--sources--licences). Avatars remain monograms, never portraits. See [Platform skins](#platform-skins-in-someone-is-searching-for-what-you-sell) for the trademark position | `index.html` core-hr, `.cs-card` in `css/core-hr.css` |
 | Bento "for teams" avatar ring (8 portraits) | 8 lime dot nodes on the same rotating orbit slots the photos used to fill | `index.html` bento card 5, `.bento-ring__dot` in `css/bento.css` |
 | Testimonial coverflow avatars (3 portraits) | The AIZU ping mark, inline SVG, per card | `index.html` testimonials, `.testimonials-card-avatar--mark` in `css/testimonials.css` |
 
-All four are pure CSS/SVG — no photography, no `assets/people/` reference remains anywhere in
-the page.
+No `assets/people/` reference remains anywhere in the page, and no portrait photography is
+used in any of these four slots. Three of them are pure CSS/SVG; the core-hr cards later
+gained licensed **product/scene** photography (never people-as-decoration) in their attached
+media — see [Assets](#assets--sources--licences) for per-file provenance.
 
-### Platform skins in "One signal, not a feed"
+### Platform skins in "Someone is searching for what you sell"
 
 The 12 marquee cards are deliberately skinned as **real platforms** — Instagram, LinkedIn, X,
 Reddit, YouTube and Telegram, two cards each — reproducing each surface's layout, palette and
@@ -160,13 +205,13 @@ Nine sections, assembled in `index.html` in page order and each independently au
 |---|---|---|
 | Fixed nav | `sections/nav.html` / `css/nav.css` / `js/nav.js` | Floating pill, AIZU ping mark + wordmark, drop-in entrance. Links to `#plans` and `#faq`. |
 | Hero | `sections/hero.html` / `css/hero.css` / `js/hero.js` | Node-graph illustration, icon roulette, connector line draw-in, idle float + mouse parallax. Two satellite slots are now ping-mark "signal chips" (see de-personalization table). |
-| "One signal, not a feed" (was Core HR solutions) | `sections/core-hr.html` / `css/core-hr.css` / `js/core-hr.js` | Flanking infinite marquees with scroll-scrubbed parallax, carrying platform-skinned post cards (Instagram, LinkedIn, X, Reddit, YouTube, Telegram) instead of portraits — the feed the heading contrasts against. See [Platform skins](#platform-skins-in-one-signal-not-a-feed). |
+| "Someone is searching for what you sell" (was Core HR solutions) | `sections/core-hr.html` / `css/core-hr.css` / `js/core-hr.js` | Flanking infinite marquees with scroll-scrubbed parallax, carrying platform-skinned post cards (Instagram, LinkedIn, X, Reddit, YouTube, Telegram) instead of portraits — the feed the heading contrasts against. See [Platform skins](#platform-skins-in-someone-is-searching-for-what-you-sell). |
 | "Built for people who sell direct" (was Built for everyone) | `sections/bento.html` / `css/bento.css` / `js/bento.js` | 5-card bento grid: animated bar charts, a rolling pill stack, a rotating dot-node ring (was an avatar ring). |
 | "Five checkpoints. One signal." (was Integrations) | `sections/integrations.html` / `css/integrations.css` / `js/integrations.js` | The arc carousel - five tiles on a large invisible circle, continuous recycle-loop rotation. Tiles carry checkpoint numerals, not logos. |
 | "How AIZU behaves" (was Words of Appreciation) | `sections/testimonials.html` / `css/testimonials.css` / `js/testimonials.js` | Envelope-reveal entrance into a 3D coverflow carousel. Cards describe named safety mechanisms, avatar slot is the ping mark. |
 | Plans — "Pay for customers, not software" | `sections/plans-faq.html` / `css/plans-faq.css` / `js/plans-faq.js` | New section, no CoreShift analog. 4-tier pricing grid (Free / Starter / Pro / Scale), one lime-accented featured card, scroll-triggered blur/fade-up entrance. See `SPEC.md` addendum. |
 | FAQ — "Fair questions, straight answers" | `sections/plans-faq.html` / `css/plans-faq.css` / `js/plans-faq.js` | New section, no CoreShift analog. Two-column layout, accordion `<details>` list with GSAP height tweens, one-open-at-a-time. See `SPEC.md` addendum. |
-| Footer | `sections/footer.html` / `css/footer.css` / `js/footer.js` | Giant scroll-scrubbed AIZU wordmark with a progressive blur-out. |
+| Footer | `sections/footer.html` / `css/footer.css` / `js/footer.js` | Giant AIZU wordmark with a played-once per-character drop-in (`js/footer.js`), plus a floating blur lens (`.footer-wordmark-blur`) that drifts across the word and blurs the letters behind it — pure CSS `backdrop-filter` + a soft horizontal mask, ~19s per pass, parked over the centre under `prefers-reduced-motion`. |
 
 Plans and FAQ share one stylesheet/script pair (`css/plans-faq.css`, `js/plans-faq.js`) and
 one markup partial (`sections/plans-faq.html`), each exposing `CS.initPlans` and `CS.initFaq`
@@ -210,6 +255,29 @@ Vendored (unmodified) in `vendor/`: GSAP 3.13, GSAP ScrollTrigger, Lenis — loa
   [De-personalization](#de-personalization-what-replaced-the-portraits) above for what
   replaced each usage; nothing in the page references this directory any more.
 
+- **Card photography** (`assets/photos/`) — 5 files, ~100 KB total, all from **Pexels** under
+  the [Pexels License](https://www.pexels.com/license/) (free for commercial use, no
+  attribution required, modification permitted). Each was downloaded pre-cropped to its card's
+  aspect ratio via Pexels' own resize parameters, so no local editing was applied beyond that
+  crop. **Unlike `assets/people/`, the provenance here is recorded up front — keep this table
+  updated if you swap a photo, since an unrecorded licence is exactly what got the previous
+  24 photos deleted.**
+
+  | File | Size | Subject | Source |
+  |---|---|---|---|
+  | `dinnerware.jpg` | 480×240 | handmade ceramic bowls and plates | [pexels.com/photo/3847470](https://www.pexels.com/photo/ceramic-dinnerware-3847470/) |
+  | `camera.jpg` | 480×270 | DSLR camera body, front-on | [pexels.com/photo/1093065](https://www.pexels.com/photo/black-canon-dslr-camera-1093065/) |
+  | `packaging.jpg` | 480×240 | plain kraft cardboard boxes | [pexels.com/photo/17260157](https://www.pexels.com/photo/close-up-of-cardboard-boxes-and-lids-17260157/) |
+  | `chair.jpg` | 480×270 | mesh desk chair beside a desk | [pexels.com/photo/1957477](https://www.pexels.com/photo/office-chair-and-desk-1957477/) |
+  | `photographer.jpg` | 480×270 | photographer shooting an outdoor event | [pexels.com/photo/31816828](https://www.pexels.com/photo/photographer-with-camera-capturing-outdoor-event-31816828/) |
+  | `bathroom.jpg` | 480×270 | bathroom with grey subway tiles | [pexels.com/photo/8143708](https://www.pexels.com/photo/spacious-bathroom-with-tiled-walls-8143708/) |
+
+  Two selection rules were applied while picking these, worth repeating on any swap: **no
+  third-party brand names legible in the frame** (a first kraft-box candidate was rejected for
+  carrying another company's printed branding), and **no identifiable faces** — the
+  photographer's face is obscured by a cap and buff, which is why that frame was chosen over
+  the alternatives.
+
 ## File map
 
 ```
@@ -235,6 +303,7 @@ sections/               the same nine section markups, kept standalone for refer
 vendor/                 gsap.min.js, ScrollTrigger.min.js, lenis.min.js (unmodified, MIT/GSAP licence)
 assets/
   fonts/                 self-hosted Inter Tight + JetBrains Mono woff2 subsets + fonts.css — see licences above
+  photos/                 5 Pexels-licensed card photos (~100 KB) — per-file provenance table above
   logos/                  empty
   people/                 empty
 ref/                    source video + extracted reference stills used to write SPEC.md
@@ -261,7 +330,15 @@ What this did **not** cover, and is still open:
 - No human has watched the motion frame by frame to judge quality/feel — the pass above checks
   that tweens *exist* and animate, not that they look right.
 - No touch-device pass (mobile Safari/Chrome, real pointer/touch events).
-- At 390px the flanking marquee in the "One signal, not a feed" section is hidden by the
+- At 390px the flanking marquee in the "Someone is searching for what you sell" section is hidden by the
   existing `@media (max-width: 680px)` rule in `css/core-hr.css`. That's confirmed intentional
   behaviour, not a bug found by the pass — the page is desktop-first and was never designed for
   phone widths, which is a real limitation worth naming rather than a defect to fix.
+
+- **Between 681px and 1100px the orbit still clips its outer cards.** Above 1100px every card
+  is now fitted inside the gutter and stays fully visible (see the orbit note in
+  `css/core-hr.css`), but at those middle widths the copy column widens to 78vw and the
+  remaining gutter is narrower than a single 140px card, so `js/core-hr.js` deliberately falls
+  back to the original edge-anchored ring where part of the orbit swings off screen. Fixing it
+  properly means giving the copy column a narrower cap in that range, which is a layout
+  decision, not a bug fix — flagged rather than guessed at.

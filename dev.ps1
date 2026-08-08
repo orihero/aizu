@@ -7,7 +7,9 @@
       1. bridge - the engine's JSON API (aizu) on 127.0.0.1:8765, via
                   engine/scripts/dev_panel.py (auto-restarts on engine/aizu/*.py edits)
       2. panel  - the admin-panel Vite dev server on http://localhost:5173,
-                  which proxies /api -> the bridge
+                  which proxies /api -> the bridge. http://localhost:5173/ serves
+                  the marketing landing page (public/index.html); the React SPA
+                  lives at http://localhost:5173/app/.
 
     The engine *run* itself (the live crawl) is NOT started here - it is launched
     from the panel's Run button or `aizu run`. This script only brings up the two
@@ -147,7 +149,7 @@ try {
         -ArgumentList $ViteJs, '--port', $PanelPort `
         -WorkingDirectory $PanelDir -NoNewWindow -PassThru
 
-    Write-Info 'both servers up - open the URL the panel prints below. Ctrl+C to stop everything.'
+    Write-Info "both servers up - panel: http://localhost:$PanelPort/ (landing) and http://localhost:$PanelPort/app/ (SPA). Ctrl+C to stop everything."
 
     # Block while both children live; the moment either dies, fall through so
     # the finally block stops the survivor.
