@@ -25,7 +25,11 @@ jobs:
           cache: pip
 
       - name: Install engine
-        run: pip install -e "./engine[dev]"
+        # The `telegram` extra (telethon) is a test dependency, not just a live-run
+        # one: test_telegram_warming_client.py drives the real TelethonWarmingClient
+        # with a fake raw client, and the adapter's lazy `from telethon.tl...` imports
+        # execute for real. Without the extra those 11 tests fail on ModuleNotFoundError.
+        run: pip install -e "./engine[dev,telegram]"
 
       - name: pytest
         working-directory: engine
