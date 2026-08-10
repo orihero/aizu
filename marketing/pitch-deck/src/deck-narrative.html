@@ -1,0 +1,1117 @@
+<meta charset="utf-8">
+<title>AIZU — Pitch Deck (Narrative)</title>
+<style>
+/*__AIZU_FONTS__*/
+
+/* ============================================================
+   AIZU — "Narrative" sparse cinematic deck
+   One idea per full-bleed slide, built to be spoken over.
+   Type scale (10 discrete steps — every size on the deck is one
+   of these, nothing arbitrary):
+     --fs-hero   140px  the deck's biggest register: cover wordmark,
+                        the traction total, the ask
+     --fs-xl     104px  secondary hero numbers, the shortest headlines
+     --fs-lg      80px  most slide headlines (1–2 lines, balanced)
+     --fs-md      56px  appendix headlines, dense-register text
+     --fs-sm      40px  captions that sit beside a hero number/word
+     --fs-xs      28px  supporting phrases, list body text
+     --fs-label   16px  JetBrains Mono — chip/stat labels
+     --fs-meta    14px  JetBrains Mono — secondary stat/field values,
+                        axis notes, footnotes
+     --fs-caption 13px  JetBrains Mono — kickers, chart ticks, chrome
+     --fs-micro   12px  JetBrains Mono — table headers, dense field
+                        keys, the smallest data-viz labels
+   ============================================================ */
+:root{
+  --ground:      #101014;   /* deepest register — most main-path slides */
+  --ground-alt:  #16161a;   /* brand ground — alternates for rhythm */
+  --ground-app:  #1b1b20;   /* appendix register, slightly lifted */
+  --ground-2:    #1b1b20;
+  --ground-3:    #202026;
+  --paper:       #f2f2f4;
+  --paper-2:     #dcdce1;
+  --grey-1:      #9a9aa2;   /* AA-safe body grey on dark */
+  --grey-3:      #43434c;   /* borders/rules only, never text */
+  --lime:        #d9f24f;
+  --lime-hi:     #e4f77b;
+  --lime-lo:     #c8e337;
+  --line:        #2a2a30;
+
+  --fs-hero:140px; --fs-xl:104px; --fs-lg:80px; --fs-md:56px;
+  --fs-sm:40px; --fs-xs:28px; --fs-label:16px; --fs-meta:14px;
+  --fs-caption:13px; --fs-micro:12px;
+
+  --mx: 96px;  /* standard side margin */
+  --mt: 64px;  /* standard top margin (kicker baseline) */
+  --mb: 56px;  /* standard bottom margin (chip baseline) */
+
+  --k: 1;      /* recomputed in JS = min(vw/1280, vh/720) */
+  --dur: 1;    /* animation-duration multiplier, 0 under reduced-motion */
+}
+
+*,*::before,*::after{ box-sizing:border-box; }
+html,body{ height:100%; }
+body{
+  margin:0;
+  background:#000;
+  color:var(--paper);
+  font-family:'Inter Tight',system-ui,-apple-system,'Segoe UI',sans-serif;
+  overflow:hidden;
+  -webkit-font-smoothing:antialiased;
+}
+.mono{ font-family:'JetBrains Mono',ui-monospace,'SFMono-Regular',Menlo,monospace; }
+
+/* ---------- Stage: fixed 1280x720 canvas, scaled to fit viewport ---------- */
+#stage{
+  position:fixed; inset:0;
+  display:flex; align-items:center; justify-content:center;
+  background:#000;
+}
+#viewport{
+  position:relative;
+  width:1280px; height:720px;
+  transform:scale(var(--k));
+  transform-origin:center center;
+  flex:0 0 auto;
+}
+
+.slide{
+  position:absolute; inset:0;
+  width:1280px; height:720px;
+  display:none;
+  overflow:hidden;
+}
+.slide.active{ display:block; }
+
+/* per-slide grounds — assigned per section for visual rhythm */
+.slide.gnd-a{ background:var(--ground); }
+.slide.gnd-b{ background:var(--ground-alt); }
+.slide.gnd-app{ background:var(--ground-app); }
+.slide.gnd-lime{ background:var(--lime); color:var(--ground); }
+
+/* subtle cinematic vignette — CSS only, no images */
+.slide::before{
+  content:"";
+  position:absolute; inset:0;
+  background:radial-gradient(ellipse 900px 600px at 50% 38%, rgba(255,255,255,0.028), transparent 70%);
+  pointer-events:none;
+}
+.slide.gnd-lime::before{ background:radial-gradient(ellipse 900px 600px at 50% 38%, rgba(0,0,0,0.05), transparent 70%); }
+
+/* ---------- Wayfinding: kicker (top-left axis) ---------- */
+.kicker{
+  position:absolute; top:var(--mt); left:var(--mx);
+  font-size:var(--fs-caption); letter-spacing:.14em; text-transform:uppercase;
+  color:var(--grey-1);
+}
+.gnd-lime .kicker{ color:#3a3a10; }
+
+/* ---------- Mock-data footer chip ---------- */
+.mock-chip{
+  position:absolute; bottom:var(--mb); right:var(--mx);
+  font-size:var(--fs-caption); letter-spacing:.06em;
+  color:var(--grey-1); display:flex; align-items:center; gap:8px;
+}
+.mock-chip::before{ content:"°"; color:var(--lime); font-family:'Inter Tight',sans-serif; font-size:16px; }
+.gnd-lime .mock-chip{ color:#3a3a10; }
+.gnd-lime .mock-chip::before{ color:var(--ground); }
+
+/* ---------- Reveal choreography ---------- */
+@keyframes riseFade{ from{ opacity:0; transform:translateY(26px); } to{ opacity:1; transform:translateY(0); } }
+@keyframes limeArrive{ from{ opacity:0; transform:scale(.86); } to{ opacity:1; transform:scale(1); } }
+@keyframes drawRule{ from{ transform:scaleX(0); } to{ transform:scaleX(1); } }
+@keyframes drawLine{ from{ stroke-dashoffset:var(--len,1000); } to{ stroke-dashoffset:0; } }
+@keyframes fillRise{ from{ transform:scaleY(0); } to{ transform:scaleY(1); } }
+@keyframes growX{ from{ transform:scaleX(0); } to{ transform:scaleX(1); } }
+@keyframes flashLime{ 0%{ opacity:0; } 18%{ opacity:1; } 78%{ opacity:1; } 100%{ opacity:0; } }
+@keyframes markPop{ 0%{ opacity:0; transform:scale(.7); } 40%{ opacity:1; transform:scale(1.06); } 100%{ opacity:1; transform:scale(1); } }
+
+.slide .reveal{ opacity:0; }
+.slide.active .reveal{
+  animation:riseFade calc(.62s*var(--dur)) cubic-bezier(.16,.84,.32,1) both;
+  animation-delay:calc(var(--i,0) * 90ms * var(--dur));
+}
+.slide .reveal-lime{ opacity:0; }
+.slide.active .reveal-lime{
+  animation:limeArrive calc(.5s*var(--dur)) ease both;
+  animation-delay:calc((var(--i,6) * 90ms + 260ms) * var(--dur));
+}
+.slide .draw-rule{ transform:scaleX(0); transform-origin:left center; }
+.slide.active .draw-rule{
+  animation:drawRule calc(.9s*var(--dur)) cubic-bezier(.2,.7,.2,1) both;
+  animation-delay:calc(var(--i,0) * 90ms * var(--dur));
+}
+.slide .draw-line{ stroke-dasharray:var(--len,1000); stroke-dashoffset:var(--len,1000); }
+.slide.active .draw-line{
+  animation:drawLine calc(1s*var(--dur)) cubic-bezier(.2,.7,.2,1) both;
+  animation-delay:calc(var(--i,0) * 90ms * var(--dur));
+}
+.slide .bar-rise{ transform:scaleY(0); transform-origin:bottom; }
+.slide.active .bar-rise{
+  animation:fillRise calc(.7s*var(--dur)) cubic-bezier(.16,.84,.32,1) both;
+  animation-delay:calc(var(--i,0) * 110ms * var(--dur));
+}
+.slide .bar-grow{ transform:scaleX(0); transform-origin:left; }
+.slide.active .bar-grow{
+  animation:growX calc(.7s*var(--dur)) cubic-bezier(.16,.84,.32,1) both;
+  animation-delay:calc(var(--i,0) * 110ms * var(--dur));
+}
+
+@media (prefers-reduced-motion:reduce){
+  :root{ --dur:0; }
+  .slide .reveal, .slide .reveal-lime{ animation-duration:1ms !important; animation-delay:0s !important; }
+  .slide .draw-rule, .slide .draw-line, .slide .bar-rise, .slide .bar-grow{ animation-duration:1ms !important; animation-delay:0s !important; }
+  #hardcut.flash{ animation:none !important; opacity:0 !important; }
+}
+
+/* ---------- Hard-cut overlay: the one signature lime flash (Problem -> Solution) ---------- */
+#hardcut{
+  position:fixed; inset:0; z-index:50;
+  background:var(--lime);
+  display:flex; align-items:center; justify-content:center;
+  opacity:0; pointer-events:none;
+}
+#hardcut.flash{ animation:flashLime .68s ease-out both; }
+#hardcut svg{ width:120px; height:120px; opacity:0; }
+#hardcut.flash svg{ animation:markPop .55s ease-out .06s both; }
+
+/* ============================================================
+   Chrome: controls, counter, progress bar, notes/grid/help
+   ============================================================ */
+#chrome{ position:fixed; inset:0; pointer-events:none; z-index:40; }
+#chrome > *{ pointer-events:auto; }
+
+#progress{
+  position:fixed; left:0; bottom:0; height:3px; width:100%;
+  background:rgba(255,255,255,.08); z-index:41;
+}
+#progress-fill{ height:100%; background:var(--lime); width:0%; transition:width .35s ease; }
+
+#counter{
+  position:fixed; right:22px; bottom:14px; z-index:41;
+  font-family:'JetBrains Mono',monospace; font-size:12px; letter-spacing:.08em;
+  color:var(--grey-1); background:rgba(16,16,20,.55); backdrop-filter:blur(4px);
+  padding:5px 10px; border-radius:20px; border:1px solid var(--line);
+}
+
+.navbtn{
+  position:fixed; bottom:12px; z-index:41;
+  width:34px; height:34px; border-radius:50%;
+  background:rgba(16,16,20,.55); border:1px solid var(--line); color:var(--paper);
+  display:flex; align-items:center; justify-content:center; cursor:pointer;
+  backdrop-filter:blur(4px); font-family:'JetBrains Mono',monospace; font-size:15px;
+}
+.navbtn:hover{ background:rgba(217,242,79,.14); border-color:var(--lime); }
+.navbtn:focus-visible{ outline:2px solid var(--lime); outline-offset:2px; }
+#btn-prev{ left:150px; }
+#btn-next{ left:190px; }
+
+/* top-right chrome row: flex row so buttons space by real width, never overlap */
+#topbar{ position:fixed; top:14px; right:14px; z-index:41; display:flex; gap:8px; }
+.iconbtn{
+  height:30px; padding:0 12px; border-radius:15px; white-space:nowrap;
+  background:rgba(16,16,20,.55); border:1px solid var(--line); color:var(--grey-1);
+  font-family:'JetBrains Mono',monospace; font-size:11px; letter-spacing:.08em; text-transform:uppercase;
+  cursor:pointer; backdrop-filter:blur(4px);
+}
+.iconbtn:hover{ color:var(--paper); border-color:var(--lime); }
+.iconbtn:focus-visible{ outline:2px solid var(--lime); outline-offset:2px; }
+
+/* click zones (visual affordance only on hover; invisible otherwise) */
+#zone-prev, #zone-next{ position:fixed; top:0; bottom:0; z-index:39; cursor:pointer; }
+#zone-prev{ left:0; width:20vw; }
+#zone-next{ right:0; width:35vw; }
+
+/* ---------- Speaker notes drawer ---------- */
+#notes{
+  position:fixed; left:0; right:0; bottom:0; z-index:45;
+  max-height:0; overflow:hidden; opacity:0;
+  background:rgba(12,12,15,.97); border-top:1px solid var(--line);
+  transition:max-height .28s ease, opacity .28s ease;
+}
+#notes.open{ max-height:220px; opacity:1; }
+#notes .inner{ max-width:1040px; margin:0 auto; padding:22px 32px 26px; }
+#notes .label{ font-family:'JetBrains Mono',monospace; font-size:11px; letter-spacing:.12em; color:var(--lime); text-transform:uppercase; margin-bottom:10px; }
+#notes p{ margin:0; font-size:18px; line-height:1.55; color:var(--paper-2); max-width:900px; }
+
+/* ---------- Grid overview ---------- */
+#gridview{
+  position:fixed; inset:0; z-index:44;
+  background:rgba(10,10,12,.97);
+  display:none; align-items:center; justify-content:center;
+  padding:60px;
+}
+#gridview.open{ display:flex; }
+#gridview .wrap{ width:100%; max-width:1240px; }
+#gridview h2{ font-family:'JetBrains Mono',monospace; font-weight:500; font-size:13px; letter-spacing:.14em; text-transform:uppercase; color:var(--grey-1); margin:0 0 22px; text-align:center; }
+#gridview .grid{ display:grid; grid-template-columns:repeat(6,1fr); gap:14px; }
+.gthumb{
+  position:relative; aspect-ratio:16/9; border-radius:8px; border:1px solid var(--line);
+  cursor:pointer; overflow:hidden; text-align:left; padding:10px 12px;
+  font-family:'Inter Tight',sans-serif; color:var(--paper);
+  display:flex; flex-direction:column; justify-content:space-between;
+  background:var(--ground); /* fallback; the .gnd-* rules below match the real per-slide ground */
+}
+/* thumbnails reuse the deck's ground tokens directly — the .slide.gnd-*
+   rules above are scoped to .slide and don't match a bare .gthumb */
+.gthumb.gnd-a{ background:var(--ground); }
+.gthumb.gnd-b{ background:var(--ground-alt); }
+.gthumb.gnd-app{ background:var(--ground-app); }
+.gthumb.gnd-lime{ background:var(--lime); }
+.gthumb.gnd-lime .t{ color:#3a3a10; }
+.gthumb.gnd-lime .n{ color:var(--ground); }
+.gthumb:hover, .gthumb:focus-visible{ outline:2px solid var(--lime); outline-offset:2px; }
+.gthumb .n{ font-family:'JetBrains Mono',monospace; font-size:11px; color:var(--lime); }
+.gthumb .t{ font-size:11px; line-height:1.25; color:var(--paper-2); }
+.gthumb.current{ box-shadow:0 0 0 2px var(--lime) inset; }
+
+/* ---------- Help overlay ---------- */
+#help{
+  position:fixed; inset:0; z-index:46; background:rgba(10,10,12,.97);
+  display:none; align-items:center; justify-content:center;
+}
+#help.open{ display:flex; }
+#help .card{ width:560px; max-width:90vw; }
+#help h2{ font-family:'JetBrains Mono',monospace; font-size:13px; letter-spacing:.14em; text-transform:uppercase; color:var(--lime); margin:0 0 22px; }
+#help dl{ display:grid; grid-template-columns:auto 1fr; gap:11px 20px; margin:0; }
+#help dt{ font-family:'JetBrains Mono',monospace; font-size:13px; color:var(--paper); background:var(--ground-3); border:1px solid var(--line); border-radius:6px; padding:3px 9px; white-space:nowrap; }
+#help dd{ margin:0; font-size:15px; color:var(--grey-1); align-self:center; }
+#help .close-hint{ margin-top:24px; font-size:12px; color:var(--grey-1); font-family:'JetBrains Mono',monospace; }
+
+/* =========================== Print / PDF export =========================== */
+@media print{
+  @page{ size:1280px 720px; margin:0; }
+  html,body{ overflow:visible; background:#000; }
+  *{ -webkit-print-color-adjust:exact; print-color-adjust:exact; }
+  #chrome, #hardcut, #notes, #gridview, #help{ display:none !important; }
+  #stage{ position:static; display:block; }
+  #viewport{ transform:none; width:auto; height:auto; }
+  .slide{
+    position:relative; display:block !important; width:1280px; height:720px;
+    page-break-after:always; break-after:page; overflow:hidden;
+  }
+  .slide .reveal, .slide .reveal-lime{ opacity:1 !important; animation:none !important; transform:none !important; }
+  .slide .draw-rule, .slide .bar-rise, .slide .bar-grow{ transform:none !important; animation:none !important; }
+  .slide .draw-line{ stroke-dashoffset:0 !important; animation:none !important; }
+}
+
+/* ============================================================
+   Slide-specific layout
+   ============================================================ */
+.center-col{ position:absolute; inset:0; display:flex; flex-direction:column; align-items:center; justify-content:center; text-align:center; }
+.left-col{ position:absolute; left:var(--mx); top:0; bottom:0; display:flex; flex-direction:column; justify-content:center; max-width:1088px; }
+
+h1.headline{ margin:0; font-weight:600; letter-spacing:-.01em; line-height:1.06; text-wrap:balance; }
+.sub{ font-size:var(--fs-xs); color:var(--grey-1); font-weight:400; margin:0; max-width:760px; line-height:1.4; }
+.gnd-lime .sub{ color:#3a3a10; }
+
+.hero-num{ font-family:'JetBrains Mono',monospace; font-weight:500; font-size:var(--fs-hero); line-height:1; color:var(--paper); letter-spacing:-.01em; }
+.gnd-lime .hero-num{ color:var(--ground); }
+.hero-num.lime{ color:var(--lime); }
+
+.chip{
+  font-family:'JetBrains Mono',monospace; font-size:var(--fs-caption); letter-spacing:.05em;
+  color:var(--grey-1); border:1px solid var(--grey-3); border-radius:20px; padding:6px 14px;
+  display:inline-flex; align-items:center; gap:6px;
+}
+.chip.on{ color:var(--lime); border-color:var(--lime); }
+
+/* mark svg reused across slides */
+.mark{ display:block; }
+
+/* -------- 01 Cover -------- */
+#s1 .wrap{ position:absolute; inset:0; display:flex; flex-direction:column; align-items:center; justify-content:center; gap:26px; text-align:center; }
+#s1 .wordrow{ display:flex; align-items:flex-end; gap:22px; }
+#s1 .wordmark{ font-family:'Inter Tight',sans-serif; font-weight:700; font-size:var(--fs-hero); letter-spacing:-.015em; line-height:1; }
+#s1 .glyph{ font-family:'JetBrains Mono',monospace; font-size:24px; color:var(--grey-1); padding-bottom:22px; }
+#s1 .headline2{ font-size:var(--fs-sm); font-weight:500; color:var(--paper-2); margin:0; }
+#s1 .platforms{ position:absolute; bottom:var(--mb); left:0; right:0; display:flex; justify-content:center; gap:12px; }
+#s1 .tag{ position:absolute; top:var(--mt); right:var(--mx); }
+
+/* -------- 02 Purpose -------- */
+#s2 .diagram{ position:absolute; left:var(--mx); right:var(--mx); top:398px; display:flex; align-items:center; justify-content:space-between; }
+#s2 .node{ display:flex; flex-direction:column; align-items:center; gap:12px; width:280px; }
+#s2 .node .lbl{ font-family:'JetBrains Mono',monospace; font-size:var(--fs-label); color:var(--paper-2); text-align:center; line-height:1.3; }
+#s2 .node.aizu .lbl{ color:var(--lime); font-size:20px; letter-spacing:.06em; }
+#s2 .arrow{ flex:1; height:2px; position:relative; margin:0 4px; align-self:flex-start; margin-top:26px; }
+
+/* -------- 03 Problem (full-bleed statement, own margin) -------- */
+#s3{ --mx:56px; }
+#s3 .statement{ position:absolute; left:56px; right:56px; top:222px; }
+#s3 .statement .l1, #s3 .statement .l2{ font-weight:600; letter-spacing:-.01em; line-height:1.08; margin:0; }
+#s3 .statement .l2{ color:var(--lime); }
+#s3 .caption{ position:absolute; left:56px; bottom:170px; display:flex; gap:22px; }
+
+/* -------- 04 Solution -------- */
+#s4 .headstack{ position:absolute; left:var(--mx); top:130px; }
+#s4 .headstack div{ font-weight:600; line-height:1.02; letter-spacing:-.01em; }
+#s4 .steps{ position:absolute; left:var(--mx); right:var(--mx); bottom:118px; display:flex; justify-content:space-between; }
+#s4 .step{ width:174px; display:flex; flex-direction:column; align-items:flex-start; gap:14px; }
+#s4 .step .num{ font-family:'JetBrains Mono',monospace; font-size:13px; color:var(--grey-1); }
+#s4 .step:last-child .num{ color:var(--lime); }
+#s4 .step .lbl{ font-size:16px; color:var(--paper-2); line-height:1.3; }
+#s4 .rule{ position:absolute; left:var(--mx); right:var(--mx); bottom:100px; height:1px; background:var(--line); }
+
+/* -------- 05 Why Now -------- */
+#s5 .headstack{ position:absolute; left:var(--mx); top:140px; }
+#s5 .headstack div{ font-weight:600; line-height:1.05; }
+#s5 .timeline{ position:absolute; left:var(--mx); right:var(--mx); top:430px; height:1px; background:var(--line); }
+#s5 .points{ position:absolute; left:var(--mx); right:var(--mx); top:430px; display:flex; justify-content:space-between; }
+#s5 .pt{ position:relative; width:1px; }
+#s5 .pt .dot{ width:11px; height:11px; border-radius:50%; background:var(--grey-1); margin-top:-5px; margin-left:-5.5px; }
+#s5 .pt.n3 .dot{ background:var(--lime); }
+/* label anchoring: middle point centers on its dot; the two end points anchor
+   inward instead, so a 220px label never runs past the 1280px canvas edge */
+#s5 .pt .lbl{ position:absolute; top:26px; width:270px; font-family:'JetBrains Mono',monospace; font-size:var(--fs-meta); color:var(--paper-2); }
+#s5 .pt.n1 .lbl{ left:0; text-align:left; }
+#s5 .pt.n2 .lbl{ left:50%; transform:translateX(-50%); text-align:center; }
+#s5 .pt.n3 .lbl{ right:0; left:auto; text-align:right; }
+
+/* -------- 06 Product -------- */
+#s6 .headstack{ position:absolute; left:var(--mx); top:96px; }
+#s6 .headstack div{ font-weight:600; line-height:1.04; }
+#s6 .platrow{ position:absolute; left:var(--mx); right:var(--mx); top:260px; display:flex; justify-content:space-between; }
+#s6 .funnel{ position:absolute; left:0; right:0; top:296px; height:70px; }
+/* the reveal-lime animation owns `transform` for its pop-in, so static
+   centering can't also live on the .gate element itself (it would be
+   clobbered when the animation settles) — an unanimated wrapper carries
+   the translateX(-50%) instead */
+#s6 .gate-pos{ position:absolute; left:50%; top:372px; transform:translateX(-50%); }
+#s6 .gate{ display:inline-block; border:1px solid var(--lime); border-radius:30px; padding:12px 26px; font-family:'JetBrains Mono',monospace; font-size:15px; color:var(--lime); white-space:nowrap; }
+#s6 .down{ position:absolute; left:50%; top:414px; width:1px; height:36px; background:var(--line); margin-left:-0.5px; }
+#s6 .schema{ position:absolute; left:var(--mx); right:var(--mx); top:466px; display:flex; justify-content:center; gap:44px; }
+#s6 .field{ text-align:center; }
+#s6 .field .k{ font-family:'JetBrains Mono',monospace; font-size:var(--fs-micro); letter-spacing:.1em; color:var(--grey-1); }
+#s6 .field .v{ font-size:22px; color:var(--paper); margin-top:6px; }
+#s6 .stagerow{ position:absolute; left:0; right:0; top:566px; display:flex; justify-content:center; gap:10px; }
+
+/* -------- 07 Traction -------- */
+#s7 .capline{ position:absolute; left:var(--mx); top:104px; font-weight:600; }
+#s7 .chartwrap{ position:absolute; left:var(--mx); top:190px; width:760px; }
+#s7 .total{ position:absolute; right:var(--mx); top:150px; text-align:right; }
+#s7 .total .lbl{ font-family:'JetBrains Mono',monospace; font-size:13px; color:var(--grey-1); margin-top:6px; }
+#s7 .statrow{ position:absolute; left:var(--mx); bottom:112px; display:flex; gap:14px; }
+
+/* -------- 08 Market -------- */
+#s8 .headstack{ position:absolute; left:var(--mx); top:74px; }
+#s8 .headstack div{ font-weight:600; line-height:1.08; }
+/* circle diagram sits in its own band below the (now 2-line) headline so
+   nothing collides — verified with a runtime rect-intersection check */
+#s8 .circwrap{ position:absolute; left:120px; top:270px; width:400px; height:400px; }
+#s8 .mktlabels{ position:absolute; right:var(--mx); top:280px; width:420px; display:flex; flex-direction:column; gap:26px; }
+#s8 .mkt{ }
+#s8 .mkt .k{ font-family:'JetBrains Mono',monospace; font-size:13px; letter-spacing:.1em; }
+#s8 .mkt .v{ font-size:22px; margin-top:6px; }
+#s8 .mkt .math{ font-family:'JetBrains Mono',monospace; font-size:var(--fs-meta); color:var(--grey-1); margin-top:4px; }
+
+/* -------- 09 Business model -------- */
+#s9 .headstack{ position:absolute; left:var(--mx); top:104px; }
+#s9 .headstack div{ font-weight:600; line-height:1.05; }
+#s9 .tiers{ position:absolute; left:var(--mx); right:var(--mx); top:290px; display:flex; justify-content:space-between; }
+#s9 .tier{ width:250px; display:flex; flex-direction:column; gap:8px; }
+#s9 .tier .name{ font-family:'JetBrains Mono',monospace; font-size:var(--fs-meta); color:var(--grey-1); letter-spacing:.06em; text-transform:uppercase; }
+#s9 .tier .name.pop{ color:var(--lime); }
+#s9 .tier .price{ font-size:44px; font-weight:600; color:var(--paper); }
+#s9 .tier .per{ font-family:'JetBrains Mono',monospace; font-size:var(--fs-micro); color:var(--grey-1); }
+#s9 .tier .leads{ font-family:'JetBrains Mono',monospace; font-size:13px; color:var(--paper-2); margin-top:6px; }
+#s9 .foot{ position:absolute; left:var(--mx); right:var(--mx); bottom:118px; text-align:center; font-family:'JetBrains Mono',monospace; font-size:var(--fs-meta); color:var(--grey-1); border-top:1px solid var(--line); padding-top:22px; }
+
+/* -------- 10 GTM -------- */
+#s10 .headstack{ position:absolute; left:var(--mx); top:110px; }
+#s10 .headstack div{ font-weight:600; line-height:1.05; }
+#s10 .bar{ position:absolute; left:var(--mx); right:var(--mx); top:330px; height:64px; border-radius:10px; overflow:hidden; display:flex; }
+#s10 .seg{ height:100%; display:flex; align-items:center; padding-left:16px; font-family:'JetBrains Mono',monospace; font-size:13px; }
+#s10 .seg.a{ background:var(--lime); color:var(--ground); }
+#s10 .seg.b{ background:var(--paper-2); color:var(--ground); }
+#s10 .seg.c{ background:var(--grey-3); color:var(--paper); }
+#s10 .caclabel{ position:absolute; left:var(--mx); top:294px; font-family:'JetBrains Mono',monospace; font-size:15px; color:var(--grey-1); }
+#s10 .caclabel b{ color:var(--lime); font-size:22px; }
+#s10 .funnelnote{ position:absolute; left:var(--mx); top:436px; font-family:'JetBrains Mono',monospace; font-size:var(--fs-meta); color:var(--grey-1); }
+
+/* -------- 11 Competition -------- */
+#s11 .headstack{ position:absolute; left:var(--mx); top:114px; }
+#s11 .headstack div{ font-weight:600; line-height:1.05; }
+#s11 .axis{ position:absolute; left:var(--mx); right:var(--mx); top:430px; height:1px; background:var(--line); }
+/* axis-end captions sit well clear of the line (which carries the point
+   dots and their up/down labels at y~380-480) so they never touch a dot */
+#s11 .axisend{ position:absolute; top:334px; font-family:'JetBrains Mono',monospace; font-size:var(--fs-micro); color:var(--grey-1); letter-spacing:.06em; }
+#s11 .axisend.l{ left:var(--mx); }
+#s11 .axisend.r{ right:var(--mx); text-align:right; }
+#s11 .pts{ position:absolute; left:var(--mx); right:var(--mx); top:430px; }
+/* .pt carries the reveal-lime pop animation, which owns `transform` — so
+   vertical centering on the line is done with margin-top on .dot instead
+   of transform:translate(-50%,-50%) on .pt, which the animation would
+   otherwise overwrite once it settles. Horizontal centering needs no
+   transform: .pt is 1px wide and flex already centers the dot on it. */
+#s11 .pt{ position:absolute; top:0; display:flex; flex-direction:column; align-items:center; }
+#s11 .pt .dot{ width:12px; height:12px; border-radius:50%; background:var(--grey-1); margin-top:-6px; }
+#s11 .pt .lbl{ position:absolute; width:170px; text-align:center; font-size:var(--fs-meta); color:var(--paper-2); left:50%; transform:translateX(-50%); }
+#s11 .pt.up .lbl{ bottom:22px; }
+#s11 .pt.down .lbl{ top:22px; }
+#s11 .pt.hero .dot{ width:20px; height:20px; margin-top:-10px; background:var(--lime); box-shadow:0 0 0 5px rgba(217,242,79,.16); }
+#s11 .pt.hero .lbl{ color:var(--lime); font-weight:600; font-size:16px; }
+
+/* -------- 12 Risks -------- */
+#s12 .headstack{ position:absolute; left:var(--mx); top:104px; }
+#s12 .headstack div{ font-weight:600; line-height:1.05; }
+#s12 .risklist{ position:absolute; left:var(--mx); right:var(--mx); top:270px; display:flex; flex-direction:column; }
+#s12 .row{ display:flex; gap:40px; padding:18px 0; border-top:1px solid var(--line); align-items:baseline; }
+#s12 .risklist .row:last-child{ border-bottom:1px solid var(--line); }
+#s12 .row .risk{ width:400px; flex:0 0 400px; font-size:20px; font-weight:600; color:var(--paper); }
+#s12 .row .fix{ font-size:17px; color:var(--grey-1); line-height:1.4; }
+
+/* -------- 13 Team -------- */
+#s13 .headstack{ position:absolute; left:var(--mx); top:104px; }
+#s13 .headstack div{ font-weight:600; line-height:1.05; }
+#s13 .people{ position:absolute; left:var(--mx); right:var(--mx); top:290px; display:flex; justify-content:space-between; }
+#s13 .person{ width:300px; display:flex; flex-direction:column; align-items:flex-start; gap:12px; }
+#s13 .avatar{ width:64px; height:64px; border-radius:50%; border:1.5px solid var(--grey-3); display:flex; align-items:center; justify-content:center; font-family:'JetBrains Mono',monospace; font-size:18px; color:var(--paper-2); }
+#s13 .person .name{ font-size:20px; font-weight:600; color:var(--paper); }
+#s13 .person .role{ font-family:'JetBrains Mono',monospace; font-size:13px; color:var(--grey-1); letter-spacing:.04em; }
+#s13 .person .cred{ font-size:15px; color:var(--grey-1); line-height:1.4; }
+#s13 .footstat{ position:absolute; left:var(--mx); bottom:118px; font-family:'JetBrains Mono',monospace; font-size:var(--fs-meta); color:var(--grey-1); }
+
+/* -------- 14 Financials -------- */
+#s14 .heronum{ position:absolute; left:var(--mx); top:118px; }
+#s14 .capline{ position:absolute; left:var(--mx); top:290px; font-weight:500; color:var(--paper-2); }
+#s14 .chart{ position:absolute; left:730px; top:150px; width:454px; }
+#s14 .axisnote{ position:absolute; left:730px; top:132px; font-family:'JetBrains Mono',monospace; font-size:var(--fs-micro); color:var(--grey-1); letter-spacing:.06em; }
+#s14 .statrow{ position:absolute; left:var(--mx); bottom:112px; display:flex; gap:14px; }
+
+/* -------- 15 Ask (full lime hard-cut register) -------- */
+#s15 .center{ position:absolute; inset:0; display:flex; flex-direction:column; align-items:center; justify-content:center; gap:6px; }
+#s15 .askhero{ font-family:'JetBrains Mono',monospace; font-weight:600; font-size:var(--fs-hero); color:var(--ground); line-height:1; letter-spacing:-.01em; }
+#s15 .askcap{ font-size:var(--fs-sm); color:#3a3a10; font-weight:500; }
+#s15 .askruntime{ font-family:'JetBrains Mono',monospace; font-size:16px; color:#5a5a20; margin-top:4px; }
+#s15 .fundbar{ position:absolute; left:280px; right:280px; bottom:150px; height:14px; border-radius:8px; overflow:hidden; display:flex; }
+#s15 .fseg{ height:100%; }
+#s15 .fseg.a{ background:var(--ground); }
+#s15 .fseg.b{ background:#2c2c33; }
+#s15 .fseg.c{ background:#4a4a56; }
+#s15 .fundlabels{ position:absolute; left:280px; right:280px; bottom:112px; display:flex; justify-content:space-between; font-family:'JetBrains Mono',monospace; font-size:var(--fs-micro); color:#3a3a10; }
+#s15 .footline{ position:absolute; left:0; right:0; bottom:56px; text-align:center; font-family:'JetBrains Mono',monospace; font-size:13px; color:#5a5a20; }
+
+/* -------- 16 Appendix A -------- */
+#s16 .headstack{ position:absolute; left:var(--mx); top:104px; }
+#s16 .headstack div{ font-weight:600; line-height:1.05; }
+#s16 table{ position:absolute; left:var(--mx); right:var(--mx); top:250px; width:1088px; border-collapse:collapse; font-size:16px; }
+#s16 th{ text-align:left; font-family:'JetBrains Mono',monospace; font-size:var(--fs-micro); letter-spacing:.08em; text-transform:uppercase; color:var(--grey-1); font-weight:500; padding:0 16px 12px 0; border-bottom:1px solid var(--line); }
+#s16 td{ padding:11px 16px 11px 0; border-bottom:1px solid var(--line); color:var(--paper-2); }
+#s16 td:first-child{ color:var(--paper); font-weight:600; }
+#s16 td.mode{ font-family:'JetBrains Mono',monospace; font-size:13px; color:var(--grey-1); }
+#s16 td.mode.hi{ color:var(--lime); }
+#s16 .footnote{ position:absolute; left:var(--mx); bottom:118px; font-size:var(--fs-meta); color:var(--grey-1); max-width:1088px; }
+#s16 .footnote2{ position:absolute; left:var(--mx); bottom:88px; font-family:'JetBrains Mono',monospace; font-size:var(--fs-micro); color:var(--grey-1); }
+
+/* -------- 17 Appendix B -------- */
+#s17 .headstack{ position:absolute; left:var(--mx); top:120px; }
+#s17 .headstack div{ font-weight:600; line-height:1.05; }
+#s17 .contact{ position:absolute; left:var(--mx); top:288px; font-size:22px; color:var(--paper); }
+#s17 .contact .mono{ color:var(--grey-1); font-size:16px; margin-top:8px; }
+#s17 .recap{ position:absolute; left:var(--mx); right:var(--mx); top:400px; padding-top:24px; border-top:1px solid var(--line); font-family:'JetBrains Mono',monospace; font-size:13px; line-height:2.1; color:var(--grey-1); }
+#s17 .recap b{ color:var(--paper-2); font-weight:500; }
+#s17 .realnote{ position:absolute; left:var(--mx); bottom:118px; font-size:var(--fs-meta); color:var(--grey-1); max-width:1088px; }
+</style>
+
+<div id="hardcut" aria-hidden="true">
+  <svg viewBox="0 0 100 100"><circle cx="40" cy="60" r="16" fill="currentColor"/><path d="M47 31 A31 31 0 0 1 71 72" fill="none" stroke="currentColor" stroke-width="8.5" stroke-linecap="round"/></svg>
+</div>
+
+<div id="stage">
+  <div id="viewport">
+
+    <!-- ============ 01 COVER ============ -->
+    <section class="slide gnd-a active" id="s1" data-notes="We're not another platform to check — we're the signal that tells you when to act. Six platforms, one brief, one list of people already asking for what you sell. Everything after this slide just proves that sentence.">
+      <div class="kicker reveal" style="--i:0">01 · AIZU</div>
+      <div class="chip tag reveal" style="--i:1">Pre-seed · [confidential]</div>
+      <div class="wrap">
+        <div class="wordrow">
+          <svg class="mark reveal-lime" style="--i:2" width="72" height="72" viewBox="0 0 100 100"><circle cx="40" cy="60" r="16" fill="#d9f24f"/><path d="M47 31 A31 31 0 0 1 71 72" fill="none" stroke="#f2f2f4" stroke-width="8.5" stroke-linecap="round"/></svg>
+          <div class="wordmark reveal" style="--i:1">AIZU</div>
+          <div class="glyph reveal" style="--i:2">合図 — a signal to act</div>
+        </div>
+        <p class="headline2 reveal" style="--i:3">AIZU — six noisy platforms, one lead list.</p>
+        <p class="sub reveal" style="--i:4">From a single plain-language brief, AIZU finds the people already asking for what you sell.</p>
+      </div>
+      <div class="platforms reveal" style="--i:5">
+        <span class="chip">Instagram</span><span class="chip">LinkedIn</span><span class="chip">X</span>
+        <span class="chip">YouTube</span><span class="chip">Reddit</span><span class="chip">Telegram</span>
+      </div>
+    </section>
+
+    <!-- ============ 02 PURPOSE ============ -->
+    <section class="slide gnd-a" id="s2" data-notes="Every business already has people asking for what they sell, in public, right now — on Instagram, on Reddit, in a YouTube comment. Nobody has time to watch six feeds for that. AIZU watches them and hands you the ones worth answering.">
+      <div class="kicker reveal" style="--i:0">02 · PURPOSE</div>
+      <div class="left-col" style="top:0;bottom:280px;left:var(--mx);">
+        <h1 class="headline reveal" style="--i:1;font-size:var(--fs-lg);max-width:940px;">Meet customers while they decide.</h1>
+        <p class="sub reveal" style="--i:2;margin-top:20px;">Tell AIZU what you sell and who you serve; it returns qualified, ready-to-buy customers every week.</p>
+      </div>
+      <div class="diagram">
+        <div class="node reveal" style="--i:3">
+          <svg width="44" height="44" viewBox="0 0 48 48" fill="none" stroke="#f2f2f4" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="11" y="6" width="26" height="36" rx="3"/><line x1="17" y1="17" x2="31" y2="17"/><line x1="17" y1="25" x2="31" y2="25"/><line x1="17" y1="33" x2="26" y2="33"/></svg>
+          <div class="lbl">You write<br/>one brief</div>
+        </div>
+        <svg class="arrow reveal" style="--i:4" width="100%" height="12" viewBox="0 0 100 12" preserveAspectRatio="none"><line x1="0" y1="6" x2="94" y2="6" stroke="#43434c" stroke-width="1.5"/><path d="M90 1 L98 6 L90 11" fill="none" stroke="#9a9aa2" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        <div class="node aizu reveal-lime" style="--i:5">
+          <svg width="44" height="44" viewBox="0 0 100 100"><circle cx="40" cy="60" r="16" fill="#d9f24f"/><path d="M47 31 A31 31 0 0 1 71 72" fill="none" stroke="#f2f2f4" stroke-width="8.5" stroke-linecap="round"/></svg>
+          <div class="lbl">AIZU</div>
+        </div>
+        <svg class="arrow reveal" style="--i:6" width="100%" height="12" viewBox="0 0 100 12" preserveAspectRatio="none"><line x1="0" y1="6" x2="94" y2="6" stroke="#43434c" stroke-width="1.5"/><path d="M90 1 L98 6 L90 11" fill="none" stroke="#9a9aa2" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        <div class="node reveal" style="--i:7">
+          <svg width="44" height="44" viewBox="0 0 48 48" fill="none" stroke="#f2f2f4" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="7" y="9" width="34" height="30" rx="3"/><line x1="12" y1="18" x2="36" y2="18"/><line x1="12" y1="26" x2="30" y2="26"/><path d="M32 25 l2 2 l4 -4" stroke="#d9f24f"/></svg>
+          <div class="lbl">You get<br/>ready-to-buy customers</div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ============ 03 PROBLEM (signature: fills the frame) ============ -->
+    <section class="slide gnd-a" id="s3" data-notes="Before AIZU, our own team was doing this by hand — six tabs open, refreshing, hoping we didn't miss the comment that mattered. Today that means six separate apps, manual scrolling with no intent filter, and 5+ hours a week that turns up nothing systematic — you only catch what you happened to be watching. With AIZU it's one dashboard, an automated two-stage AI read of every post and comment, and every qualifying match across all six platforms, reviewed in minutes a week instead of hours. That's not a workflow, it's a part-time job nobody's paid to do — the pain isn't that the customers aren't out there, it's that finding them doesn't scale past one person's attention.">
+      <div class="kicker reveal" style="--i:0">03 · PROBLEM</div>
+      <div class="statement">
+        <h1 class="l1 headline reveal" style="--i:1;font-size:80px;">Buying intent is public.</h1>
+        <h1 class="l2 headline reveal-lime" style="--i:2;font-size:80px;">Nobody's watching.</h1>
+      </div>
+      <div class="caption reveal" style="--i:3">
+        <span class="mono" style="font-size:16px;color:var(--grey-1);">6 apps.</span>
+        <span class="mono" style="font-size:16px;color:var(--grey-1);">5+ hrs/week° lost.</span>
+        <span class="mono" style="font-size:16px;color:var(--grey-1);">Zero intent filter.</span>
+      </div>
+      <div class="mock-chip">° illustrative placeholder</div>
+    </section>
+
+    <!-- ============ 04 SOLUTION ============ -->
+    <section class="slide gnd-b" id="s4" data-notes="The unlock isn't scrape more — it's attach, don't own. AIZU only ever reads a session you already logged into, or an official platform API; it never launches a browser of its own or crafts an unofficial API call itself. That's what makes it safe to run continuously instead of in short, risky bursts. Every post gets checked twice — is it on-topic, then does the commenter sound like a buyer — before it ever becomes a lead on your dashboard.">
+      <div class="kicker reveal" style="--i:0">04 · SOLUTION</div>
+      <div class="headstack">
+        <div class="reveal" style="--i:1;font-size:104px;">One brief.</div>
+        <div class="reveal" style="--i:2;font-size:104px;">Six platforms.</div>
+        <div class="reveal-lime" style="--i:3;font-size:104px;">One list.</div>
+      </div>
+      <div class="rule draw-rule" style="--i:4"></div>
+      <div class="steps">
+        <div class="step reveal" style="--i:5"><svg width="30" height="30" viewBox="0 0 48 48" fill="none" stroke="#9a9aa2" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="11" y="6" width="26" height="36" rx="3"/><line x1="17" y1="17" x2="31" y2="17"/><line x1="17" y1="25" x2="31" y2="25"/></svg><div class="num">01</div><div class="lbl">Write the brief</div></div>
+        <div class="step reveal" style="--i:6"><svg width="30" height="30" viewBox="0 0 48 48" fill="none" stroke="#9a9aa2" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="18" cy="24" r="9"/><circle cx="30" cy="24" r="9"/></svg><div class="num">02</div><div class="lbl">Attach a warmed session</div></div>
+        <div class="step reveal" style="--i:7"><svg width="30" height="30" viewBox="0 0 48 48" fill="none" stroke="#9a9aa2" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="24" cy="24" r="17"/><path d="M17 24 l5 5 l10 -11"/></svg><div class="num">03</div><div class="lbl">Two-stage AI check</div></div>
+        <div class="step reveal" style="--i:8"><svg width="30" height="30" viewBox="0 0 48 48" fill="none" stroke="#9a9aa2" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M8 24 L22 10 L40 10 L40 28 L26 42 Z"/><circle cx="31" cy="17" r="2.4" fill="#9a9aa2" stroke="none"/></svg><div class="num">04</div><div class="lbl">Matches become leads</div></div>
+        <div class="step reveal-lime" style="--i:9"><svg width="30" height="30" viewBox="0 0 48 48" fill="none" stroke="#d9f24f" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="7" y="7" width="15" height="15" rx="2.5"/><rect x="26" y="7" width="15" height="15" rx="2.5"/><rect x="7" y="26" width="15" height="15" rx="2.5"/><rect x="26" y="26" width="15" height="15" rx="2.5"/></svg><div class="num">05</div><div class="lbl">One dashboard</div></div>
+      </div>
+    </section>
+
+    <!-- ============ 05 WHY NOW ============ -->
+    <section class="slide gnd-a" id="s5" data-notes="Five years ago this would have meant either hiring someone to scroll all day, or building something that looks like a bot and gets banned. Neither was viable. What changed is that AI got cheap enough to read every comment, and warmed-session automation got disciplined enough to do it at the pace a real person would — safely, at daytime hours.">
+      <div class="kicker reveal" style="--i:0">05 · WHY NOW</div>
+      <div class="headstack">
+        <div class="reveal" style="--i:1;font-size:80px;">The signal moved.</div>
+        <div class="reveal-lime" style="--i:2;font-size:80px;">The tools caught up.</div>
+      </div>
+      <div class="timeline draw-rule" style="--i:3"></div>
+      <div class="points">
+        <div class="pt n1 reveal-lime" style="--i:4"><div class="dot"></div><div class="lbl">Intent moved into public comments</div></div>
+        <div class="pt n2 reveal-lime" style="--i:5"><div class="dot"></div><div class="lbl">Per-comment AI reading got cheap &amp; fast</div></div>
+        <div class="pt n3 reveal-lime" style="--i:6"><div class="dot"></div><div class="lbl">Warmed-session automation made it safe</div></div>
+      </div>
+    </section>
+
+    <!-- ============ 06 PRODUCT ============ -->
+    <section class="slide gnd-b" id="s6" data-notes="This is the whole engine in one picture. Instagram, LinkedIn and X are read through a warmed browser session with vision-assisted reading; Reddit, YouTube and Telegram go through their official APIs. Every candidate passes a relevance gate — is this post on-topic — then a match score — does this commenter sound like a buyer, not the seller. Nothing about it is a black box: every lead on the list carries the exact comment that qualified them, and runs pace themselves to daytime hours with human-like dwell time.">
+      <div class="kicker reveal" style="--i:0">06 · PRODUCT</div>
+      <div class="headstack">
+        <div class="reveal" style="--i:1;font-size:80px;">Six feeds in.</div>
+        <div class="reveal-lime" style="--i:2;font-size:80px;">One ranked list out.</div>
+      </div>
+      <div class="platrow">
+        <span class="chip reveal" style="--i:3">Instagram</span>
+        <span class="chip reveal" style="--i:3">LinkedIn</span>
+        <span class="chip reveal" style="--i:3">X</span>
+        <span class="chip reveal" style="--i:3">Reddit</span>
+        <span class="chip reveal" style="--i:3">YouTube</span>
+        <span class="chip reveal" style="--i:3">Telegram</span>
+      </div>
+      <svg class="funnel reveal" style="--i:4" viewBox="0 0 1088 70" preserveAspectRatio="none">
+        <path d="M40 0 L500 60" stroke="#2a2a30" stroke-width="1.5" fill="none"/>
+        <path d="M212 0 L510 60" stroke="#2a2a30" stroke-width="1.5" fill="none"/>
+        <path d="M384 0 L520 60" stroke="#2a2a30" stroke-width="1.5" fill="none"/>
+        <path d="M704 0 L560 60" stroke="#2a2a30" stroke-width="1.5" fill="none"/>
+        <path d="M876 0 L570 60" stroke="#2a2a30" stroke-width="1.5" fill="none"/>
+        <path d="M1048 0 L580 60" stroke="#2a2a30" stroke-width="1.5" fill="none"/>
+      </svg>
+      <div class="gate-pos"><div class="gate reveal-lime" style="--i:5">Relevance gate → Match score</div></div>
+      <div class="down reveal" style="--i:6"></div>
+      <div class="schema">
+        <div class="field reveal" style="--i:7"><div class="k">HANDLE</div><div class="v">@handle</div></div>
+        <div class="field reveal" style="--i:7"><div class="k">VERBATIM ASK</div><div class="v">the comment itself</div></div>
+        <div class="field reveal-lime" style="--i:8"><div class="k">SCORE</div><div class="v" style="color:var(--lime);">match rank</div></div>
+      </div>
+      <div class="stagerow reveal" style="--i:9">
+        <span class="chip">New</span><span class="chip on">Qualified</span><span class="chip">Contacted</span>
+      </div>
+    </section>
+
+    <!-- ============ 07 TRACTION ============ -->
+    <section class="slide gnd-a" id="s7" data-notes="This is one metric, the same metric, every month — leads actually delivered, not signups or page views. It's growing because the pipeline compounds: more warmed accounts, more platforms tuned, more briefs running in parallel. We're deliberately not claiming more than this yet — thirty-eight paying customers, a twenty-four percent average reply rate, ninety-one percent logo retention over the trailing three months.">
+      <div class="kicker reveal" style="--i:0">07 · TRACTION</div>
+      <div class="capline reveal" style="--i:1;font-size:40px;">Leads delivered, and growing monthly.</div>
+      <div class="chartwrap reveal" style="--i:2">
+        <svg viewBox="0 0 900 260" width="760" height="220">
+          <path d="M20,199.4 L192,181.2 L364,159.2 L536,126.7 L708,90.3 L880,30 L880,230 L20,230 Z" fill="#d9f24f" opacity="0.10"/>
+          <polyline class="draw-line" style="--len:1000;--i:3" points="20,199.4 192,181.2 364,159.2 536,126.7 708,90.3 880,30" fill="none" stroke="#d9f24f" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>
+          <g class="mono" font-size="12" fill="#9a9aa2">
+            <circle cx="20" cy="199.4" r="3.5" fill="#d9f24f"/><circle cx="192" cy="181.2" r="3.5" fill="#d9f24f"/><circle cx="364" cy="159.2" r="3.5" fill="#d9f24f"/><circle cx="536" cy="126.7" r="3.5" fill="#d9f24f"/><circle cx="708" cy="90.3" r="3.5" fill="#d9f24f"/><circle cx="880" cy="30" r="4.5" fill="#d9f24f"/>
+            <text x="20" y="250">Mar</text><text x="184" y="250">Apr</text><text x="356" y="250">May</text><text x="524" y="250">Jun</text><text x="698" y="250">Jul</text><text x="866" y="250">Aug</text>
+          </g>
+        </svg>
+      </div>
+      <div class="total reveal-lime" style="--i:4">
+        <div class="hero-num lime" style="font-size:104px;">62,000°</div>
+        <div class="lbl mono">leads delivered to date</div>
+      </div>
+      <div class="statrow reveal" style="--i:5">
+        <span class="chip">38° customers</span><span class="chip">24°% reply rate</span><span class="chip">91°% retention</span>
+      </div>
+      <div class="mock-chip">° illustrative placeholder</div>
+    </section>
+
+    <!-- ============ 08 MARKET SIZE ============ -->
+    <section class="slide gnd-b" id="s8" data-notes="We priced every circle off our own Starter plan, not an analyst report — twenty-five dollars a month is what a real customer already pays us today. SAM is deliberately narrow: only markets where our six shipped platforms and our language coverage actually work right now, not a global aspiration. TAM is the arithmetic ceiling; SOM is where we plan to be by year three.">
+      <div class="kicker reveal" style="--i:0">08 · MARKET SIZE</div>
+      <div class="headstack">
+        <div class="reveal" style="--i:1;font-size:56px;">A <span class="reveal-lime" style="--i:2;color:var(--lime);display:inline-block;">$2.4B° market</span></div>
+        <div class="reveal" style="--i:3;font-size:56px;">we can reach today.</div>
+      </div>
+      <svg class="circwrap reveal" style="--i:4" viewBox="0 0 600 600" width="400" height="400">
+        <circle cx="300" cy="300" r="260" fill="none" stroke="#43434c" stroke-width="1.5"/>
+        <circle class="bar-rise" style="--i:5;transform-origin:300px 300px;" cx="300" cy="300" r="170" fill="none" stroke="#dcdce1" stroke-width="3"/>
+        <circle cx="300" cy="300" r="90" fill="none" stroke="#9a9aa2" stroke-width="1.5"/>
+        <text x="300" y="56" text-anchor="middle" class="mono" font-size="13" fill="#9a9aa2" letter-spacing="1">TAM</text>
+        <text x="300" y="146" text-anchor="middle" class="mono" font-size="13" fill="#dcdce1" letter-spacing="1">SAM</text>
+        <text x="300" y="300" text-anchor="middle" dy="4" class="mono" font-size="13" fill="#f2f2f4" letter-spacing="1">SOM</text>
+      </svg>
+      <div class="mktlabels">
+        <div class="mkt reveal" style="--i:6"><div class="k mono" style="color:#9a9aa2;">TAM</div><div class="v">$36B°</div><div class="math">120,000,000° SMBs/creators × $300°/yr</div></div>
+        <div class="mkt reveal-lime" style="--i:7"><div class="k mono" style="color:#9a9aa2;">SAM</div><div class="v" style="color:#d9f24f;">$2.4B°</div><div class="math">8,000,000° reachable today × $300°/yr</div></div>
+        <div class="mkt reveal" style="--i:8"><div class="k mono" style="color:#9a9aa2;">SOM</div><div class="v">$12M° ARR</div><div class="math">40,000° customers by Y3 × $300°/yr</div></div>
+      </div>
+      <div class="mock-chip">° illustrative placeholder</div>
+    </section>
+
+    <!-- ============ 09 BUSINESS MODEL ============ -->
+    <section class="slide gnd-a" id="s9" data-notes="Pricing scales with the thing customers actually value — leads delivered — not seats or API calls. Starter is our center of gravity today; Pro and Scale are where agencies and higher-volume sellers land once the free-to-paid motion proves out. Every figure on this slide is real, live pricing — nothing here is modeled.">
+      <div class="kicker reveal" style="--i:0">09 · BUSINESS MODEL</div>
+      <div class="headstack">
+        <div class="reveal" style="--i:1;font-size:80px;">You pay for customers,</div>
+        <div class="reveal-lime" style="--i:2;font-size:80px;">not software.</div>
+      </div>
+      <div class="tiers">
+        <div class="tier reveal" style="--i:3"><div class="name">Free</div><div class="price">$0</div><div class="per">no card needed</div><div class="leads">10 leads/mo</div></div>
+        <div class="tier reveal-lime" style="--i:4"><div class="name pop">Starter · Most popular</div><div class="price">$24.99</div><div class="per">/mo · $249/yr</div><div class="leads">250 leads/mo</div></div>
+        <div class="tier reveal" style="--i:5"><div class="name">Pro</div><div class="price">$149</div><div class="per">/mo · $1,490/yr</div><div class="leads">2,000 leads/mo</div></div>
+        <div class="tier reveal" style="--i:6"><div class="name">Scale</div><div class="price">Custom</div><div class="per">negotiated cap</div><div class="leads">Volume pricing</div></div>
+      </div>
+      <div class="foot reveal" style="--i:7">Upgrade, downgrade, or cancel anytime — no contracts, no lock-in.</div>
+    </section>
+
+    <!-- ============ 10 GTM ============ -->
+    <section class="slide gnd-b" id="s10" data-notes="The free tier does the qualifying for us — anyone who upgrades has already seen real leads land in their dashboard. Agencies are the channel we're leaning into next: one agency relationship brings a dozen client campaigns, not one. Blended CAC across all three channels sits at eighty-five dollars, with eleven hundred and fifty free-tier and waitlist signups already in the funnel.">
+      <div class="kicker reveal" style="--i:0">10 · GO-TO-MARKET</div>
+      <div class="headstack">
+        <div class="reveal" style="--i:1;font-size:80px;">Self-serve first,</div>
+        <div class="reveal-lime" style="--i:2;font-size:80px;">agencies compound it.</div>
+      </div>
+      <div class="caclabel reveal" style="--i:3">Blended CAC <b>$85°</b></div>
+      <div class="bar reveal" style="--i:4">
+        <div class="seg a bar-grow" style="--i:5;width:60%;">Self-serve 60°%</div>
+        <div class="seg b bar-grow" style="--i:6;width:25%;">Agency 25°%</div>
+        <div class="seg c bar-grow" style="--i:7;width:15%;">Outbound 15°%</div>
+      </div>
+      <div class="funnelnote reveal" style="--i:8">1,150° free-tier + waitlist signups in the funnel today</div>
+      <div class="mock-chip">° illustrative placeholder</div>
+    </section>
+
+    <!-- ============ 11 COMPETITION ============ -->
+    <section class="slide gnd-a" id="s11" data-notes="We didn't build a 2x2 because most of them are spin — you can always pick two axes that flatter your own dot. This is one honest claim: every lead we surface already said something in public. Bought lists and cold email interrupt strangers; generic AI SDR agents automate that same interruption; social-listening dashboards track mentions without scoring intent; manual social selling doesn't scale past one attention span. Nobody has to guess whether we're interrupting them.">
+      <div class="kicker reveal" style="--i:0">11 · COMPETITION</div>
+      <div class="headstack">
+        <div class="reveal" style="--i:1;font-size:80px;">We answer people.</div>
+        <div class="reveal" style="--i:2;font-size:80px;">Others interrupt strangers.</div>
+      </div>
+      <div class="axis draw-rule" style="--i:3"></div>
+      <div class="axisend l reveal" style="--i:4">Interrupts strangers</div>
+      <div class="axisend r reveal" style="--i:4">Answers people who already asked</div>
+      <div class="pts">
+        <div class="pt down reveal-lime" style="--i:5;left:4%;"><div class="dot"></div><div class="lbl">Bought lists / cold email</div></div>
+        <div class="pt up reveal-lime" style="--i:6;left:27%;"><div class="dot"></div><div class="lbl">Generic AI SDR agents</div></div>
+        <div class="pt down reveal-lime" style="--i:7;left:50%;"><div class="dot"></div><div class="lbl">Social-listening dashboards</div></div>
+        <div class="pt up reveal-lime" style="--i:8;left:72%;"><div class="dot"></div><div class="lbl">Manual social selling</div></div>
+        <div class="pt hero down reveal-lime" style="--i:9;left:95%;"><div class="dot"></div><div class="lbl">AIZU</div></div>
+      </div>
+    </section>
+
+    <!-- ============ 12 RISKS ============ -->
+    <section class="slide gnd-b" id="s12" data-notes="We'd rather you hear these from us than find them yourselves in diligence. Platform ToS exposure — we're read-only by default and halt for a human instead of auto-solving a checkpoint. Single-run lock is deliberate today, with a distributed worker fleet as an opt-in path to relax it. LLM and platform-API dependency is managed with per-campaign spend caps that degrade softly to unknown rather than overspending. And no, we don't have Terms or Privacy pages yet — that's a real compliance gap on a product that stores handles and messages, and it's named here, not hidden. None of these are fatal — they're the normal cost of automating access to platforms that don't publish an API for this — but we're not going to pretend they're solved when they're managed.">
+      <div class="kicker reveal" style="--i:0">12 · RISKS</div>
+      <div class="headstack">
+        <div class="reveal" style="--i:1;font-size:80px;">Here's what we're</div>
+        <div class="reveal-lime" style="--i:2;font-size:80px;">watching closely.</div>
+      </div>
+      <div class="risklist">
+        <div class="row reveal" style="--i:3"><div class="risk">Platform ToS / automation exposure</div><div class="fix">Read-only by default; never auto-solves a checkpoint — halts for a human instead.</div></div>
+        <div class="row reveal" style="--i:4"><div class="risk">Single-run lock by default</div><div class="fix">One run per box today; a distributed worker fleet exists as an opt-in path to relax this.</div></div>
+        <div class="row reveal" style="--i:5"><div class="risk">LLM &amp; platform-API dependency</div><div class="fix">Per-campaign spend caps degrade softly to "unknown" instead of overspending or failing.</div></div>
+        <div class="row reveal-lime" style="--i:6"><div class="risk">No Terms/Privacy pages yet</div><div class="fix">A real compliance gap on a product that stores handles and messages — named here, not hidden.</div></div>
+      </div>
+    </section>
+
+    <!-- ============ 13 TEAM ============ -->
+    <section class="slide gnd-a" id="s13" data-notes="All three of us either ran growth for a business that needed this or built the systems it required — nobody on this founding team is guessing at the problem. That's also why the product is CIS-first: we built it to solve our own team's problem before selling it to anyone else's. Nine people, full-time, founded in Tashkent in 2025.">
+      <div class="kicker reveal" style="--i:0">13 · TEAM</div>
+      <div class="headstack">
+        <div class="reveal" style="--i:1;font-size:80px;">Built by people who</div>
+        <div class="reveal-lime" style="--i:2;font-size:80px;">ran this by hand.</div>
+      </div>
+      <div class="people">
+        <div class="person reveal" style="--i:3">
+          <div class="avatar">AK</div>
+          <div class="name">Aziz Karimov°</div>
+          <div class="role">CEO / CO-FOUNDER</div>
+          <div class="cred">Ex-growth lead, a Tashkent e-commerce marketplace</div>
+        </div>
+        <div class="person reveal" style="--i:4">
+          <div class="avatar">DY</div>
+          <div class="name">Dilnoza Yusupova°</div>
+          <div class="role">CTO / CO-FOUNDER</div>
+          <div class="cred">Built the six-platform engine architecture and the RBAC model</div>
+        </div>
+        <div class="person reveal" style="--i:5">
+          <div class="avatar">SN</div>
+          <div class="name">Sardor Nazarov°</div>
+          <div class="role">HEAD OF PRODUCT &amp; GTM</div>
+          <div class="cred">Ex-agency operator, ran paid social for CIS DTC brands</div>
+        </div>
+      </div>
+      <div class="footstat reveal" style="--i:6">9° full-time · Founded 2025° · Tashkent, Uzbekistan°</div>
+      <div class="mock-chip">° illustrative placeholder</div>
+    </section>
+
+    <!-- ============ 14 FINANCIALS ============ -->
+    <section class="slide gnd-b" id="s14" data-notes="We used a log axis on purpose and said so on the slide — a linear chart would make Year 1 disappear and Year 3 look fake. Forty-nine thousand two hundred dollars of ARR today, thirty-eight customers, scaling to 1.8 million in Year 2 and 12 million by Year 3. The growth curve matches Year-3 SOM exactly: forty thousand customers at the Starter price is the same number on the market slide and this one. CAC of eighty-five dollars, seventy-eight percent gross margin, eighteen months of runway on this raise.">
+      <div class="kicker reveal" style="--i:0">14 · FINANCIALS</div>
+      <div class="heronum reveal-lime" style="--i:1">
+        <div class="hero-num" style="font-size:104px;">$12M°</div>
+        <div class="capline reveal" style="--i:2;font-size:var(--fs-xs);position:static;">From $49,200° to $12M° ARR in 3 years.</div>
+      </div>
+      <div class="axisnote reveal" style="--i:3">Y-AXIS: LOG SCALE — LINEAR WOULD FLATTEN YEAR 1</div>
+      <svg class="chart reveal" style="--i:4" viewBox="0 0 454 300" width="454" height="300">
+        <line x1="0" y1="260" x2="454" y2="260" stroke="#2a2a30" stroke-width="1"/>
+        <g>
+          <rect class="bar-rise" style="--i:5;transform-origin:70px 260px;" x="40" y="205.7" width="60" height="54.3" fill="#43434c"/>
+          <text x="70" y="196" text-anchor="middle" class="mono" font-size="14" fill="#f2f2f4">$49,200°</text>
+          <text x="70" y="280" text-anchor="middle" class="mono" font-size="12" fill="#9a9aa2">Y1</text>
+        </g>
+        <g>
+          <rect class="bar-rise" style="--i:6;transform-origin:227px 260px;" x="197" y="82" width="60" height="178" fill="#9a9aa2"/>
+          <text x="227" y="72" text-anchor="middle" class="mono" font-size="14" fill="#f2f2f4">$1.8M°</text>
+          <text x="227" y="280" text-anchor="middle" class="mono" font-size="12" fill="#9a9aa2">Y2</text>
+        </g>
+        <g>
+          <rect class="bar-rise" style="--i:7;transform-origin:384px 260px;" x="354" y="17.5" width="60" height="242.5" fill="#d9f24f"/>
+          <text x="384" y="8" text-anchor="middle" class="mono" font-size="14" fill="#d9f24f">$12M°</text>
+          <text x="384" y="280" text-anchor="middle" class="mono" font-size="12" fill="#9a9aa2">Y3</text>
+        </g>
+      </svg>
+      <div class="statrow reveal" style="--i:8">
+        <span class="chip">CAC $85°</span><span class="chip">Margin 78°%</span><span class="chip">Runway 18 months°</span>
+      </div>
+      <div class="mock-chip">° illustrative placeholder</div>
+    </section>
+
+    <!-- ============ 15 THE ASK (full-lime hard cut) ============ -->
+    <section class="slide gnd-lime" id="s15" data-notes="This is the one slide where we want precision, not a story — $750K gets us to $1.8M ARR with 18 months of room, and a fifth of it is earmarked specifically to close the legal gap we just told you about on the risks slide, not to hide it. Forty-five percent product and engineering, thirty-five percent sales and go-to-market, twenty percent compliance, ops and legal.">
+      <div class="kicker reveal" style="--i:0">15 · THE ASK</div>
+      <div class="center">
+        <div class="askhero reveal" style="--i:1">$750,000°</div>
+        <div class="askcap reveal-lime" style="--i:2">SAFE, $6,000,000° cap</div>
+        <div class="askruntime reveal" style="--i:3">18 months° runway</div>
+      </div>
+      <div class="fundbar reveal" style="--i:4">
+        <div class="fseg a bar-grow" style="--i:5;width:45%;"></div>
+        <div class="fseg b bar-grow" style="--i:6;width:35%;"></div>
+        <div class="fseg c bar-grow" style="--i:7;width:20%;"></div>
+      </div>
+      <div class="fundlabels reveal" style="--i:8">
+        <span>Product &amp; Eng 45°%</span><span>Sales &amp; GTM 35°%</span><span>Compliance/Ops/Legal 20°%</span>
+      </div>
+      <div class="footline reveal" style="--i:9">° illustrative placeholder — figures marked ° are modeled, not audited</div>
+    </section>
+
+    <!-- ============ 16 APPENDIX A ============ -->
+    <section class="slide gnd-app" id="s16" data-notes="This is the slide for the technical partner in the room, not the pitch itself — every row here maps to a real engine in the codebase, and we've drawn the roadmap line deliberately so nobody mistakes a planned platform for a shipped one. Server-enforced RBAC, a local-first single shared SQLite database, and per-campaign spend caps on every LLM call round out the architecture.">
+      <div class="kicker reveal" style="--i:0">16 · APPENDIX A</div>
+      <div class="headstack">
+        <div class="reveal" style="--i:1;font-size:56px;">How each of the six platforms</div>
+        <div class="reveal-lime" style="--i:2;font-size:56px;">actually works.</div>
+      </div>
+      <table class="reveal" style="--i:3">
+        <thead><tr><th>Platform</th><th>Access method</th><th>Mode</th></tr></thead>
+        <tbody>
+          <tr><td>Instagram</td><td>Warmed-session CDP + vision</td><td class="mode hi">Opt-in engagement</td></tr>
+          <tr><td>X</td><td>Warmed-session CDP + vision</td><td class="mode">Read-only</td></tr>
+          <tr><td>LinkedIn</td><td>Warmed-session CDP + vision</td><td class="mode">Read-only</td></tr>
+          <tr><td>Reddit</td><td>Official Data API (OAuth2)</td><td class="mode">Read-only</td></tr>
+          <tr><td>YouTube</td><td>Official Data API v3</td><td class="mode">Read-only</td></tr>
+          <tr><td>Telegram</td><td>MTProto / Bot API</td><td class="mode">Read-only</td></tr>
+        </tbody>
+      </table>
+      <div class="footnote reveal" style="--i:4">Facebook, Pinterest, Quora, Threads, TikTok are roadmap only — no engine exists yet.</div>
+      <div class="footnote2 reveal" style="--i:5">Server-enforced RBAC (owner/admin/member/viewer) · local-first single shared SQLite DB · per-campaign spend caps on every LLM call</div>
+    </section>
+
+    <!-- ============ 17 APPENDIX B ============ -->
+    <section class="slide gnd-app" id="s17" data-notes="We'd rather over-disclose than have someone find a modeled number and wonder what else was soft. Everything with a ° is our best model of where this goes, not a claim about where it already is — happy to walk through the assumptions behind any single one of them.">
+      <div class="kicker reveal" style="--i:0">17 · APPENDIX B</div>
+      <div class="headstack">
+        <div class="reveal" style="--i:1;font-size:56px;">Get in touch.</div>
+        <div class="reveal-lime" style="--i:2;font-size:56px;">Here's what's modeled.</div>
+      </div>
+      <div class="contact reveal" style="--i:3">
+        [founder name] · [email placeholder] · AIZU 合図
+        <div class="mono">Every figure marked ° in this deck is illustrative, not audited.</div>
+      </div>
+      <div class="recap reveal" style="--i:4">
+        <b>° Modeled:</b> raise $750,000° · cap $6,000,000° · runway 18 months° · ARR $49,200°→$1.8M°→$12M° · customers 38°→1,500°→40,000° · CAC $85° · gross margin 78°% · logo retention 91°% · leads delivered 62,000° · TAM $36B° / SAM $2.4B° / SOM $12M° · team of 9°
+      </div>
+      <div class="realnote reveal" style="--i:5"><b class="mono" style="color:var(--paper-2);">Real, unmarked:</b> six platforms, four pricing tiers, RBAC model, spend caps, warmed-session architecture — sourced from the shipped product.</div>
+      <div class="mock-chip">° illustrative placeholder</div>
+    </section>
+
+  </div>
+</div>
+
+<!-- ============ Chrome: controls / progress / drawers ============ -->
+<div id="chrome">
+  <div id="zone-prev" aria-hidden="true"></div>
+  <div id="zone-next" aria-hidden="true"></div>
+
+  <button id="btn-prev" class="navbtn" aria-label="Previous slide">‹</button>
+  <button id="btn-next" class="navbtn" aria-label="Next slide">›</button>
+  <div id="counter" class="mono" aria-live="polite">01 / 17</div>
+
+  <div id="topbar">
+    <button id="btn-notes" class="iconbtn" aria-label="Toggle speaker notes" aria-pressed="false">Notes · S</button>
+    <button id="btn-grid" class="iconbtn" aria-label="Toggle slide overview" aria-pressed="false">Overview · G</button>
+    <button id="btn-help" class="iconbtn" aria-label="Toggle keyboard help" aria-pressed="false">? Help</button>
+  </div>
+
+  <div id="progress" role="progressbar" aria-label="Deck progress" aria-valuemin="1" aria-valuemax="17" aria-valuenow="1">
+    <div id="progress-fill"></div>
+  </div>
+
+  <div id="notes" aria-hidden="true">
+    <div class="inner">
+      <div class="label">Speaker notes</div>
+      <p id="notes-text"></p>
+    </div>
+  </div>
+
+  <div id="gridview" aria-hidden="true">
+    <div class="wrap">
+      <h2>Slide overview — click to jump</h2>
+      <div class="grid" id="grid-inner"></div>
+    </div>
+  </div>
+
+  <div id="help" aria-hidden="true">
+    <div class="card">
+      <h2>Keyboard</h2>
+      <dl>
+        <dt>→ / ↓ / Space / PgDn / N</dt><dd>Next slide</dd>
+        <dt>← / ↑ / PgUp / P</dt><dd>Previous slide</dd>
+        <dt>Home / End</dt><dd>First / last slide</dd>
+        <dt>S</dt><dd>Toggle speaker notes</dd>
+        <dt>G</dt><dd>Toggle slide overview</dd>
+        <dt>?</dt><dd>Toggle this help</dd>
+        <dt>Esc</dt><dd>Close any overlay</dd>
+      </dl>
+      <div class="close-hint">Press Esc or ? to close</div>
+    </div>
+  </div>
+</div>
+
+<script>
+(function(){
+  "use strict";
+
+  // ---------- Scale the fixed 1280x720 canvas to the viewport ----------
+  var viewport = document.getElementById('viewport');
+  function fit(){
+    var k = Math.min(window.innerWidth/1280, window.innerHeight/720);
+    document.documentElement.style.setProperty('--k', k);
+  }
+  fit();
+  window.addEventListener('resize', fit);
+
+  var reduced = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+  // ---------- Slide registry ----------
+  var slides = Array.prototype.slice.call(document.querySelectorAll('.slide'));
+  var total = slides.length;
+  var current = 0;
+
+  var counterEl = document.getElementById('counter');
+  var progressFill = document.getElementById('progress-fill');
+  var notesText = document.getElementById('notes-text');
+  var notesDrawer = document.getElementById('notes');
+  var gridview = document.getElementById('gridview');
+  var gridInner = document.getElementById('grid-inner');
+  var help = document.getElementById('help');
+  var hardcut = document.getElementById('hardcut');
+
+  function pad(n){ return n < 10 ? '0'+n : ''+n; }
+
+  function render(prevIndex){
+    slides.forEach(function(s, i){
+      if(i === current){
+        s.classList.add('active');
+        s.setAttribute('aria-hidden', 'false');
+      } else {
+        s.classList.remove('active');
+        s.setAttribute('aria-hidden', 'true');
+      }
+    });
+    counterEl.textContent = pad(current+1) + ' / ' + pad(total);
+    var pct = ((current+1)/total*100).toFixed(2);
+    progressFill.style.width = pct + '%';
+    document.getElementById('progress').setAttribute('aria-valuenow', current+1);
+    if(notesDrawer.classList.contains('open')){
+      notesText.textContent = slides[current].getAttribute('data-notes') || '';
+    }
+    updateGridActive();
+  }
+
+  // The one signature hard cut: Problem (index 2) -> Solution (index 3), forward only.
+  function maybeHardCut(prevIndex, nextIndex){
+    if(prevIndex === 2 && nextIndex === 3 && !reduced){
+      hardcut.classList.remove('flash');
+      void hardcut.offsetWidth; // restart
+      hardcut.classList.add('flash');
+      setTimeout(function(){ hardcut.classList.remove('flash'); }, 720);
+    }
+  }
+
+  function goTo(n, pushHash){
+    n = Math.max(0, Math.min(total-1, n));
+    if(n === current) { if(pushHash !== false) location.hash = '#'+(n+1); return; }
+    var prev = current;
+    maybeHardCut(prev, n);
+    current = n;
+    render(prev);
+    if(pushHash !== false) location.hash = '#'+(current+1);
+  }
+
+  function next(){ goTo(current+1); }
+  function prev(){ goTo(current-1); }
+
+  // ---------- Hash sync ----------
+  function fromHash(){
+    var raw = parseInt((location.hash || '#1').replace('#',''), 10);
+    if(isNaN(raw)) raw = 1;
+    return Math.max(1, Math.min(total, raw)) - 1;
+  }
+  // If the hash was out of range (or otherwise malformed), fromHash() clamps
+  // the slide index silently — rewrite the address bar to match so a copied
+  // link never points at a bogus slide number. replaceState avoids adding a
+  // history entry for the correction.
+  function syncHashToClamp(n){
+    var wanted = '#'+(n+1);
+    if(location.hash !== wanted){
+      history.replaceState(null, '', wanted);
+    }
+  }
+  window.addEventListener('hashchange', function(){
+    var n = fromHash();
+    goTo(n, false);
+    syncHashToClamp(n);
+  });
+
+  // ---------- Keyboard ----------
+  window.addEventListener('keydown', function(e){
+    if(e.ctrlKey || e.altKey || e.metaKey) return;
+    var k = e.key;
+    if(k === 'ArrowRight' || k === 'ArrowDown' || k === ' ' || k === 'PageDown' || k === 'n' || k === 'N'){
+      e.preventDefault(); next();
+    } else if(k === 'ArrowLeft' || k === 'ArrowUp' || k === 'PageUp' || k === 'p' || k === 'P'){
+      e.preventDefault(); prev();
+    } else if(k === 'Home'){ e.preventDefault(); goTo(0); }
+    else if(k === 'End'){ e.preventDefault(); goTo(total-1); }
+    else if(k === 's' || k === 'S'){ toggleNotes(); }
+    else if(k === 'g' || k === 'G'){ toggleGrid(); }
+    else if(k === '?'){ toggleHelp(); }
+    else if(k === 'Escape'){ closeOverlays(); }
+  });
+
+  // ---------- Click zones ----------
+  document.getElementById('zone-prev').addEventListener('click', function(){ if(!anyOverlayOpen()) prev(); });
+  document.getElementById('zone-next').addEventListener('click', function(){ if(!anyOverlayOpen()) next(); });
+  document.getElementById('btn-prev').addEventListener('click', prev);
+  document.getElementById('btn-next').addEventListener('click', next);
+
+  // ---------- Speaker notes ----------
+  function toggleNotes(){
+    var open = notesDrawer.classList.toggle('open');
+    document.getElementById('btn-notes').setAttribute('aria-pressed', open ? 'true':'false');
+    notesDrawer.setAttribute('aria-hidden', open ? 'false':'true');
+    if(open){ notesText.textContent = slides[current].getAttribute('data-notes') || ''; }
+  }
+  document.getElementById('btn-notes').addEventListener('click', toggleNotes);
+
+  // ---------- Grid overview ----------
+  var groundClasses = ['gnd-a','gnd-b','gnd-app','gnd-lime'];
+  slides.forEach(function(s, i){
+    var gc = groundClasses.filter(function(c){ return s.classList.contains(c); })[0] || 'gnd-a';
+    var kicker = s.querySelector('.kicker');
+    var label = kicker ? kicker.textContent : ('Slide '+(i+1));
+    var btn = document.createElement('button');
+    btn.className = 'gthumb ' + gc;
+    btn.type = 'button';
+    btn.setAttribute('data-idx', i);
+    btn.setAttribute('aria-label', 'Go to ' + label);
+    btn.innerHTML = '<span class="n">'+pad(i+1)+'</span><span class="t">'+label.split('·')[1]?.trim()||label+'</span>';
+    btn.addEventListener('click', function(){ goTo(i); closeOverlays(); });
+    gridInner.appendChild(btn);
+  });
+  var gridThumbs = Array.prototype.slice.call(gridInner.querySelectorAll('.gthumb'));
+  function updateGridActive(){
+    gridThumbs.forEach(function(t,i){ t.classList.toggle('current', i===current); });
+  }
+  function toggleGrid(){
+    var open = gridview.classList.toggle('open');
+    document.getElementById('btn-grid').setAttribute('aria-pressed', open?'true':'false');
+    gridview.setAttribute('aria-hidden', open?'false':'true');
+    if(open){ help.classList.remove('open'); updateGridActive(); }
+  }
+  document.getElementById('btn-grid').addEventListener('click', toggleGrid);
+
+  // ---------- Help overlay ----------
+  function toggleHelp(){
+    var open = help.classList.toggle('open');
+    document.getElementById('btn-help').setAttribute('aria-pressed', open?'true':'false');
+    help.setAttribute('aria-hidden', open?'false':'true');
+    if(open){ gridview.classList.remove('open'); }
+  }
+  document.getElementById('btn-help').addEventListener('click', toggleHelp);
+
+  function anyOverlayOpen(){ return gridview.classList.contains('open') || help.classList.contains('open'); }
+  function closeOverlays(){
+    gridview.classList.remove('open'); gridview.setAttribute('aria-hidden','true');
+    document.getElementById('btn-grid').setAttribute('aria-pressed','false');
+    help.classList.remove('open'); help.setAttribute('aria-hidden','true');
+    document.getElementById('btn-help').setAttribute('aria-pressed','false');
+  }
+  gridview.addEventListener('click', function(e){ if(e.target === gridview) closeOverlays(); });
+  help.addEventListener('click', function(e){ if(e.target === help) closeOverlays(); });
+
+  // ---------- Init ----------
+  current = fromHash();
+  render(0);
+  syncHashToClamp(current);
+})();
+</script>

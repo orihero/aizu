@@ -1,0 +1,650 @@
+<title>AIZU — Pitch</title>
+<style>
+/*__AIZU_FONTS__*/
+
+/* ============================================================
+   AIZU · 9-slide pitch
+   Dark register, because the product itself is dark — the real
+   dashboard capture on slide 05 sits on the ground rather than
+   on a card, which is only possible if the deck is dark too.
+
+   Lime is signal, never decoration. On this ground it is the
+   only saturated colour, so at most two lime elements per slide.
+   ============================================================ */
+
+:root{
+  --ink:     #101014;
+  --surface: #17171d;
+  --raise:   #1d1d24;
+  --line:    #26262e;
+  --line-2:  #33333d;
+  --paper:   #f2f2f4;
+  --dim:     #a6a6b0;
+  --muted:   #7a7a86;
+  --faint:   #4e4e59;
+  --lime:    #d9f24f;
+
+  --W: 1280px; --H: 720px; --pad: 72px;
+  --sans: 'Inter Tight', ui-sans-serif, system-ui, sans-serif;
+  --mono: 'JetBrains Mono', ui-monospace, Menlo, monospace;
+}
+
+*{ box-sizing: border-box; }
+
+html, body{
+  margin:0; padding:0; background:#000; color: var(--paper);
+  font-family: var(--sans); -webkit-font-smoothing: antialiased; overflow: hidden;
+}
+
+#stage{ position: fixed; inset:0; display: grid; place-items: center; }
+#reel{ width: var(--W); height: var(--H); transform-origin: center; position: relative; }
+
+.slide{
+  position: absolute; inset:0; width: var(--W); height: var(--H);
+  background: var(--ink); padding: var(--pad) var(--pad) 62px;
+  display: none; overflow: hidden;
+}
+.slide.on{ display: flex; flex-direction: column; }
+
+/* ---- chrome ---- */
+.eyebrow{
+  font-family: var(--mono); font-size: 10.5px; font-weight: 500; letter-spacing: .18em;
+  text-transform: uppercase; color: var(--muted); display: flex; align-items: center; gap: 10px;
+}
+.eyebrow::before{ content:''; width: 20px; height: 3px; background: var(--lime); flex: none; }
+
+h1.t{
+  font-size: 52px; font-weight: 600; letter-spacing: -.03em; line-height: 1.03;
+  margin: 20px 0 0; max-width: 22ch; text-wrap: balance;
+}
+h1.t.w{ max-width: 30ch; }
+
+.body{ margin-top: 44px; flex: 1 1 auto; min-height: 0; }
+/* the body absorbs the slack the flex column hands it, so content sits
+   optically centred instead of stacking under the title */
+.body.two, .body.three, .body.four, .body.six{ align-content: center; }
+.body:not(.two):not(.three):not(.four):not(.six){
+  display: flex; flex-direction: column; justify-content: center;
+}
+
+.foot{
+  position: absolute; left: var(--pad); right: var(--pad); bottom: 26px;
+  display: flex; align-items: baseline; justify-content: space-between; gap: 30px;
+  border-top: 1px solid var(--line); padding-top: 11px;
+  font-family: var(--mono); font-size: 10px; letter-spacing: .12em;
+  text-transform: uppercase; color: var(--faint);
+}
+.foot .src{ text-transform: none; letter-spacing: .01em; color: var(--muted); line-height: 1.5; }
+
+.two{ display: grid; grid-template-columns: 1fr 1fr; gap: 48px; }
+.three{ display: grid; grid-template-columns: repeat(3,1fr); gap: 30px; }
+.four{ display: grid; grid-template-columns: repeat(4,1fr); gap: 20px; }
+.six{ display: grid; grid-template-columns: repeat(3,1fr); gap: 18px; }
+.grow{ flex: 1 1 auto; min-height: 0; }
+
+/* ---- stat ---- */
+.fig{
+  font-size: 104px; font-weight: 600; letter-spacing: -.05em; line-height: .9;
+  font-variant-numeric: tabular-nums;
+}
+.fig .u{ font-size: 40px; letter-spacing: -.02em; color: var(--muted); }
+.fig.lime{ color: var(--lime); }
+.cap{
+  font-size: 17px; line-height: 1.4; color: var(--dim); margin-top: 18px;
+  border-top: 1px solid var(--line-2); padding-top: 14px; max-width: 26ch;
+}
+.cap b{ color: var(--paper); font-weight: 500; }
+
+.kicker{
+  font-size: 22px; line-height: 1.45; color: var(--paper); font-weight: 500;
+  border-left: 3px solid var(--lime); padding-left: 18px; max-width: 54ch;
+}
+
+/* ---- lines / cards ---- */
+ul.lines{ list-style: none; margin: 0; padding: 0; }
+ul.lines li{
+  font-size: 21px; line-height: 1.4; color: var(--dim);
+  padding: 18px 0; border-top: 1px solid var(--line);
+  display: grid; grid-template-columns: 34px 1fr; gap: 4px;
+}
+ul.lines li:last-child{ border-bottom: 1px solid var(--line); }
+ul.lines li .n{ font-family: var(--mono); font-size: 10.5px; color: var(--faint); padding-top: 7px; letter-spacing: .1em; }
+ul.lines li b{ color: var(--paper); font-weight: 600; }
+
+.card{ background: var(--surface); border: 1px solid var(--line); border-radius: 3px; padding: 22px 20px; }
+.card .h{ font-family: var(--mono); font-size: 10px; letter-spacing: .16em; text-transform: uppercase; color: var(--muted); margin-bottom: 11px; }
+.card .k{ font-size: 20px; font-weight: 600; letter-spacing: -.02em; margin-bottom: 7px; }
+.card p{ margin:0; font-size: 15px; line-height: 1.45; color: var(--dim); }
+
+/* ---- table ---- */
+table.g{ width: 100%; border-collapse: collapse; }
+table.g th{
+  font-family: var(--mono); font-size: 10px; letter-spacing: .15em; text-transform: uppercase;
+  color: var(--muted); text-align: left; padding: 0 14px 11px 0; border-bottom: 1px solid var(--paper); font-weight: 500;
+}
+table.g td{ padding: 13px 14px 13px 0; border-bottom: 1px solid var(--line); font-size: 16px; color: var(--dim); }
+table.g td:first-child{ color: var(--paper); font-weight: 600; }
+table.g td.p{ font-family: var(--mono); font-size: 13.5px; color: var(--paper); white-space: nowrap; font-variant-numeric: tabular-nums; }
+table.g tr.us td{ background: rgba(217,242,79,.07); color: var(--paper); }
+table.g tr.us td:first-child{ color: var(--lime); }
+
+/* ---- logo ---- */
+.mark{ width: 46px; height: 46px; flex: none; }
+.wordmark{ display: flex; align-items: center; gap: 16px; }
+.wordmark .txt{ font-size: 34px; font-weight: 600; letter-spacing: .01em; }
+.wordmark .jp{ font-size: 20px; color: var(--lime); letter-spacing: .08em; }
+
+.titlegrid{ height: 100%; display: grid; grid-template-rows: auto 1fr auto; }
+.meta{
+  display: flex; gap: 56px; border-top: 1px solid var(--line); padding-top: 18px;
+  font-family: var(--mono); font-size: 11px; letter-spacing: .1em; text-transform: uppercase; color: var(--muted);
+}
+.meta b{ display: block; color: var(--paper); font-weight: 500; margin-top: 6px; letter-spacing: .05em; }
+
+/* ---- screenshot ---- */
+.shot{
+  border: 1px solid var(--line-2); border-radius: 4px; overflow: hidden;
+  background: var(--surface); line-height: 0; box-shadow: 0 24px 60px rgba(0,0,0,.5);
+}
+.shot img{ width: 100%; height: auto; display: block; }
+
+/* ---- market bars ---- */
+/* Bars are to scale against TAM, which is the whole point of the slide:
+   SAM is half of it, and the 3-5 year target is a genuine sliver. */
+.mkt{ display: grid; gap: 22px; }
+.mkt .row{ display: grid; grid-template-columns: 74px 1fr; gap: 22px; align-items: center; }
+.mkt .lbl{ font-family: var(--mono); font-size: 12px; letter-spacing: .12em; color: var(--muted); }
+.mkt .track{ display: flex; align-items: center; gap: 20px; }
+.mkt .bar{
+  height: 62px; background: var(--raise); border: 1px solid var(--line);
+  display: flex; align-items: center; padding: 0 20px; flex: none;
+}
+.mkt .bar .v{ font-size: 30px; font-weight: 600; letter-spacing: -.03em; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.mkt .bar .d{ font-size: 14px; color: var(--muted); margin-left: 16px; }
+.mkt .bar.tam{ width: 100%; }
+.mkt .bar.sam{ width: 50%; }
+.mkt .bar.som{ width: 14px; padding: 0; background: var(--lime); border-color: var(--lime); }
+.mkt .out{ font-size: 19px; color: var(--dim); white-space: nowrap; }
+.mkt .out b{ color: var(--paper); font-weight: 600; letter-spacing: -.02em; font-size: 26px; font-variant-numeric: tabular-nums; }
+
+/* ---- team ---- */
+.person{ text-align: left; }
+.person .av{
+  width: 88px; height: 88px; border-radius: 50%; background: var(--raise);
+  border: 1px solid var(--line-2); margin-bottom: 16px;
+  display: grid; place-items: center; font-family: var(--mono); font-size: 11px; color: var(--faint);
+}
+.person .nm{ font-size: 19px; font-weight: 600; letter-spacing: -.01em; }
+.person .ro{ font-family: var(--mono); font-size: 11px; letter-spacing: .1em; text-transform: uppercase; color: var(--lime); margin: 7px 0 10px; }
+.person p{ margin: 0; font-size: 14.5px; line-height: 1.45; color: var(--muted); }
+
+/* ---- variant badge ---- */
+.slide.alt{ background: #0c0c10; }
+.vbadge{
+  position: absolute; top: 26px; right: var(--pad);
+  font-family: var(--mono); font-size: 10px; letter-spacing: .18em; text-transform: uppercase;
+  color: var(--ink); background: var(--lime); padding: 5px 11px; border-radius: 2px;
+}
+
+/* ---- shell ---- */
+#bar{ position: fixed; left:0; top:0; height: 2px; background: var(--lime); z-index: 45; width: 0; transition: width .28s cubic-bezier(.16,1,.3,1); }
+#hud{ position: fixed; right: 16px; bottom: 12px; z-index: 40; font-family: var(--mono); font-size: 10.5px; letter-spacing: .12em; color: #3a3a44; }
+#notes{
+  position: fixed; left:0; right:0; bottom:0; z-index: 50; background: #16161c; border-top: 1px solid var(--line);
+  padding: 15px 24px; display: none; font-size: 14px; line-height: 1.5; color: var(--dim); max-height: 30vh; overflow: auto;
+}
+#notes.on{ display: block; }
+#notes b{ font-family: var(--mono); font-size: 10px; letter-spacing: .16em; text-transform: uppercase; color: var(--lime); display: block; margin-bottom: 6px; font-weight: 500; }
+#ov{ position: fixed; inset:0; background: rgba(6,6,9,.97); z-index: 60; display: none; padding: 36px; overflow: auto; }
+#ov.on{ display: block; }
+#ov h4{ font-family: var(--mono); font-size: 11px; letter-spacing: .18em; text-transform: uppercase; color: var(--muted); margin: 0 0 20px; font-weight: 500; }
+#ovg{ display: grid; grid-template-columns: repeat(6,1fr); gap: 13px; }
+.thumb{ aspect-ratio: 16/9; background: var(--surface); border: 1px solid var(--line); border-radius: 2px; padding: 10px; cursor: pointer; position: relative; display: flex; align-items: flex-end; }
+.thumb span{ font-size: 11px; line-height: 1.25; font-weight: 600; letter-spacing: -.01em; color: var(--paper); }
+.thumb i{ position: absolute; top: 8px; left: 10px; font-style: normal; font-family: var(--mono); font-size: 9px; color: var(--faint); letter-spacing: .1em; }
+.thumb.v{ border-style: dashed; }
+.thumb.cur{ border-color: var(--lime); box-shadow: 0 0 0 1px var(--lime); }
+#help{ position: fixed; inset:0; background: rgba(6,6,9,.97); z-index: 70; display: none; place-items: center; }
+#help.on{ display: grid; }
+#help div{ font-family: var(--mono); font-size: 13px; line-height: 2.1; color: var(--dim); }
+#help kbd{ background: var(--raise); border: 1px solid var(--line-2); border-radius: 3px; padding: 2px 8px; color: var(--lime); margin-right: 12px; min-width: 74px; display: inline-block; text-align: center; }
+
+@media print{
+  @page{ size: 13.333in 7.5in; margin: 0; }
+  html, body{ background:#fff; overflow: visible; }
+  #stage{ position: static; display: block; }
+  #reel{ transform: none !important; width: auto; height: auto; }
+  #ov, #notes, #hud, #bar, #help{ display: none !important; }
+  .slide{
+    position: relative !important; display: flex !important; flex-direction: column;
+    width: 1280px; height: 720px; break-after: page; page-break-after: always;
+    -webkit-print-color-adjust: exact; print-color-adjust: exact;
+  }
+  .slide:last-child{ break-after: auto; }
+}
+</style>
+
+<svg width="0" height="0" aria-hidden="true" focusable="false" style="position:absolute">
+  <symbol id="aizu-mark" viewBox="0 0 100 100">
+    <circle cx="40" cy="60" r="16" fill="#d9f24f"/>
+    <path d="M47 31 A31 31 0 0 1 71 72" fill="none" stroke="#f2f2f4" stroke-width="8.5" stroke-linecap="round"/>
+  </symbol>
+</svg>
+
+<div id="bar"></div>
+<div id="stage"><div id="reel">
+
+<!-- ══ 01 · TITLE ═══════════════════════════════════════════ -->
+<section class="slide on" data-t="AIZU"
+  data-n="Name, mark, one line. Say the line out loud — 'customers who already asked' — and move on. Do not explain the product yet.">
+  <div class="titlegrid">
+    <div class="wordmark">
+      <svg class="mark" viewBox="0 0 100 100" aria-hidden="true"><use href="#aizu-mark"/></svg>
+      <span class="txt">AIZU</span><span class="jp">合図</span>
+    </div>
+    <div style="align-self:center">
+      <p style="font-size:96px;font-weight:600;letter-spacing:-.05em;line-height:.98;margin:0;max-width:16ch">
+        Customers who<br>already <span style="color:var(--lime)">asked.</span>
+      </p>
+    </div>
+    <div class="meta">
+      <div>Applicant<b>IT Park Uzbekistan</b></div>
+      <div>Built in<b>Tashkent</b></div>
+      <div>Stage<b>Pre-revenue · product shipped</b></div>
+    </div>
+  </div>
+</section>
+
+<!-- ══ 02 · PROBLEM ═════════════════════════════════════════ -->
+<section class="slide" data-t="Problem"
+  data-n="Two numbers, two beats. First: finding customers is the hardest thing a small business does, and it got harder. Second: the buyers moved to social platforms. Put those together and the problem is not effort, it is that nobody is reading the place where demand is now public.">
+  <div class="eyebrow">The problem</div>
+  <h1 class="t w">Finding customers is the hardest problem</h1>
+  <div class="body two">
+    <div>
+      <div class="fig">57<span class="u">%</span></div>
+      <div class="cap">of small businesses call <b>reaching customers</b> their top challenge — up from 53% a year earlier</div>
+    </div>
+    <div>
+      <div class="fig lime">41<span class="u">%</span></div>
+      <div class="cap">of Gen&nbsp;Z now <b>search social first</b> — ahead of Google at 32%</div>
+    </div>
+  </div>
+  <p class="kicker">The buyers moved. The tools did not.</p>
+  <div class="foot"><span class="src">Federal Reserve Banks, 2024 Small Business Credit Survey · Sprout Social / Glimpse consumer survey, 2025 (n=2,280)</span><span>02</span></div>
+</section>
+
+<!-- ══ 03 · SOLUTION ════════════════════════════════════════ -->
+<section class="slide" data-t="Solution"
+  data-n="Three lines, and the third is the product. Emphasise that nothing is sent on the customer's behalf and no list is bought — every lead is a person who already asked, in public, in their own words.">
+  <div class="eyebrow">The solution</div>
+  <h1 class="t w">We read what buyers say in public</h1>
+  <div class="body">
+    <ul class="lines">
+      <li><span class="n">01</span><span><b>One brief.</b> You describe what you sell and who you serve. Once.</span></li>
+      <li><span class="n">02</span><span><b>Six platforms.</b> AIZU reads public posts and comments, and scores intent with AI.</span></li>
+      <li><span class="n">03</span><span><b>One short list.</b> Qualified buyers arrive in a single inbox, every week.</span></li>
+    </ul>
+  </div>
+  <p class="kicker">No lists bought. No strangers messaged. They asked first.</p>
+  <div class="foot"><span class="src">Instagram · LinkedIn · X · Reddit · YouTube · Telegram — all six engines shipped</span><span>03</span></div>
+</section>
+
+<!-- ══ 04 · MARKET ══════════════════════════════════════════ -->
+<section class="slide" data-t="Market"
+  data-n="Top down, three layers. Be ready for the obvious question — how did you get the SAM. Answer honestly: the ten billion is a modelled share, not a research-house figure. The twenty billion is three verified 2025 reports added together. Volunteering that boundary is what makes the number credible.">
+  <div class="eyebrow">Market opportunity</div>
+  <h1 class="t w">A $20B market, and we need a sliver</h1>
+  <div class="body">
+    <div class="mkt">
+      <div class="row">
+        <span class="lbl">TAM</span>
+        <div class="track"><div class="bar tam"><span class="v">$19.9B</span><span class="d">sales intelligence + lead generation + social monitoring</span></div></div>
+      </div>
+      <div class="row">
+        <span class="lbl">SAM</span>
+        <div class="track"><div class="bar sam"><span class="v">$9.9B</span><span class="d">social-native, priced for SMBs and agencies</span></div></div>
+      </div>
+      <div class="row">
+        <span class="lbl">SOM</span>
+        <div class="track"><div class="bar som"></div><span class="out"><b>$10–50M</b> &nbsp;in 3–5 years — 0.1–0.5% of SAM</span></div>
+      </div>
+    </div>
+  </div>
+  <div class="foot"><span class="src">TAM: Fortune Business Insights (sales intelligence $4.85B; social monitoring $6.30B), 360iResearch (lead generation $8.76B), all 2025. SAM applies modelled shares — 30% of lead-gen, 20% of sales-intel — not a published submarket figure.</span><span>04</span></div>
+</section>
+
+<!-- ══ 05 · APP (screenshot) ════════════════════════════════ -->
+<section class="slide" data-t="App overview"
+  data-n="This is the real panel, captured from the running application with seeded demo data. Say 'demo data' out loud — the caption says it, and saying it too is what buys you trust for everything else in the deck. Offer to open it live.">
+  <div class="eyebrow">The product</div>
+  <h1 class="t w">Shipped, and running today</h1>
+  <div class="body" style="margin-top:30px;display:grid;grid-template-columns:1.9fr 1fr;gap:38px;align-items:center">
+    <div class="shot"><img src="__ASSET:dashboard__" alt="The AIZU dashboard: leads this week, cost per lead, leads by channel across six platforms, and the capture funnel."></div>
+    <div style="display:grid;gap:24px">
+      <div class="card" style="padding:18px 18px">
+        <div class="h">Built</div>
+        <div class="k">6 platforms</div>
+        <p>One inbox for all of them.</p>
+      </div>
+      <div class="card" style="padding:18px 18px">
+        <div class="h">Built</div>
+        <div class="k">26 screens</div>
+        <p>Campaigns, leads, reports, spend, team, billing.</p>
+      </div>
+      <div class="card" style="padding:18px 18px">
+        <div class="h">Built</div>
+        <div class="k">1,661 tests</div>
+        <p>Passing on every change.</p>
+      </div>
+    </div>
+  </div>
+  <div class="foot"><span class="src">Real capture of the shipped admin panel, running with seeded demo data — not live customer numbers.</span><span>05</span></div>
+</section>
+
+<!-- ══ 06 · BUSINESS MODEL ══════════════════════════════════ -->
+<section class="slide" data-t="Business model"
+  data-n="Subscription, priced by how many qualified leads a month the customer can absorb. Free tier to remove the decision, self-serve to $149, sales-led above that. Everything on this slide is live in the billing engine today, wired to a real payment provider.">
+  <div class="eyebrow">Business model</div>
+  <h1 class="t w">Pay for customers, not software</h1>
+  <div class="body four">
+    <div class="card">
+      <div class="h">Free</div>
+      <div class="fig" style="font-size:44px">$0</div>
+      <p style="margin-top:12px">10 leads a month.<br>No card needed.</p>
+    </div>
+    <div class="card" style="border-color:var(--lime)">
+      <div class="h" style="color:var(--lime)">Starter · most popular</div>
+      <div class="fig" style="font-size:44px">$24.99</div>
+      <p style="margin-top:12px">250 leads a month.<br>$249 billed yearly.</p>
+    </div>
+    <div class="card">
+      <div class="h">Pro</div>
+      <div class="fig" style="font-size:44px">$149</div>
+      <p style="margin-top:12px">2,000 leads a month.<br>$1,490 billed yearly.</p>
+    </div>
+    <div class="card">
+      <div class="h">Scale</div>
+      <div class="fig" style="font-size:44px">Custom</div>
+      <p style="margin-top:12px">Your number, agreed up front.</p>
+    </div>
+  </div>
+  <p class="kicker">Revenue scales with lead volume, not seats. Billing is live, not planned.</p>
+  <div class="foot"><span class="src">Tiers as implemented in engine/aizu/billing.py and shipped on aizu.uz. Checkout runs through Polar.</span><span>06</span></div>
+</section>
+
+<!-- ══ 07 · COMPETITION ═════════════════════════════════════ -->
+<section class="slide" data-t="Competition"
+  data-n="Every one of these is a real company with a real published price. The point of the slide is the last column: each of them does one part. Nobody reads the actual comment, across six platforms, and scores it into a delivered lead. If asked who worries you — say Clay, honestly, because it has the pieces to assemble this.">
+  <div class="eyebrow">Competition</div>
+  <h1 class="t w">Everyone counts mentions. Nobody reads them.</h1>
+  <div class="body">
+    <table class="g">
+      <tr><th style="width:20%">Product</th><th style="width:19%">Price</th><th>The gap</th></tr>
+      <tr><td>Apollo.io</td><td class="p">$49–119 /user/mo</td><td>Finds who someone is — never reads what they said</td></tr>
+      <tr><td>Brand24</td><td class="p">$199–399 /mo</td><td>Counts and tags mentions; no intent scoring</td></tr>
+      <tr><td>Sprout Social</td><td class="p">$79–299 /seat/mo</td><td>Built for your own posts, not strangers' comments</td></tr>
+      <tr><td>Syften</td><td class="p">$30–120 /mo</td><td>Keyword alerts only; no AI qualification</td></tr>
+      <tr><td>Clay</td><td class="p">$167–446 /mo</td><td>A toolkit to build it yourself, not a product</td></tr>
+      <tr class="us"><td>AIZU</td><td class="p">$0–149 /mo</td><td>None — reads the comment itself, across six platforms</td></tr>
+    </table>
+  </div>
+  <div class="foot"><span class="src">Prices read from each vendor's public pricing page, August 2026. Honest risk: Clay could package this workflow — its parts already exist.</span><span>07</span></div>
+</section>
+
+<!-- ══ 08 · TEAM ════════════════════════════════════════════ -->
+<section class="slide" data-t="Team"
+  data-n="Placeholder — replace with the real team. Keep one line each; the committee reads faces and roles, not biographies.">
+  <div class="eyebrow">Team</div>
+  <h1 class="t w">Who is building it</h1>
+  <div class="body three" style="margin-top:38px">
+    <div class="person">
+      <div class="av">PHOTO</div>
+      <div class="nm">[Full name]</div>
+      <div class="ro">Founder · Engineering</div>
+      <p>[One line: the thing they built before this.]</p>
+    </div>
+    <div class="person">
+      <div class="av">PHOTO</div>
+      <div class="nm">[Full name]</div>
+      <div class="ro">[Role]</div>
+      <p>[One line: the credential that matters here.]</p>
+    </div>
+    <div class="person">
+      <div class="av">PHOTO</div>
+      <div class="nm">[Full name]</div>
+      <div class="ro">[Role]</div>
+      <p>[One line: the credential that matters here.]</p>
+    </div>
+  </div>
+  <div class="foot"><span class="src">Placeholder — replace with real names, photographs and one line each.</span><span>08</span></div>
+</section>
+
+<!-- ══ 09 · THANKS ══════════════════════════════════════════ -->
+<section class="slide" data-t="Thank you"
+  data-n="Stop. Offer the live demonstration — it runs on this laptop and takes under two minutes.">
+  <div class="titlegrid">
+    <div class="wordmark">
+      <svg class="mark" viewBox="0 0 100 100" aria-hidden="true"><use href="#aizu-mark"/></svg>
+      <span class="txt">AIZU</span><span class="jp">合図</span>
+    </div>
+    <div style="align-self:center">
+      <p style="font-size:88px;font-weight:600;letter-spacing:-.045em;line-height:1;margin:0">
+        Thank you.<br><span style="color:var(--lime)">Questions?</span>
+      </p>
+      <p style="font-size:19px;color:var(--dim);margin:32px 0 0;max-width:44ch;line-height:1.5">
+        A live run can be demonstrated on this laptop in under two minutes.
+      </p>
+    </div>
+    <div class="meta">
+      <div>Contact<b>[NAME] · [EMAIL]</b></div>
+      <div>Phone<b>[PHONE]</b></div>
+      <div>Product<b>aizu.uz</b></div>
+    </div>
+  </div>
+</section>
+
+<!-- ══════════ VARIANTS — not part of the nine ══════════════ -->
+
+<!-- ── 02 · variant A ── -->
+<section class="slide alt" data-t="Problem · variant A" data-v="1"
+  data-n="VARIANT for slide 02. Framing: outbound is broken. Strongest if the committee has heard many marketing pitches — it attacks the incumbent method rather than describing a trend.">
+  <div class="vbadge">Variant · slide 02</div>
+  <div class="eyebrow">The problem</div>
+  <h1 class="t w">Cold outreach barely works anymore</h1>
+  <div class="body two">
+    <div>
+      <div class="fig lime">0.45<span class="u">%</span></div>
+      <div class="cap">reply rate on cold email, measured across <b>7.5 million</b> sent messages</div>
+    </div>
+    <div>
+      <div class="fig">59<span class="u">%</span></div>
+      <div class="cap">of marketing leaders say their <b>budget cannot cover</b> their own strategy</div>
+    </div>
+  </div>
+  <p class="kicker">Paying to interrupt strangers stopped working.</p>
+  <div class="foot"><span class="src">Belkins B2B cold email study, 2025 (n=7.5M emails) · Gartner 2025 CMO Spend Survey</span><span>02·A</span></div>
+</section>
+
+<!-- ── 02 · variant B ── -->
+<section class="slide alt" data-t="Problem · variant B" data-v="1"
+  data-n="VARIANT for slide 02. Framing: the audience moved. Strongest if you want the deck to feel forward-looking rather than pain-focused. Weaker on urgency.">
+  <div class="vbadge">Variant · slide 02</div>
+  <div class="eyebrow">The problem</div>
+  <h1 class="t w">Your buyers search social, not Google</h1>
+  <div class="body two">
+    <div>
+      <div class="fig lime">90<span class="u">%</span></div>
+      <div class="cap">of Gen&nbsp;Z say social content <b>shaped a purchase</b> they made in the last six months</div>
+    </div>
+    <div>
+      <div class="fig">41<span class="u">%</span></div>
+      <div class="cap">now <b>search social first</b> for information — Google trails at 32%</div>
+    </div>
+  </div>
+  <p class="kicker">Demand became public. Nobody is reading it.</p>
+  <div class="foot"><span class="src">Sprout Social / Glimpse consumer survey, 2025 (n=2,280)</span><span>02·B</span></div>
+</section>
+
+<!-- ── 03 · variant A ── -->
+<section class="slide alt" data-t="Solution · variant A" data-v="1"
+  data-n="VARIANT for slide 03. Framing: positioning by contrast. Use this if slide 02 is the cold-outreach variant, because it answers it directly.">
+  <div class="vbadge">Variant · slide 03</div>
+  <div class="eyebrow">The solution</div>
+  <h1 class="t w">Answer. Don't interrupt.</h1>
+  <div class="body three">
+    <div class="card">
+      <div class="h">Advertising</div>
+      <div class="k">Interrupts</div>
+      <p>Pays to reach people who were doing something else.</p>
+    </div>
+    <div class="card">
+      <div class="h">Cold outreach</div>
+      <div class="k">Guesses</div>
+      <p>Messages strangers from a bought list, and hopes.</p>
+    </div>
+    <div class="card" style="border-color:var(--lime)">
+      <div class="h" style="color:var(--lime)">AIZU</div>
+      <div class="k">Answers</div>
+      <p>Replies to a person who publicly asked, in their own words.</p>
+    </div>
+  </div>
+  <p class="kicker">You are not interrupting anyone. You are answering.</p>
+  <div class="foot"><span class="src"></span><span>03·A</span></div>
+</section>
+
+<!-- ── 03 · variant B ── -->
+<section class="slide alt" data-t="Solution · variant B" data-v="1"
+  data-n="VARIANT for slide 03. Framing: the mechanism, drawn. Use this if the committee is technical and wants to see the funnel rather than read claims.">
+  <div class="vbadge">Variant · slide 03</div>
+  <div class="eyebrow">The solution</div>
+  <h1 class="t w">Six feeds in. One short list out.</h1>
+  <div class="body" style="display:grid;grid-template-columns:1fr auto 1fr auto 1fr;gap:26px;align-items:center;align-content:center">
+    <div class="six" style="grid-template-columns:1fr 1fr">
+      <div class="card" style="padding:13px 14px"><div class="k" style="font-size:15px;margin:0">Instagram</div></div>
+      <div class="card" style="padding:13px 14px"><div class="k" style="font-size:15px;margin:0">LinkedIn</div></div>
+      <div class="card" style="padding:13px 14px"><div class="k" style="font-size:15px;margin:0">X</div></div>
+      <div class="card" style="padding:13px 14px"><div class="k" style="font-size:15px;margin:0">Reddit</div></div>
+      <div class="card" style="padding:13px 14px"><div class="k" style="font-size:15px;margin:0">YouTube</div></div>
+      <div class="card" style="padding:13px 14px"><div class="k" style="font-size:15px;margin:0">Telegram</div></div>
+    </div>
+    <div style="font-family:var(--mono);font-size:22px;color:var(--faint)">→</div>
+    <div class="card" style="border-color:var(--line-2)">
+      <div class="h">Two-stage AI</div>
+      <div class="k">Score the post.<br>Then the comment.</div>
+      <p>Is this on topic — and is this commenter a buyer, not a seller?</p>
+    </div>
+    <div style="font-family:var(--mono);font-size:22px;color:var(--faint)">→</div>
+    <div class="card" style="border-color:var(--lime)">
+      <div class="h" style="color:var(--lime)">Delivered</div>
+      <div class="k">Qualified leads</div>
+      <p>Handle, what they said, when, and the fields you asked for.</p>
+    </div>
+  </div>
+  <div class="foot"><span class="src">All six engines shipped. Five of six are read-only.</span><span>03·B</span></div>
+</section>
+
+<!-- ── 05 · variant (no screenshot) ── -->
+<section class="slide alt" data-t="App · variant (no shot)" data-v="1"
+  data-n="VARIANT for slide 05. Use if you would rather not show demo data, or if the room's projector will crush the dark screenshot. Same claim, no image.">
+  <div class="vbadge">Variant · slide 05</div>
+  <div class="eyebrow">The product</div>
+  <h1 class="t w">Shipped, and running today</h1>
+  <div class="body four">
+    <div>
+      <div class="fig">6</div>
+      <div class="cap">platform engines, all running end to end</div>
+    </div>
+    <div>
+      <div class="fig">26</div>
+      <div class="cap">screens: campaigns, leads, reports, spend, team, billing</div>
+    </div>
+    <div>
+      <div class="fig lime">1,661</div>
+      <div class="cap">automated tests, passing on every change</div>
+    </div>
+    <div>
+      <div class="fig">4</div>
+      <div class="cap">applications — panel, engine, worker fleet, desktop</div>
+    </div>
+  </div>
+  <p class="kicker">Not a prototype. Every number here is counted from the codebase.</p>
+  <div class="foot"><span class="src">Counted from the repository, August 2026. Live demonstration available on request.</span><span>05·B</span></div>
+</section>
+
+</div></div>
+
+<div id="notes"></div>
+<div id="hud"></div>
+<div id="ov"><h4>Overview — click to jump · dashed = variant · Esc to close</h4><div id="ovg"></div></div>
+<div id="help"><div>
+  <div><kbd>→ / ␣</kbd> next</div>
+  <div><kbd>←</kbd> previous</div>
+  <div><kbd>G</kbd> overview</div>
+  <div><kbd>S</kbd> speaker notes</div>
+  <div><kbd>F</kbd> fullscreen</div>
+  <div><kbd>Ctrl+P</kbd> export PDF</div>
+  <div><kbd>Esc</kbd> close · <kbd>?</kbd> keys</div>
+</div></div>
+
+<script>
+(function(){
+  var reel = document.getElementById('reel');
+  var slides = Array.prototype.slice.call(reel.querySelectorAll('.slide'));
+  var notes = document.getElementById('notes'), hud = document.getElementById('hud');
+  var bar = document.getElementById('bar'), ov = document.getElementById('ov');
+  var ovg = document.getElementById('ovg'), help = document.getElementById('help');
+  var i = 0, showNotes = false;
+  var main = slides.filter(function(s){ return !s.dataset.v; }).length;
+
+  function fit(){
+    var s = Math.min((innerWidth - 52)/1280, (innerHeight - 52)/720);
+    reel.style.transform = 'scale(' + s + ')';
+  }
+
+  function render(){
+    slides.forEach(function(s, k){ s.classList.toggle('on', k === i); });
+    hud.textContent = (i < main ? String(i+1).padStart(2,'0') + ' / ' + main : 'VARIANT');
+    bar.style.width = (Math.min(i+1, main)/main*100) + '%';
+    notes.innerHTML = '<b>' + (slides[i].dataset.t || '') + '</b>' + (slides[i].dataset.n || '');
+    Array.prototype.forEach.call(ovg.children, function(t, k){ t.classList.toggle('cur', k === i); });
+    if (location.hash !== '#' + (i+1)) history.replaceState(null, '', '#' + (i+1));
+  }
+
+  function go(n){ i = Math.max(0, Math.min(slides.length-1, n)); render(); }
+
+  slides.forEach(function(s, k){
+    var t = document.createElement('div');
+    t.className = 'thumb' + (s.dataset.v ? ' v' : '');
+    t.innerHTML = '<i>' + (s.dataset.v ? 'ALT' : String(k+1).padStart(2,'0')) + '</i><span>' + (s.dataset.t || '') + '</span>';
+    t.onclick = function(){ ov.classList.remove('on'); go(k); };
+    ovg.appendChild(t);
+  });
+
+  addEventListener('keydown', function(e){
+    var k = e.key;
+    if (k === 'Escape'){ ov.classList.remove('on'); help.classList.remove('on'); return; }
+    if (k === '?'){ help.classList.toggle('on'); return; }
+    if (k === 'g' || k === 'G'){ help.classList.remove('on'); ov.classList.toggle('on'); return; }
+    if (k === 's' || k === 'S'){ showNotes = !showNotes; notes.classList.toggle('on', showNotes); return; }
+    if (k === 'f' || k === 'F'){
+      if (document.fullscreenElement) document.exitFullscreen(); else document.documentElement.requestFullscreen();
+      return;
+    }
+    if (k === 'ArrowRight' || k === 'PageDown' || k === ' '){ e.preventDefault(); go(i+1); }
+    else if (k === 'ArrowLeft' || k === 'PageUp'){ e.preventDefault(); go(i-1); }
+    else if (k === 'Home'){ go(0); }
+    else if (k === 'End'){ go(main-1); }
+  });
+
+  addEventListener('click', function(e){
+    if (ov.classList.contains('on') || help.classList.contains('on')) return;
+    if (e.clientX < innerWidth * 0.22) go(i-1); else go(i+1);
+  });
+
+  addEventListener('resize', fit);
+  fit();
+  var start = parseInt((location.hash || '').slice(1), 10);
+  go(isNaN(start) ? 0 : start - 1);
+})();
+</script>

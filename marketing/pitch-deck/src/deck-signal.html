@@ -1,0 +1,1349 @@
+<meta charset="utf-8">
+<title>AIZU — Pitch Deck (Signal)</title>
+<meta name="description" content="AIZU pitch deck: dark product/data register, 17 slides, bento composition matching the shipped landing.">
+<style>
+/*__AIZU_FONTS__*/
+
+/* ==========================================================================
+   AIZU PITCH DECK — "Signal" (dark product/data register)
+   One 1280x720 logical canvas per slide, scaled to fit the viewport via a
+   single --k transform (see JS). Type scale is fixed in px and NEVER
+   reflows — everything below reads off the tokens in :root.
+   ========================================================================== */
+
+*, *::before, *::after { box-sizing: border-box; }
+html, body { height: 100%; margin: 0; }
+body {
+  background: var(--ground);
+  color: var(--paper);
+  font-family: var(--font-display);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  overflow: hidden;
+}
+button { font: inherit; color: inherit; background: none; border: 0; cursor: pointer; padding: 0; }
+svg { display: block; }
+table { border-collapse: collapse; width: 100%; }
+
+:root {
+  /* ---- AIZU palette (verbatim from admin-panel tokens.css) ---- */
+  --ground:   #16161a;
+  --ground-2: #1b1b20;
+  --ground-3: #202026;
+  --ground-4: #2a2a32;
+  --paper:    #f2f2f4;
+  --paper-2:  #dcdce1;
+  --grey-1:   #9a9aa2; /* the only grey ever used as text — AA on ground */
+  --grey-3:   #43434c; /* borders / decorative only */
+  --lime:     #d9f24f;
+  --lime-hi:  #e4f77b;
+  --lime-lo:  #c8e337;
+  --line:     #2a2a30;
+  --panel:    #1e1e25; /* raised tile fill */
+
+  --r-panel: 23px;
+  --r-card:  17px;
+  --r-chip:  11px;
+  --r-pill:  999px;
+
+  --font-display: 'Inter Tight', system-ui, -apple-system, 'Segoe UI', sans-serif;
+  --font-mono:    'JetBrains Mono', ui-monospace, 'SFMono-Regular', Consolas, monospace;
+
+  /* ---- type scale — every size in the deck is one of these steps ---- */
+  --fs-cover:    150px; /* cover wordmark only */
+  --fs-jumbo:    104px; /* single hero figure — the Ask number */
+  --fs-h1:        44px; /* slide headline */
+  --fs-h2:        20px; /* slide sub-headline */
+  --fs-stat-lg:   58px; /* large in-tile stat */
+  --fs-stat-md:   32px; /* medium in-tile stat */
+  --fs-body:      16px; /* body copy / list items */
+  --fs-small:     13px; /* table cells, dense captions */
+  --fs-label:     11px; /* mono uppercase tracked labels/kickers */
+  --fs-micro:     10px; /* footnote / mock chip */
+
+  --k: 1; /* recomputed on resize by JS: min(vw/1280, vh/720) */
+}
+
+/* ---------- stage / scaling shell ---------- */
+#viewport {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--ground);
+}
+#deck {
+  position: relative;
+  width: 1280px;
+  height: 720px;
+  transform: scale(var(--k));
+  transform-origin: center center;
+  box-shadow: 0 50px 140px rgba(0,0,0,.55);
+  flex: none;
+}
+.slide {
+  position: absolute;
+  inset: 0;
+  width: 1280px;
+  height: 720px;
+  opacity: 0;
+  visibility: hidden;
+  transition: opacity .32s ease;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+.slide.is-active { opacity: 1; visibility: visible; }
+/* alternating ground bands across the deck, per the landing's section rhythm */
+.slide:nth-of-type(odd)  { background: var(--ground); }
+.slide:nth-of-type(even) { background: var(--ground-2); }
+@media (prefers-reduced-motion: reduce) {
+  .slide { transition: none; }
+}
+
+/* ---------- shared frame: kicker + headline + sub, identical position on every slide ---------- */
+.frame { display: flex; flex-direction: column; height: 100%; }
+.frame__head { flex: 0 0 auto; padding: 56px 64px 0; }
+.frame__body { flex: 1 1 auto; padding: 26px 64px 0; position: relative; min-height: 0; }
+.kicker {
+  font-family: var(--font-mono);
+  font-size: var(--fs-label);
+  letter-spacing: .16em;
+  text-transform: uppercase;
+  color: var(--grey-1);
+  margin: 0 0 16px;
+}
+.headline {
+  font-family: var(--font-display);
+  font-weight: 700;
+  font-size: var(--fs-h1);
+  line-height: 1.08;
+  letter-spacing: -.01em;
+  color: var(--paper);
+  max-width: 1010px;
+  margin: 0;
+}
+.sub {
+  font-family: var(--font-display);
+  font-weight: 500;
+  font-size: var(--fs-h2);
+  line-height: 1.4;
+  color: var(--grey-1);
+  max-width: 800px;
+  margin: 14px 0 0;
+}
+
+/* ---------- reusable surfaces ---------- */
+.tile  { background: var(--panel); border: 1px solid var(--line); border-radius: var(--r-panel); }
+.card  { background: var(--panel); border: 1px solid var(--line); border-radius: var(--r-card); }
+.chip  { background: var(--ground-3); border: 1px solid var(--line); border-radius: var(--r-chip); }
+.pill  { background: var(--ground-3); border: 1px solid var(--line); border-radius: var(--r-pill); }
+
+.mock-chip {
+  position: absolute;
+  left: 64px;
+  bottom: 32px;
+  font-family: var(--font-mono);
+  font-size: var(--fs-micro);
+  letter-spacing: .06em;
+  color: var(--grey-1);
+  background: var(--ground-3);
+  border: 1px solid var(--line);
+  border-radius: var(--r-pill);
+  padding: 6px 14px;
+  white-space: nowrap;
+}
+
+.lime  { color: var(--lime); }
+.mono  { font-family: var(--font-mono); }
+
+/* ============================== SLIDE 01 — COVER ============================== */
+.s01 .cover {
+  flex: 1 1 auto;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  padding: 40px 64px 0;
+}
+.s01 .cover__markrow { display: flex; align-items: center; gap: 22px; margin-bottom: 6px; }
+.s01 .cover__mark { width: 76px; height: 76px; }
+.s01 .cover__word {
+  font-family: var(--font-display);
+  font-weight: 700;
+  font-size: var(--fs-cover);
+  letter-spacing: -.02em;
+  line-height: 1;
+  margin: 0;
+  color: var(--paper);
+}
+.s01 .cover__glyph {
+  font-family: var(--font-display);
+  font-weight: 500;
+  font-size: 30px;
+  color: var(--grey-1);
+  margin-left: 14px;
+  vertical-align: middle;
+}
+.s01 .cover__tagline {
+  font-size: 26px;
+  font-weight: 600;
+  color: var(--paper-2);
+  margin: 18px 0 0;
+}
+.s01 .cover__desc {
+  font-size: var(--fs-h2);
+  color: var(--grey-1);
+  max-width: 620px;
+  margin: 14px 0 0;
+  line-height: 1.5;
+}
+.s01 .cover__meta {
+  display: flex;
+  gap: 14px;
+  margin-top: 30px;
+}
+.s01 .cover__meta span {
+  font-family: var(--font-mono);
+  font-size: var(--fs-micro);
+  letter-spacing: .08em;
+  text-transform: uppercase;
+  color: var(--grey-1);
+  background: var(--ground-3);
+  border: 1px solid var(--line);
+  border-radius: var(--r-pill);
+  padding: 7px 15px;
+}
+.s01 .cover__platforms {
+  flex: 0 0 auto;
+  display: flex;
+  justify-content: center;
+  gap: 12px;
+  padding: 0 64px 44px;
+}
+.plat-chip {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: var(--ground-3);
+  border: 1px solid var(--line);
+  border-radius: var(--r-pill);
+  padding: 9px 16px 9px 10px;
+}
+.plat-chip .glyph {
+  width: 26px; height: 26px;
+  border-radius: 8px;
+  background: var(--ground-4);
+  display: flex; align-items: center; justify-content: center;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 500;
+  letter-spacing: 0;
+  color: var(--paper-2);
+}
+.plat-chip .name {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--grey-1);
+  letter-spacing: .02em;
+}
+
+/* ============================== SLIDE 02 — COMPANY PURPOSE ============================== */
+.s02 .frame__body { display: flex; align-items: center; justify-content: center; }
+.diagram3 { display: flex; align-items: center; gap: 22px; width: 100%; max-width: 1080px; }
+.diagram3 .node {
+  flex: 1 1 0;
+  text-align: center;
+  padding: 30px 22px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 14px;
+}
+.diagram3 .node .ico { width: 52px; height: 52px; border-radius: 16px; background: var(--ground-3); border: 1px solid var(--line); display: flex; align-items: center; justify-content: center; }
+.diagram3 .node .lbl { font-size: 19px; font-weight: 700; color: var(--paper); line-height: 1.3; }
+.diagram3 .node .cap { font-size: var(--fs-small); color: var(--grey-1); line-height: 1.45; }
+.diagram3 .node--mid { background: var(--ground-3); }
+.diagram3 .node--mid .ico { background: transparent; border: none; width: 60px; height: 60px; }
+.diagram3 .arrow { flex: 0 0 auto; width: 56px; height: 22px; color: var(--lime); }
+
+/* ============================== SLIDE 03 — PROBLEM ============================== */
+.cmp {
+  display: grid;
+  grid-template-columns: 240px 1fr 1fr;
+  border-radius: var(--r-panel);
+  overflow: hidden;
+  border: 1px solid var(--line);
+}
+.cmp__cell { padding: 18px 24px; display: flex; align-items: center; font-size: 16px; line-height: 1.4; }
+.cmp__head { font-family: var(--font-mono); font-size: var(--fs-label); letter-spacing: .12em; text-transform: uppercase; padding: 16px 24px; }
+.cmp__head--label { background: var(--ground-2); color: var(--grey-1); }
+.cmp__head--today  { background: var(--ground-3); color: var(--grey-1); }
+.cmp__head--aizu   { background: var(--ground-4); color: var(--paper); display: flex; align-items: center; gap: 8px; }
+.cmp__row-label { background: var(--ground-2); color: var(--grey-1); font-family: var(--font-mono); font-size: 13px; letter-spacing: .02em; border-top: 1px solid var(--line); }
+.cmp__today { background: var(--panel); color: var(--grey-1); border-top: 1px solid var(--line); }
+.cmp__aizu  { background: var(--panel); color: var(--paper-2); font-weight: 500; border-top: 1px solid var(--line); border-left: 2px solid var(--lime-lo); }
+
+/* ============================== SLIDE 04 — SOLUTION ============================== */
+.steps5 { display: flex; align-items: flex-start; gap: 0; width: 100%; position: relative; padding-top: 6px; }
+.steps5 .step { flex: 1 1 0; text-align: center; padding: 0 10px; position: relative; z-index: 1; }
+.steps5 .badge {
+  width: 52px; height: 52px; border-radius: 50%;
+  background: var(--ground-3); border: 1px solid var(--line);
+  display: flex; align-items: center; justify-content: center;
+  margin: 0 auto 16px;
+  font-family: var(--font-mono); font-weight: 500; font-size: 18px; color: var(--paper-2);
+}
+.steps5 .step--hero .badge { background: var(--lime); border-color: var(--lime); color: var(--ground); }
+.steps5 .lbl { font-size: 16px; font-weight: 700; color: var(--paper); line-height: 1.3; }
+.steps5 .cap { font-size: 13px; color: var(--grey-1); line-height: 1.4; margin-top: 8px; }
+.steps5__rail {
+  position: absolute; left: 46px; right: 46px; top: 32px; height: 2px;
+  background: var(--lime); opacity: .55; z-index: 0;
+}
+
+/* ============================== SLIDE 05 — WHY NOW ============================== */
+.s05 .frame__body { display: flex; align-items: center; justify-content: center; }
+.timeline-panel { width: 100%; padding: 50px 56px 42px; }
+.rule-row { position: relative; height: 2px; background: var(--line); margin: 0 20px; }
+.rule-row .pt { position: absolute; top: 50%; width: 14px; height: 14px; border-radius: 50%; background: var(--ground-4); border: 2px solid var(--grey-1); transform: translate(-50%, -50%); }
+.rule-row .pt.now { background: var(--lime); border-color: var(--lime); }
+.milestones { display: grid; grid-template-columns: repeat(3, 1fr); margin-top: 40px; }
+.milestones .m { padding: 0 28px; text-align: center; }
+.milestones .m__tag { font-family: var(--font-mono); font-size: 12px; letter-spacing: .18em; text-transform: uppercase; color: var(--grey-1); }
+.milestones .m--now .m__tag { color: var(--lime); }
+.milestones .m__line { font-size: 22px; font-weight: 600; color: var(--paper); line-height: 1.42; margin-top: 16px; max-width: 300px; margin-left: auto; margin-right: auto; }
+
+/* ============================== SLIDE 06 — PRODUCT (signature) ============================== */
+.funnel { display: flex; flex-direction: column; height: 100%; }
+.funnel__plats { display: flex; gap: 12px; justify-content: center; }
+.pchip { flex: 1 1 0; max-width: 176px; background: var(--panel); border: 1px solid var(--line); border-radius: var(--r-card); padding: 12px 10px; text-align: center; }
+.pchip .glyph { width: 34px; height: 34px; margin: 0 auto 8px; border-radius: 9px; background: var(--ground-3); display: flex; align-items: center; justify-content: center; font-family: var(--font-mono); font-size: 11px; color: var(--paper-2); }
+.pchip .name { font-size: 12.5px; font-weight: 600; color: var(--paper-2); }
+.pchip .mode { font-size: 10.5px; color: var(--grey-1); margin-top: 2px; font-family: var(--font-mono); }
+.funnel__lines { height: 40px; }
+.funnel__gate {
+  align-self: center;
+  display: flex; align-items: center; gap: 16px;
+  background: var(--ground-3); border: 1px solid var(--line); border-radius: var(--r-card);
+  padding: 14px 26px; margin: 0 auto;
+}
+.funnel__gate .stage { text-align: center; }
+.funnel__gate .stage .num { font-family: var(--font-mono); font-size: 10.5px; color: var(--grey-1); letter-spacing: .1em; text-transform: uppercase; }
+.funnel__gate .stage .lbl { font-size: 14px; font-weight: 700; color: var(--paper); margin-top: 3px; }
+.funnel__gate .arw { width: 30px; height: 16px; color: var(--lime); }
+.funnel__downline { width: 2px; height: 20px; background: var(--line); margin: 0 auto; }
+.leadtable { width: 100%; border: 1px solid var(--line); border-radius: var(--r-panel); overflow: hidden; }
+.leadtable th, .leadtable td { text-align: left; padding: 11px 20px; font-size: 14px; }
+.leadtable thead th { font-family: var(--font-mono); font-size: 10.5px; text-transform: uppercase; letter-spacing: .1em; color: var(--grey-1); background: var(--ground-2); font-weight: 500; }
+.leadtable tbody td { border-top: 1px solid var(--line); color: var(--paper-2); background: var(--panel); }
+.leadtable td.handle { font-family: var(--font-mono); color: var(--paper); }
+.leadtable td.ask { color: var(--grey-1); }
+.score-pill { display: inline-flex; align-items: center; justify-content: center; min-width: 40px; padding: 3px 10px; border-radius: var(--r-pill); font-family: var(--font-mono); font-size: 12.5px; font-weight: 500; background: var(--ground-3); border: 1px solid var(--line); color: var(--paper-2); }
+.score-pill.top { background: var(--lime); border-color: var(--lime); color: var(--ground); font-weight: 700; }
+.stage-pill { display: inline-block; padding: 3px 12px; border-radius: var(--r-pill); font-size: 12px; font-family: var(--font-mono); border: 1px solid var(--line); color: var(--grey-1); }
+.stage-pill.qualified { border-color: var(--grey-1); color: var(--paper-2); }
+
+/* ============================== SLIDE 07 — TRACTION ============================== */
+.s07 .layout { display: grid; grid-template-columns: 1.55fr 1fr; gap: 24px; height: calc(100% - 70px); align-items: stretch; }
+.chartcard { padding: 22px 26px; }
+.chartcard .label { font-family: var(--font-mono); font-size: var(--fs-label); text-transform: uppercase; letter-spacing: .12em; color: var(--grey-1); }
+.stat-stack { display: flex; flex-direction: column; gap: 16px; justify-content: center; }
+.stat-tile { padding: 20px 22px; }
+.stat-tile .num { font-family: var(--font-mono); font-weight: 500; font-size: var(--fs-stat-md); color: var(--paper); }
+.stat-tile .lbl { font-size: 13px; color: var(--grey-1); margin-top: 4px; }
+
+/* ============================== SLIDE 08 — MARKET SIZE ============================== */
+.s08 .layout { display: grid; grid-template-columns: 420px 1fr; gap: 40px; height: 100%; align-items: center; }
+.legend3 { display: flex; flex-direction: column; gap: 22px; }
+.legend3 .row { display: flex; gap: 14px; align-items: flex-start; }
+.legend3 .dot { width: 14px; height: 14px; border-radius: 50%; margin-top: 6px; flex: none; }
+.legend3 .tag { font-family: var(--font-mono); font-size: 11px; text-transform: uppercase; letter-spacing: .1em; color: var(--grey-1); }
+.legend3 .val { font-size: 26px; font-weight: 700; color: var(--paper); margin-top: 2px; }
+.legend3 .math { font-size: 13px; color: var(--grey-1); margin-top: 4px; font-family: var(--font-mono); }
+
+/* ============================== SLIDE 09 — BUSINESS MODEL ============================== */
+.pricing { display: grid; grid-template-columns: repeat(4, 1fr); gap: 18px; }
+.plan { padding: 24px 22px; display: flex; flex-direction: column; gap: 12px; position: relative; }
+.plan--pop { border-color: var(--lime-lo); }
+.plan .tag { position: absolute; top: -13px; left: 20px; background: var(--lime); color: var(--ground); font-family: var(--font-mono); font-size: 10.5px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; padding: 4px 10px; border-radius: var(--r-pill); }
+.plan .name { font-family: var(--font-mono); font-size: var(--fs-label); text-transform: uppercase; letter-spacing: .1em; color: var(--grey-1); }
+.plan .price { font-size: 30px; font-weight: 700; color: var(--paper); }
+.plan .price span { font-size: 14px; font-weight: 500; color: var(--grey-1); }
+.plan .yr { font-size: 12.5px; color: var(--grey-1); }
+.plan .leads { margin-top: auto; font-size: 13.5px; color: var(--paper-2); border-top: 1px solid var(--line); padding-top: 12px; }
+.pricing-foot { text-align: center; font-size: 13.5px; color: var(--grey-1); margin-top: 20px; }
+
+/* ============================== SLIDE 10 — GTM ============================== */
+.gtm-bar { display: flex; height: 62px; border-radius: var(--r-card); overflow: hidden; border: 1px solid var(--line); }
+.gtm-bar .seg { display: flex; flex-direction: column; align-items: center; justify-content: center; font-family: var(--font-mono); }
+.gtm-bar .seg .pct { font-size: 20px; font-weight: 500; }
+.gtm-bar .seg .name { font-size: 10px; letter-spacing: .04em; margin-top: 2px; text-align: center; padding: 0 8px; }
+.gtm-bar .seg--a { background: var(--lime); color: var(--ground); }
+.gtm-bar .seg--b { background: var(--ground-4); color: var(--paper-2); border-left: 1px solid var(--line); }
+.gtm-bar .seg--c { background: var(--ground-3); color: var(--grey-1); border-left: 1px solid var(--line); }
+.gtm-meta { display: flex; gap: 16px; margin-top: 22px; }
+
+/* ============================== SLIDE 11 — COMPETITION ============================== */
+.axis { position: relative; margin-top: 60px; }
+.axis__line { height: 2px; background: var(--line); margin: 0 10px; position: relative; }
+.axis__ends { display: flex; justify-content: space-between; font-family: var(--font-mono); font-size: 11px; text-transform: uppercase; letter-spacing: .08em; color: var(--grey-1); margin-top: 10px; }
+.axis__pt { position: absolute; top: 50%; transform: translate(-50%, -50%); width: 14px; height: 14px; border-radius: 50%; background: var(--ground-4); border: 2px solid var(--grey-1); }
+.axis__pt.win { background: var(--lime); border-color: var(--lime); }
+.axis__label { position: absolute; width: 190px; text-align: center; font-size: 13px; color: var(--grey-1); line-height: 1.35; transform: translateX(-50%); }
+.axis__label.win { color: var(--paper); font-weight: 700; }
+.axis__label.up { top: -76px; }
+.axis__label.down { top: 46px; }
+
+/* ============================== SLIDE 12 — RISKS ============================== */
+.risktable td, .risktable th { border: 1px solid var(--line); padding: 16px 22px; font-size: 14.5px; line-height: 1.45; vertical-align: top; }
+.risktable th { font-family: var(--font-mono); font-size: var(--fs-label); text-transform: uppercase; letter-spacing: .1em; color: var(--grey-1); background: var(--ground-2); text-align: left; }
+.risktable td:first-child { width: 32%; color: var(--paper); font-weight: 600; background: var(--panel); }
+.risktable td:last-child { color: var(--grey-1); background: var(--panel); }
+.risktable { border-radius: var(--r-panel); overflow: hidden; }
+
+/* ============================== SLIDE 13 — TEAM ============================== */
+.team-row { display: grid; grid-template-columns: repeat(3, 1fr); gap: 20px; }
+.tcard { padding: 26px 24px; display: flex; flex-direction: column; gap: 10px; align-items: flex-start; }
+.tcard .avatar { width: 54px; height: 54px; border-radius: 50%; background: var(--ground-3); border: 1px solid var(--line); display: flex; align-items: center; justify-content: center; font-family: var(--font-mono); font-size: 17px; color: var(--paper-2); }
+.tcard .name { font-size: 18px; font-weight: 700; color: var(--paper); margin-top: 4px; }
+.tcard .role { font-family: var(--font-mono); font-size: 11.5px; color: var(--grey-1); text-transform: uppercase; letter-spacing: .06em; }
+.tcard .cred { font-size: 13.5px; color: var(--grey-1); line-height: 1.5; }
+.team-foot { display: flex; gap: 30px; margin-top: 22px; justify-content: center; }
+.team-foot .item { font-family: var(--font-mono); font-size: 13px; color: var(--grey-1); }
+.team-foot .item b { color: var(--paper); font-weight: 600; }
+
+/* ============================== SLIDE 14 — FINANCIALS ============================== */
+.s14 .layout { display: grid; grid-template-columns: 1.4fr 1fr; gap: 24px; height: calc(100% - 44px); }
+.barchart { padding: 22px 26px; display: flex; flex-direction: column; }
+.barchart__plot { flex: 1 1 auto; display: flex; align-items: flex-end; gap: 46px; justify-content: center; padding: 0 20px; }
+.barchart__col { display: flex; flex-direction: column; align-items: center; width: 90px; }
+.barchart__val { font-family: var(--font-mono); font-size: 15px; color: var(--paper); margin-bottom: 8px; font-weight: 500; }
+.barchart__bar { width: 64px; background: var(--ground-4); border-radius: 8px 8px 0 0; border: 1px solid var(--line); border-bottom: none; }
+.barchart__bar.hero { background: var(--lime); border-color: var(--lime); }
+.barchart__yr { font-family: var(--font-mono); font-size: 12px; color: var(--grey-1); margin-top: 10px; }
+.barchart__base { height: 2px; background: var(--line); margin: 0 20px; }
+.barchart__note { font-family: var(--font-mono); font-size: 10.5px; color: var(--grey-1); margin-top: 10px; text-align: center; }
+
+/* ============================== SLIDE 15 — THE ASK ============================== */
+.s15 .frame__body { display: flex; flex-direction: column; align-items: center; justify-content: center; text-align: center; }
+.ask__num { font-family: var(--font-display); font-weight: 700; font-size: var(--fs-jumbo); color: var(--lime); line-height: 1; letter-spacing: -.02em; }
+.ask__cap { font-size: 22px; color: var(--paper-2); margin-top: 10px; font-weight: 500; }
+.ask__runway { font-family: var(--font-mono); font-size: 13px; color: var(--grey-1); margin-top: 14px; text-transform: uppercase; letter-spacing: .08em; }
+.ask__bar { display: flex; width: 780px; max-width: 100%; height: 64px; border-radius: var(--r-card); overflow: hidden; border: 1px solid var(--line); margin-top: 34px; }
+.ask__bar .seg { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 3px; font-family: var(--font-mono); background: var(--ground-3); border-left: 1px solid var(--line); padding: 0 8px; }
+.ask__bar .seg:first-child { border-left: none; }
+.ask__bar .seg .pct { font-size: 16px; font-weight: 500; color: var(--paper); }
+.ask__bar .seg .name { font-size: 10.5px; color: var(--grey-1); text-align: center; letter-spacing: .02em; white-space: nowrap; }
+
+/* ============================== SLIDE 16 — APPENDIX A ============================== */
+.archtable th, .archtable td { border: 1px solid var(--line); padding: 12px 18px; font-size: 13.5px; text-align: left; }
+.archtable th { font-family: var(--font-mono); font-size: 10.5px; text-transform: uppercase; letter-spacing: .1em; color: var(--grey-1); background: var(--ground-2); }
+.archtable td { color: var(--paper-2); background: var(--panel); }
+.archtable td.plat { font-weight: 700; color: var(--paper); }
+.archtable td.mode-live { color: var(--grey-1); font-family: var(--font-mono); font-size: 12px; }
+.archtable { border-radius: var(--r-panel); overflow: hidden; }
+.arch-foot { font-size: 13px; color: var(--grey-1); margin-top: 16px; }
+.arch-foot2 { display: flex; gap: 16px; margin-top: 16px; flex-wrap: wrap; }
+
+/* ============================== SLIDE 17 — APPENDIX B ============================== */
+.s17 .layout { display: grid; grid-template-columns: 340px 1fr; gap: 30px; height: 100%; align-items: center; }
+.contact-block { padding: 30px 26px; display: flex; flex-direction: column; gap: 14px; }
+.contact-block .who { font-size: 15px; color: var(--paper-2); font-family: var(--font-mono); }
+.contact-block .brand { display: flex; align-items: center; gap: 10px; margin-top: 6px; }
+.contact-block .brand svg { width: 30px; height: 30px; }
+.contact-block .brand span { font-size: 20px; font-weight: 700; }
+.recap { padding: 26px 30px; font-size: 13.5px; line-height: 1.9; color: var(--grey-1); }
+.recap b { color: var(--paper-2); font-weight: 600; }
+.recap .h { font-family: var(--font-mono); font-size: var(--fs-label); text-transform: uppercase; letter-spacing: .1em; color: var(--grey-1); display: block; margin-bottom: 10px; }
+
+/* ============================== CHROME (outside the 1280x720 canvas) ============================== */
+.chrome { position: fixed; inset: 0; pointer-events: none; z-index: 50; }
+.clickzone { position: absolute; top: 0; bottom: 0; pointer-events: auto; background: transparent; }
+.clickzone.left { left: 0; width: 20vw; }
+.clickzone.right { right: 0; width: 35vw; }
+.navbtn {
+  position: absolute; bottom: 24px; width: 44px; height: 44px; border-radius: 50%;
+  background: var(--ground-2); border: 1px solid var(--line); color: var(--paper-2);
+  display: flex; align-items: center; justify-content: center; pointer-events: auto;
+}
+.navbtn:hover { border-color: var(--lime); color: var(--lime); }
+.navbtn.prev { left: 24px; }
+.navbtn.next { right: 24px; }
+.counter {
+  position: absolute; bottom: 24px; left: 50%; transform: translateX(-50%);
+  font-family: var(--font-mono); font-size: 12px; letter-spacing: .08em; color: var(--grey-1);
+  background: var(--ground-2); border: 1px solid var(--line); border-radius: var(--r-pill);
+  padding: 8px 16px; pointer-events: auto;
+}
+.utilbar { position: absolute; top: 20px; right: 20px; display: flex; gap: 8px; pointer-events: auto; }
+.utilbtn {
+  width: 36px; height: 36px; border-radius: 50%;
+  background: var(--ground-2); border: 1px solid var(--line); color: var(--grey-1);
+  display: flex; align-items: center; justify-content: center; font-family: var(--font-mono); font-size: 13px;
+}
+.utilbtn:hover { border-color: var(--lime); color: var(--lime); }
+.progress { position: fixed; left: 0; right: 0; bottom: 0; height: 3px; background: var(--line); z-index: 60; }
+.progress__fill { height: 100%; background: var(--lime); width: 0%; }
+
+.notes-drawer {
+  position: fixed; top: 0; right: 0; height: 100%; width: 380px; max-width: 86vw;
+  background: var(--ground-2); border-left: 1px solid var(--line);
+  transform: translateX(100%); transition: transform .28s ease;
+  z-index: 70; padding: 30px 28px; overflow-y: auto;
+}
+.notes-drawer.open { transform: translateX(0); }
+.notes-drawer h2 { font-family: var(--font-mono); font-size: 11px; letter-spacing: .14em; text-transform: uppercase; color: var(--lime); margin: 0 0 6px; }
+.notes-drawer .sub-title { font-size: 15px; font-weight: 700; color: var(--paper); margin-bottom: 18px; }
+.notes-drawer p { font-size: 15px; line-height: 1.65; color: var(--paper-2); font-family: var(--font-display); }
+.notes-drawer .hint { margin-top: 26px; font-family: var(--font-mono); font-size: 11px; color: var(--grey-1); }
+
+.grid-overview {
+  position: fixed; inset: 0; background: rgba(17,17,20,.97); z-index: 80;
+  display: none; padding: 60px; overflow-y: auto;
+}
+.grid-overview.open { display: block; }
+.grid-overview__title { font-family: var(--font-mono); font-size: 12px; letter-spacing: .12em; text-transform: uppercase; color: var(--grey-1); margin-bottom: 24px; text-align: center; }
+.grid-overview__grid { display: grid; grid-template-columns: repeat(5, 1fr); gap: 18px; max-width: 1300px; margin: 0 auto; }
+.thumb {
+  aspect-ratio: 16/9; background: var(--ground-2); border: 1px solid var(--line); border-radius: 14px;
+  padding: 14px; display: flex; flex-direction: column; justify-content: space-between; text-align: left; width: 100%;
+}
+.thumb:hover, .thumb:focus-visible { border-color: var(--lime); outline: none; }
+.thumb.current { border-color: var(--lime); box-shadow: 0 0 0 1px var(--lime) inset; }
+.thumb__idx { font-family: var(--font-mono); font-size: 11px; color: var(--grey-1); }
+.thumb__title { font-size: 12.5px; font-weight: 600; color: var(--paper-2); line-height: 1.32; }
+
+.help-overlay { position: fixed; inset: 0; background: rgba(17,17,20,.86); z-index: 90; display: none; align-items: center; justify-content: center; }
+.help-overlay.open { display: flex; }
+.help-card { background: var(--ground-2); border: 1px solid var(--line); border-radius: var(--r-panel); padding: 34px 40px; min-width: 380px; }
+.help-card h2 { font-family: var(--font-mono); font-size: 12px; letter-spacing: .12em; text-transform: uppercase; color: var(--lime); margin: 0 0 20px; }
+.help-card .row { display: flex; justify-content: space-between; gap: 30px; padding: 7px 0; font-size: 14px; color: var(--paper-2); border-top: 1px solid var(--line); }
+.help-card .row:first-of-type { border-top: none; }
+.help-card kbd { font-family: var(--font-mono); font-size: 12px; color: var(--grey-1); background: var(--ground-3); border: 1px solid var(--line); border-radius: 5px; padding: 2px 7px; }
+
+:focus-visible { outline: 2px solid var(--lime); outline-offset: 2px; }
+
+/* ---------- print / PDF export ---------- */
+@media print {
+  @page { size: 1280px 720px; margin: 0; }
+  html, body { -webkit-print-color-adjust: exact; print-color-adjust: exact; overflow: visible; }
+  #viewport { position: static; display: block; }
+  #deck { position: static; transform: none !important; box-shadow: none; }
+  .slide {
+    position: static !important;
+    opacity: 1 !important;
+    visibility: visible !important;
+    width: 1280px; height: 720px;
+    page-break-after: always;
+    break-after: page;
+  }
+  .chrome, .progress, .notes-drawer, .grid-overview, .help-overlay { display: none !important; }
+}
+</style>
+
+<div id="viewport">
+  <div id="deck">
+
+    <!-- 01 — COVER -->
+    <section class="slide s01" id="slide-1" data-title="Cover"
+      data-notes="We're not another platform to check — we're the signal that tells you when to act. Six platforms, one brief, one list of people already asking for what you sell. Everything after this slide just proves that sentence.">
+      <div class="cover">
+        <div class="cover__markrow">
+          <svg class="cover__mark" viewBox="0 0 100 100"><circle cx="40" cy="60" r="16" fill="#d9f24f"/><path d="M47 31 A31 31 0 0 1 71 72" fill="none" stroke="#f2f2f4" stroke-width="8.5" stroke-linecap="round"/></svg>
+          <h1 class="cover__word">AIZU<span class="cover__glyph">合図</span></h1>
+        </div>
+        <p class="cover__tagline">Six noisy platforms, one lead list.</p>
+        <p class="cover__desc">From a single plain-language brief, AIZU finds the people already asking for what you sell.</p>
+        <div class="cover__meta">
+          <span>合図 — a signal to act</span>
+          <span>Pre-seed · [confidential]</span>
+        </div>
+      </div>
+      <div class="cover__platforms">
+        <div class="plat-chip"><span class="glyph">IG</span><span class="name">Instagram</span></div>
+        <div class="plat-chip"><span class="glyph">LI</span><span class="name">LinkedIn</span></div>
+        <div class="plat-chip"><span class="glyph">X</span><span class="name">X</span></div>
+        <div class="plat-chip"><span class="glyph">YT</span><span class="name">YouTube</span></div>
+        <div class="plat-chip"><span class="glyph">R</span><span class="name">Reddit</span></div>
+        <div class="plat-chip"><span class="glyph">TG</span><span class="name">Telegram</span></div>
+      </div>
+    </section>
+
+    <!-- 02 — COMPANY PURPOSE -->
+    <section class="slide s02" id="slide-2" data-title="Company Purpose"
+      data-notes="Every business already has people asking for what they sell, in public, right now — on Instagram, on Reddit, in a YouTube comment. Nobody has time to watch six feeds for that. AIZU watches them and hands you the ones worth answering.">
+      <div class="frame">
+        <div class="frame__head">
+          <div class="kicker">02 — Company Purpose</div>
+          <h1 class="headline">Meet customers while they decide.</h1>
+          <p class="sub">Tell AIZU what you sell and who you serve; it returns qualified, ready-to-buy customers every week.</p>
+        </div>
+        <div class="frame__body">
+          <div class="diagram3">
+            <div class="node card">
+              <div class="ico"><svg width="24" height="24" viewBox="0 0 24 24" fill="none"><rect x="4" y="3" width="16" height="18" rx="3" stroke="#dcdce1" stroke-width="1.6"/><path d="M8 8h8M8 12h8M8 16h5" stroke="#dcdce1" stroke-width="1.6" stroke-linecap="round"/></svg></div>
+              <div class="lbl">You write one brief</div>
+              <div class="cap">One brief, written once — not a template you refill every week.</div>
+            </div>
+            <svg class="arrow" viewBox="0 0 56 22" fill="none"><path d="M2 11h48M40 3l12 8-12 8" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></svg>
+            <div class="node card node--mid">
+              <div class="ico"><svg viewBox="0 0 100 100" width="44" height="44"><circle cx="40" cy="60" r="16" fill="#d9f24f"/><path d="M47 31 A31 31 0 0 1 71 72" fill="none" stroke="#f2f2f4" stroke-width="8.5" stroke-linecap="round"/></svg></div>
+              <div class="lbl">AIZU</div>
+              <div class="cap">Reads six platforms against your brief, continuously.</div>
+            </div>
+            <svg class="arrow" viewBox="0 0 56 22" fill="none"><path d="M2 11h48M40 3l12 8-12 8" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></svg>
+            <div class="node card">
+              <div class="ico"><svg width="24" height="24" viewBox="0 0 24 24" fill="none"><rect x="3" y="4" width="18" height="16" rx="3" stroke="#dcdce1" stroke-width="1.6"/><path d="M6.5 8.5h3M11 8.5h6.5M6.5 12.5h3M11 12.5h6.5M6.5 16.5h3M11 16.5h6.5" stroke="#dcdce1" stroke-width="1.5" stroke-linecap="round"/></svg></div>
+              <div class="lbl">You get ready-to-buy customers</div>
+              <div class="cap">A ranked list of people who already asked for what you sell.</div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- 03 — PROBLEM -->
+    <section class="slide s03" id="slide-3" data-title="Problem"
+      data-notes="Before AIZU, our own team was doing this by hand — six tabs open, refreshing, hoping we didn't miss the comment that mattered. That's not a workflow, it's a part-time job nobody's paid to do. The pain isn't that the customers aren't out there; it's that finding them doesn't scale past one person's attention.">
+      <div class="frame">
+        <div class="frame__head">
+          <div class="kicker">03 — Problem</div>
+          <h1 class="headline">Buying intent is public. Nobody's watching.</h1>
+          <p class="sub">Someone is asking for what you sell right now, on a platform you don't have time to monitor.</p>
+        </div>
+        <div class="frame__body">
+          <div class="cmp">
+            <div class="cmp__head cmp__head--label"></div>
+            <div class="cmp__head cmp__head--today">Today</div>
+            <div class="cmp__head cmp__head--aizu">With AIZU</div>
+
+            <div class="cmp__cell cmp__row-label">Where the signal lives</div>
+            <div class="cmp__cell cmp__today">6 separate apps</div>
+            <div class="cmp__cell cmp__aizu">One dashboard</div>
+
+            <div class="cmp__cell cmp__row-label">How you'd find it</div>
+            <div class="cmp__cell cmp__today">Manual scrolling, no intent filter</div>
+            <div class="cmp__cell cmp__aizu">Automated AI read of every post &amp; comment</div>
+
+            <div class="cmp__cell cmp__row-label">Time it costs</div>
+            <div class="cmp__cell cmp__today">5+ hours/week<sup>°</sup></div>
+            <div class="cmp__cell cmp__aizu">Minutes/week reviewing a ranked list</div>
+
+            <div class="cmp__cell cmp__row-label">What you catch</div>
+            <div class="cmp__cell cmp__today">Whatever you happened to see</div>
+            <div class="cmp__cell cmp__aizu">Every qualifying match, all 6 platforms</div>
+          </div>
+          <div class="mock-chip">° illustrative placeholder</div>
+        </div>
+      </div>
+    </section>
+
+    <!-- 04 — SOLUTION -->
+    <section class="slide s04" id="slide-4" data-title="Solution"
+      data-notes="The unlock isn't 'scrape more' — it's 'attach, don't own.' AIZU only ever reads a session you already logged into; it never launches a browser or crafts an unofficial API call itself. That's what makes it safe to run continuously instead of in short, risky bursts.">
+      <div class="frame">
+        <div class="frame__head">
+          <div class="kicker">04 — Solution</div>
+          <h1 class="headline">One brief. Six platforms. One list.</h1>
+          <p class="sub">AIZU attaches to a session you already opened, reads what's already public, and ranks who's ready to buy.</p>
+        </div>
+        <div class="frame__body" style="display:flex;align-items:center;">
+          <div class="steps5">
+            <div class="steps5__rail"></div>
+            <div class="step">
+              <div class="badge">1</div>
+              <div class="lbl">Write the brief</div>
+              <div class="cap">What you sell, who you serve</div>
+            </div>
+            <div class="step">
+              <div class="badge">2</div>
+              <div class="lbl">Attach to a session</div>
+              <div class="cap">Warmed login or an official API — never its own browser</div>
+            </div>
+            <div class="step step--hero">
+              <div class="badge">3</div>
+              <div class="lbl">Two-stage AI check</div>
+              <div class="cap">On-topic, then buyer not seller</div>
+            </div>
+            <div class="step">
+              <div class="badge">4</div>
+              <div class="lbl">Match becomes lead</div>
+              <div class="cap">Handle, verbatim ask, timestamp</div>
+            </div>
+            <div class="step">
+              <div class="badge">5</div>
+              <div class="lbl">One dashboard</div>
+              <div class="cap">New / Qualified / Contacted</div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- 05 — WHY NOW -->
+    <section class="slide s05" id="slide-5" data-title="Why Now"
+      data-notes="Five years ago this would have meant either hiring someone to scroll all day, or building something that looks like a bot and gets banned. Neither was viable. What changed is that AI got cheap enough to read every comment, and warmed-session automation got disciplined enough to do it at the pace a real person would.">
+      <div class="frame">
+        <div class="frame__head">
+          <div class="kicker">05 — Why Now</div>
+          <h1 class="headline">The signal moved. The tools caught up.</h1>
+          <p class="sub">Buying intent now surfaces in public comments, and AI can finally read all of them, at human pace.</p>
+        </div>
+        <div class="frame__body">
+          <div class="tile timeline-panel">
+            <div class="rule-row">
+              <div class="pt" style="left:16.6%;"></div>
+              <div class="pt" style="left:50%;"></div>
+              <div class="pt now" style="left:83.3%;"></div>
+            </div>
+            <div class="milestones">
+              <div class="m">
+                <div class="m__tag">Then</div>
+                <div class="m__line">Buying intent moved into public comments, not just search</div>
+              </div>
+              <div class="m">
+                <div class="m__tag">Recently</div>
+                <div class="m__line">Per-comment AI reading became cheap and fast enough to run continuously</div>
+              </div>
+              <div class="m m--now">
+                <div class="m__tag">Now</div>
+                <div class="m__line">Warmed-session automation makes reading that traffic safe, at daytime, human pace</div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- 06 — PRODUCT (signature) -->
+    <section class="slide s06" id="slide-6" data-title="Product"
+      data-notes="This is the whole engine in one picture. Six platforms, two AI checks per candidate, one list at the end — nothing about it is a black box you have to trust; every lead on that list carries the exact comment that qualified them.">
+      <div class="frame">
+        <div class="frame__head">
+          <div class="kicker">06 — Product</div>
+          <h1 class="headline">Six feeds in. One ranked list out.</h1>
+          <p class="sub">Every candidate is checked twice — is the post on-topic, then does this commenter sound like a buyer.</p>
+        </div>
+        <div class="frame__body">
+          <div class="funnel">
+            <div class="funnel__plats">
+              <div class="pchip"><div class="glyph">IG</div><div class="name">Instagram</div><div class="mode">Warmed session</div></div>
+              <div class="pchip"><div class="glyph">LI</div><div class="name">LinkedIn</div><div class="mode">Warmed session</div></div>
+              <div class="pchip"><div class="glyph">X</div><div class="name">X</div><div class="mode">Warmed session</div></div>
+              <div class="pchip"><div class="glyph">YT</div><div class="name">YouTube</div><div class="mode">Official API</div></div>
+              <div class="pchip"><div class="glyph">R</div><div class="name">Reddit</div><div class="mode">Official API</div></div>
+              <div class="pchip"><div class="glyph">TG</div><div class="name">Telegram</div><div class="mode">Official API</div></div>
+            </div>
+            <svg class="funnel__lines" viewBox="0 0 1152 40" preserveAspectRatio="none">
+              <path d="M96,0 L576,40 M288,0 L576,40 M480,0 L576,40 M672,0 L576,40 M864,0 L576,40 M1056,0 L576,40" stroke="#2a2a30" stroke-width="1.5" fill="none"/>
+            </svg>
+            <div class="funnel__gate">
+              <div class="stage"><div class="num">Stage 1</div><div class="lbl">Relevance gate</div></div>
+              <svg class="arw" viewBox="0 0 30 16" fill="none"><path d="M1 8h24M20 2l7 6-7 6" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+              <div class="stage"><div class="num">Stage 2</div><div class="lbl">Match score</div></div>
+            </div>
+            <div class="funnel__downline"></div>
+            <table class="leadtable">
+              <thead><tr><th>Handle</th><th>Verbatim ask</th><th>Score</th><th>Stage</th></tr></thead>
+              <tbody>
+                <tr><td class="handle">@studio.finds</td><td class="ask">"does anyone sell something like this for small teams?"</td><td><span class="score-pill top">96</span></td><td><span class="stage-pill qualified">Qualified</span></td></tr>
+                <tr><td class="handle">@growth.mira</td><td class="ask">"been looking for exactly this, where do I sign up"</td><td><span class="score-pill">91</span></td><td><span class="stage-pill">New</span></td></tr>
+                <tr><td class="handle">@retailops_uz</td><td class="ask">"anyone using a tool that does this already?"</td><td><span class="score-pill">88</span></td><td><span class="stage-pill">New</span></td></tr>
+                <tr><td class="handle">@sasha.builds</td><td class="ask">"keep meaning to look for something like this"</td><td><span class="score-pill">74</span></td><td><span class="stage-pill">Contacted</span></td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- 07 — TRACTION -->
+    <section class="slide s07" id="slide-7" data-title="Traction"
+      data-notes="This is one metric, the same metric, every month — leads actually delivered, not signups or page views. It's growing because the pipeline compounds: more warmed accounts, more platforms tuned, more briefs running in parallel. We're not claiming more than this yet, on purpose.">
+      <div class="frame">
+        <div class="frame__head">
+          <div class="kicker">07 — Traction</div>
+          <h1 class="headline">62,000<sup style="font-size:.4em;">°</sup> leads delivered, and growing monthly.</h1>
+          <p class="sub">One metric, tracked consistently, six months running — not a cherry-picked best month.</p>
+        </div>
+        <div class="frame__body">
+          <div class="layout">
+            <div class="tile chartcard">
+              <div class="label">Leads delivered per month</div>
+              <svg viewBox="0 0 600 250" width="100%" height="86%" preserveAspectRatio="none" style="overflow:visible;">
+                <polygon points="40,200 40,173.8 148,158.3 256,139.5 364,111.6 472,80.5 580,29.0 580,200" fill="#d9f24f" opacity="0.12"/>
+                <polyline points="40,173.8 148,158.3 256,139.5 364,111.6 472,80.5 580,29.0" fill="none" stroke="#d9f24f" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>
+                <circle cx="580" cy="29.0" r="5" fill="#d9f24f"/>
+                <text x="580" y="16" text-anchor="end" font-family="JetBrains Mono, monospace" font-size="15" fill="#f2f2f4" font-weight="700">62,000°</text>
+                <text x="40" y="222" font-family="JetBrains Mono, monospace" font-size="12" fill="#9a9aa2">Mar</text>
+                <text x="148" y="222" font-family="JetBrains Mono, monospace" font-size="12" fill="#9a9aa2" text-anchor="middle">Apr</text>
+                <text x="256" y="222" font-family="JetBrains Mono, monospace" font-size="12" fill="#9a9aa2" text-anchor="middle">May</text>
+                <text x="364" y="222" font-family="JetBrains Mono, monospace" font-size="12" fill="#9a9aa2" text-anchor="middle">Jun</text>
+                <text x="472" y="222" font-family="JetBrains Mono, monospace" font-size="12" fill="#9a9aa2" text-anchor="middle">Jul</text>
+                <text x="580" y="222" font-family="JetBrains Mono, monospace" font-size="12" fill="#9a9aa2" text-anchor="end">Aug</text>
+              </svg>
+            </div>
+            <div class="stat-stack">
+              <div class="tile stat-tile"><div class="num">38°</div><div class="lbl">Paying customers</div></div>
+              <div class="tile stat-tile"><div class="num">24°%</div><div class="lbl">Average lead-to-reply rate</div></div>
+              <div class="tile stat-tile"><div class="num">91°%</div><div class="lbl">Logo retention, trailing 3 months</div></div>
+            </div>
+          </div>
+          <div class="mock-chip">° illustrative placeholder</div>
+        </div>
+      </div>
+    </section>
+
+    <!-- 08 — MARKET SIZE -->
+    <section class="slide s08" id="slide-8" data-title="Market Size"
+      data-notes="We priced every circle off our own Starter plan, not an analyst report — $25 a month is what a real customer already pays us today. SAM is deliberately narrow: only markets where our six shipped platforms and our language coverage actually work right now, not a global aspiration.">
+      <div class="frame">
+        <div class="frame__head">
+          <div class="kicker">08 — Market Size</div>
+          <h1 class="headline">A $2.4B<sup style="font-size:.4em;">°</sup> market we can reach today.</h1>
+          <p class="sub">Bottom-up, not a market-report citation: customer count times a Starter-equivalent price, at three scopes.</p>
+        </div>
+        <div class="frame__body">
+          <div class="layout">
+            <svg viewBox="0 0 420 380" width="100%" height="100%">
+              <circle cx="180" cy="190" r="170" fill="none" stroke="#43434c" stroke-width="1.5"/>
+              <circle cx="180" cy="190" r="112" fill="none" stroke="#9a9aa2" stroke-width="1.5"/>
+              <circle cx="180" cy="190" r="56" fill="#d9f24f" fill-opacity="0.16" stroke="#d9f24f" stroke-width="2"/>
+              <text x="180" y="186" text-anchor="middle" font-family="Inter Tight, sans-serif" font-weight="700" font-size="20" fill="#f2f2f4">$12M°</text>
+              <text x="180" y="204" text-anchor="middle" font-family="JetBrains Mono, monospace" font-size="10" fill="#d9f24f">SOM</text>
+            </svg>
+            <div class="legend3">
+              <div class="row">
+                <div class="dot" style="background:#43434c;"></div>
+                <div>
+                  <div class="tag">TAM</div>
+                  <div class="val">$36B°</div>
+                  <div class="math">120,000,000° addressable social-selling SMBs &amp; creators worldwide × $300°/yr</div>
+                </div>
+              </div>
+              <div class="row">
+                <div class="dot" style="background:#9a9aa2;"></div>
+                <div>
+                  <div class="tag">SAM</div>
+                  <div class="val">$2.4B°</div>
+                  <div class="math">8,000,000° businesses reachable today via our six shipped platforms, EN/RU markets × $300°/yr</div>
+                </div>
+              </div>
+              <div class="row">
+                <div class="dot" style="background:#d9f24f;"></div>
+                <div>
+                  <div class="tag">SOM · Year 3</div>
+                  <div class="val lime">$12M° ARR</div>
+                  <div class="math">40,000° customers × $300°/yr</div>
+                </div>
+              </div>
+            </div>
+          </div>
+          <div class="mock-chip">° illustrative placeholder</div>
+        </div>
+      </div>
+    </section>
+
+    <!-- 09 — BUSINESS MODEL -->
+    <section class="slide s09" id="slide-9" data-title="Business Model"
+      data-notes="Pricing scales with the thing customers actually value — leads delivered — not seats or API calls. Starter is our center of gravity today; Pro and Scale are where agencies and higher-volume sellers land once the free-to-paid motion proves out.">
+      <div class="frame">
+        <div class="frame__head">
+          <div class="kicker">09 — Business Model</div>
+          <h1 class="headline">You pay for customers, not software.</h1>
+          <p class="sub">Four tiers, same promise at every level — qualified, ready-to-buy customers delivered to your account.</p>
+        </div>
+        <div class="frame__body">
+          <div class="pricing">
+            <div class="card plan">
+              <div class="name">Free</div>
+              <div class="price">$0<span>/mo</span></div>
+              <div class="yr">No card needed</div>
+              <div class="leads">10 leads/mo</div>
+            </div>
+            <div class="card plan plan--pop">
+              <div class="tag">Most popular</div>
+              <div class="name">Starter</div>
+              <div class="price">$24.99<span>/mo</span></div>
+              <div class="yr">or $249/yr</div>
+              <div class="leads">250 leads/mo</div>
+            </div>
+            <div class="card plan">
+              <div class="name">Pro</div>
+              <div class="price">$149<span>/mo</span></div>
+              <div class="yr">or $1,490/yr</div>
+              <div class="leads">2,000 leads/mo</div>
+            </div>
+            <div class="card plan">
+              <div class="name">Scale</div>
+              <div class="price">Custom</div>
+              <div class="yr">Negotiated cap</div>
+              <div class="leads">Volume leads/mo</div>
+            </div>
+          </div>
+          <div class="pricing-foot">Upgrade, downgrade, or cancel anytime — no contracts, no lock-in.</div>
+        </div>
+      </div>
+    </section>
+
+    <!-- 10 — GO-TO-MARKET -->
+    <section class="slide s10" id="slide-10" data-title="Go-to-Market"
+      data-notes="The free tier does the qualifying for us — anyone who upgrades has already seen real leads land in their dashboard. Agencies are the channel we're leaning into next: one agency relationship brings a dozen client campaigns, not one.">
+      <div class="frame">
+        <div class="frame__head">
+          <div class="kicker">10 — Go-to-Market</div>
+          <h1 class="headline">Self-serve first, agencies compound it.</h1>
+          <p class="sub">Free tier drives trial, agencies bring multi-client volume, founder-led outbound fills the gap.</p>
+        </div>
+        <div class="frame__body">
+          <div class="gtm-bar">
+            <div class="seg seg--a" style="flex:60;"><div class="pct">60°%</div><div class="name">Self-serve trial-to-paid</div></div>
+            <div class="seg seg--b" style="flex:25;"><div class="pct">25°%</div><div class="name">Agency &amp; partner referral</div></div>
+            <div class="seg seg--c" style="flex:15;"><div class="pct">15°%</div><div class="name">Founder-led outbound</div></div>
+          </div>
+          <div class="gtm-meta">
+            <div class="tile stat-tile" style="flex:1;"><div class="num">$85°</div><div class="lbl">Blended CAC across all three channels</div></div>
+            <div class="tile stat-tile" style="flex:1;"><div class="num">1,150°</div><div class="lbl">Free-tier + waitlist signups in the funnel today</div></div>
+          </div>
+          <div class="mock-chip">° illustrative placeholder</div>
+        </div>
+      </div>
+    </section>
+
+    <!-- 11 — COMPETITION -->
+    <section class="slide s11" id="slide-11" data-title="Competition"
+      data-notes="We didn't build a 2x2 because most of them are spin — you can always pick two axes that flatter your own dot. This is one honest claim: every lead we surface already said something in public. Nobody has to guess whether we're interrupting them.">
+      <div class="frame">
+        <div class="frame__head">
+          <div class="kicker">11 — Competition</div>
+          <h1 class="headline">We answer people. Others interrupt strangers.</h1>
+          <p class="sub">One honest axis: does the approach interrupt a stranger, or answer someone who already asked.</p>
+        </div>
+        <div class="frame__body">
+          <div class="axis">
+            <div class="axis__label up" style="left:6%;">Bought lists / cold email</div>
+            <div class="axis__label down" style="left:27%;">Generic AI SDR agents</div>
+            <div class="axis__label up" style="left:50%;">Social-listening dashboards</div>
+            <div class="axis__label down" style="left:73%;">Manual social selling</div>
+            <div class="axis__label win up" style="left:94%;">AIZU</div>
+            <div class="axis__line">
+              <div class="axis__pt" style="left:6%;"></div>
+              <div class="axis__pt" style="left:27%;"></div>
+              <div class="axis__pt" style="left:50%;"></div>
+              <div class="axis__pt" style="left:73%;"></div>
+              <div class="axis__pt win" style="left:94%;"></div>
+            </div>
+            <div class="axis__ends"><span>Interrupts strangers</span><span>Answers people who already asked</span></div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- 12 — RISKS -->
+    <section class="slide s12" id="slide-12" data-title="Risks"
+      data-notes="We'd rather you hear these from us than find them yourselves in diligence. None of them are fatal — they're the normal cost of automating access to platforms that don't publish an API for this — but we're not going to pretend they're solved when they're managed.">
+      <div class="frame">
+        <div class="frame__head">
+          <div class="kicker">12 — Risks</div>
+          <h1 class="headline">Here's what we're watching closely.</h1>
+          <p class="sub">Four real risks, named directly, with what we do about each one today.</p>
+        </div>
+        <div class="frame__body">
+          <table class="risktable">
+            <thead><tr><th>Risk</th><th>What we do about it today</th></tr></thead>
+            <tbody>
+              <tr><td>Platform ToS / automation exposure</td><td>Read-only by default; never auto-solves a checkpoint, halts for a human instead</td></tr>
+              <tr><td>Single-run lock by default</td><td>One run per box today; a distributed worker fleet exists as an opt-in path to relax this</td></tr>
+              <tr><td>LLM &amp; platform-API dependency</td><td>Per-campaign spend caps degrade softly to "unknown" instead of overspending or failing outright</td></tr>
+              <tr><td>No Terms/Privacy pages yet</td><td>A real compliance gap on a product that stores handles and messages; named here, not hidden</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+
+    <!-- 13 — TEAM -->
+    <section class="slide s13" id="slide-13" data-title="Team"
+      data-notes="All three of us either ran growth for a business that needed this or built the systems it required — nobody on this founding team is guessing at the problem. That's also why the product is CIS-first: we built it to solve our own team's problem before selling it to anyone else's.">
+      <div class="frame">
+        <div class="frame__head">
+          <div class="kicker">13 — Team</div>
+          <h1 class="headline">Built by people who ran this by hand.</h1>
+          <p class="sub">Three founders — engine, growth, and agency operations — who lived the problem before automating it.</p>
+        </div>
+        <div class="frame__body">
+          <div class="team-row">
+            <div class="card tcard">
+              <div class="avatar">AK</div>
+              <div class="name">Aziz Karimov°</div>
+              <div class="role">CEO / Co-founder</div>
+              <div class="cred">Ex-growth lead, a Tashkent e-commerce marketplace</div>
+            </div>
+            <div class="card tcard">
+              <div class="avatar">DY</div>
+              <div class="name">Dilnoza Yusupova°</div>
+              <div class="role">CTO / Co-founder</div>
+              <div class="cred">Built the six-platform engine architecture and the RBAC model</div>
+            </div>
+            <div class="card tcard">
+              <div class="avatar">SN</div>
+              <div class="name">Sardor Nazarov°</div>
+              <div class="role">Head of Product &amp; GTM</div>
+              <div class="cred">Ex-agency operator, ran paid social for CIS DTC brands</div>
+            </div>
+          </div>
+          <div class="team-foot">
+            <div class="item"><b>9°</b> full-time</div>
+            <div class="item">Founded <b>2025°</b></div>
+            <div class="item"><b>Tashkent, Uzbekistan°</b></div>
+          </div>
+          <div class="mock-chip">° illustrative placeholder</div>
+        </div>
+      </div>
+    </section>
+
+    <!-- 14 — FINANCIALS -->
+    <section class="slide s14" id="slide-14" data-title="Financials"
+      data-notes="We used a log axis on purpose and said so on the slide — a linear chart would make Year 1 disappear and Year 3 look fake. The growth curve matches Year-3 SOM exactly: 40,000 customers at the Starter price is the same number on the market slide and this one.">
+      <div class="frame">
+        <div class="frame__head">
+          <div class="kicker">14 — Financials</div>
+          <h1 class="headline">From $49K<sup style="font-size:.4em;">°</sup> to $12M<sup style="font-size:.4em;">°</sup> ARR in 3 years.</h1>
+          <p class="sub">ARPU drifts down as the base broadens — from today's early mix toward the Starter price point.</p>
+        </div>
+        <div class="frame__body">
+          <div class="layout">
+            <div class="tile barchart">
+              <div class="barchart__plot">
+                <div class="barchart__col">
+                  <div class="barchart__val">$49,200°</div>
+                  <div class="barchart__bar" style="height:56px;"></div>
+                  <div class="barchart__yr">Year 1</div>
+                </div>
+                <div class="barchart__col">
+                  <div class="barchart__val">$1.8M°</div>
+                  <div class="barchart__bar" style="height:183px;"></div>
+                  <div class="barchart__yr">Year 2</div>
+                </div>
+                <div class="barchart__col">
+                  <div class="barchart__val">$12M°</div>
+                  <div class="barchart__bar hero" style="height:250px;"></div>
+                  <div class="barchart__yr">Year 3</div>
+                </div>
+              </div>
+              <div class="barchart__base"></div>
+              <div class="barchart__note">ARR, log scale — a linear axis would flatten Year 1 to invisible</div>
+            </div>
+            <div class="stat-stack">
+              <div class="tile stat-tile"><div class="num">$85°</div><div class="lbl">CAC</div></div>
+              <div class="tile stat-tile"><div class="num">78°%</div><div class="lbl">Gross margin</div></div>
+              <div class="tile stat-tile"><div class="num">18°mo</div><div class="lbl">Runway on this raise</div></div>
+            </div>
+          </div>
+          <div class="mock-chip">° illustrative placeholder</div>
+        </div>
+      </div>
+    </section>
+
+    <!-- 15 — THE ASK -->
+    <section class="slide s15" id="slide-15" data-title="The Ask"
+      data-notes="This is the one slide where we want precision, not a story — $750K gets us to $1.8M ARR with 18 months of room, and a fifth of it is earmarked specifically to close the legal gap we just told you about on the risks slide, not to hide it.">
+      <div class="frame">
+        <div class="frame__head">
+          <div class="kicker">15 — The Ask</div>
+          <h1 class="headline">$750,000<sup style="font-size:.4em;">°</sup> to reach $1.8M<sup style="font-size:.4em;">°</sup> ARR.</h1>
+          <p class="sub">18 months° of runway, split across product, go-to-market, and closing the compliance gap.</p>
+        </div>
+        <div class="frame__body">
+          <div class="ask__num">$750,000°</div>
+          <div class="ask__cap">SAFE, $6,000,000° valuation cap</div>
+          <div class="ask__runway">18 months° runway</div>
+          <div class="ask__bar">
+            <div class="seg" style="flex:45;"><div class="pct">45°%</div><div class="name">Product &amp; Engineering</div></div>
+            <div class="seg" style="flex:35;"><div class="pct">35°%</div><div class="name">Sales &amp; GTM</div></div>
+            <div class="seg" style="flex:20;"><div class="pct">20°%</div><div class="name">Compliance/Ops/Legal</div></div>
+          </div>
+          <div class="mock-chip" style="position:static;margin-top:26px;">° illustrative placeholder — figures marked ° are modeled, not audited</div>
+        </div>
+      </div>
+    </section>
+
+    <!-- 16 — APPENDIX A -->
+    <section class="slide s16" id="slide-16" data-title="Appendix A: Architecture"
+      data-notes="This is the slide for the technical partner in the room, not the pitch itself — every row here maps to a real engine in the codebase, and we've drawn the roadmap line deliberately so nobody mistakes a planned platform for a shipped one.">
+      <div class="frame">
+        <div class="frame__head">
+          <div class="kicker">16 — Appendix A</div>
+          <h1 class="headline">How each of the six platforms actually works.</h1>
+          <p class="sub">Access method and mode per platform, plus what's roadmap-only and not yet claimed as shipped.</p>
+        </div>
+        <div class="frame__body">
+          <table class="archtable">
+            <thead><tr><th>Platform</th><th>Access method</th><th>Mode</th></tr></thead>
+            <tbody>
+              <tr><td class="plat">Instagram</td><td>Warmed-session CDP + vision</td><td>Opt-in engagement (like/follow/save/share)</td></tr>
+              <tr><td class="plat">X</td><td>Warmed-session CDP + vision</td><td class="mode-live">Read-only</td></tr>
+              <tr><td class="plat">LinkedIn</td><td>Warmed-session CDP + vision</td><td class="mode-live">Read-only</td></tr>
+              <tr><td class="plat">Reddit</td><td>Official Data API (OAuth2)</td><td class="mode-live">Read-only</td></tr>
+              <tr><td class="plat">YouTube</td><td>Official Data API v3</td><td class="mode-live">Read-only</td></tr>
+              <tr><td class="plat">Telegram</td><td>MTProto / Bot API</td><td class="mode-live">Read-only</td></tr>
+            </tbody>
+          </table>
+          <div class="arch-foot">Roadmap only, no engine built yet: Facebook, Pinterest, Quora, Threads, TikTok.</div>
+          <div class="arch-foot2">
+            <span class="pill" style="padding:6px 14px;font-family:var(--font-mono);font-size:12px;color:var(--grey-1);">Server-enforced RBAC — owner/admin/member/viewer</span>
+            <span class="pill" style="padding:6px 14px;font-family:var(--font-mono);font-size:12px;color:var(--grey-1);">Local-first, single shared SQLite DB</span>
+            <span class="pill" style="padding:6px 14px;font-family:var(--font-mono);font-size:12px;color:var(--grey-1);">Per-campaign spend caps on every LLM call</span>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- 17 — APPENDIX B -->
+    <section class="slide s17" id="slide-17" data-title="Appendix B: Contact"
+      data-notes="We'd rather over-disclose than have someone find a modeled number and wonder what else was soft. Everything with a ° is our best model of where this goes, not a claim about where it already is — happy to walk through the assumptions behind any single one of them.">
+      <div class="frame">
+        <div class="frame__head">
+          <div class="kicker">17 — Appendix B</div>
+          <h1 class="headline">Get in touch. Here's what's modeled.</h1>
+          <p class="sub">Every figure marked ° in this deck is illustrative, not audited — listed here in one place for reference.</p>
+        </div>
+        <div class="frame__body">
+          <div class="layout">
+            <div class="card contact-block">
+              <div class="who">[founder name]</div>
+              <div class="who">[email placeholder]</div>
+              <div class="brand">
+                <svg viewBox="0 0 100 100"><circle cx="40" cy="60" r="16" fill="#d9f24f"/><path d="M47 31 A31 31 0 0 1 71 72" fill="none" stroke="#f2f2f4" stroke-width="8.5" stroke-linecap="round"/></svg>
+                <span>AIZU <span style="color:var(--grey-1);font-weight:500;font-size:14px;">合図</span></span>
+              </div>
+            </div>
+            <div class="card recap">
+              <span class="h">° Illustrative placeholder — every marked figure, in one place</span>
+              Raise <b>$750,000°</b> SAFE · cap <b>$6,000,000°</b> · runway <b>18 months°</b> ·
+              ARR <b>$49,200°</b> → <b>$1.8M°</b> → <b>$12M°</b> ·
+              customers <b>38°</b> → <b>1,500°</b> → <b>40,000°</b> ·
+              CAC <b>$85°</b> · gross margin <b>78°%</b> · logo retention <b>91°%</b> ·
+              leads delivered <b>62,000°</b> · TAM <b>$36B°</b> / SAM <b>$2.4B°</b> / SOM <b>$12M°</b> · team of <b>9°</b>
+              <br><br>
+              <span style="color:var(--grey-1);">Real, unmarked, sourced from the shipped product: six platforms, four pricing tiers, RBAC model, spend caps, warmed-session architecture.</span>
+            </div>
+          </div>
+          <div class="mock-chip">° illustrative placeholder</div>
+        </div>
+      </div>
+    </section>
+
+  </div>
+</div>
+
+<!-- ---------- chrome (viewport-fixed, outside the scaled canvas) ---------- -->
+<div class="chrome">
+  <div class="clickzone left" id="zoneLeft"></div>
+  <div class="clickzone right" id="zoneRight"></div>
+  <button class="navbtn prev" id="btnPrev" aria-label="Previous slide">
+    <svg width="18" height="18" viewBox="0 0 24 24" fill="none"><path d="M15 4L7 12l8 8" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+  </button>
+  <button class="navbtn next" id="btnNext" aria-label="Next slide">
+    <svg width="18" height="18" viewBox="0 0 24 24" fill="none"><path d="M9 4l8 8-8 8" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+  </button>
+  <div class="counter" id="counter">01 / 17</div>
+  <div class="utilbar">
+    <button class="utilbtn" id="btnNotes" aria-label="Toggle speaker notes">S</button>
+    <button class="utilbtn" id="btnGrid" aria-label="Toggle slide overview">G</button>
+    <button class="utilbtn" id="btnHelp" aria-label="Toggle keyboard help">?</button>
+  </div>
+</div>
+<div class="progress"><div class="progress__fill" id="progressFill"></div></div>
+
+<aside class="notes-drawer" id="notesDrawer" aria-hidden="true">
+  <h2>Speaker notes</h2>
+  <div class="sub-title" id="notesTitle">Cover</div>
+  <p id="notesBody"></p>
+  <div class="hint">Press <kbd>s</kbd> to close</div>
+</aside>
+
+<div class="grid-overview" id="gridOverview" aria-hidden="true">
+  <div class="grid-overview__title">All slides — click to jump · press <kbd>g</kbd> or <kbd>Esc</kbd> to close</div>
+  <div class="grid-overview__grid" id="gridOverviewGrid"></div>
+</div>
+
+<div class="help-overlay" id="helpOverlay" aria-hidden="true">
+  <div class="help-card">
+    <h2>Keyboard</h2>
+    <div class="row"><span>Next slide</span><span><kbd>&rarr;</kbd> <kbd>&darr;</kbd> <kbd>Space</kbd> <kbd>PgDn</kbd> <kbd>n</kbd></span></div>
+    <div class="row"><span>Previous slide</span><span><kbd>&larr;</kbd> <kbd>&uarr;</kbd> <kbd>PgUp</kbd> <kbd>p</kbd></span></div>
+    <div class="row"><span>First / last slide</span><span><kbd>Home</kbd> / <kbd>End</kbd></span></div>
+    <div class="row"><span>Speaker notes</span><span><kbd>s</kbd></span></div>
+    <div class="row"><span>Grid overview</span><span><kbd>g</kbd></span></div>
+    <div class="row"><span>This help</span><span><kbd>?</kbd></span></div>
+    <div class="row"><span>Close overlay</span><span><kbd>Esc</kbd></span></div>
+  </div>
+</div>
+
+<script>
+(function () {
+  "use strict";
+
+  // ---- scale the fixed 1280x720 canvas to fit the viewport, never reflow type ----
+  var root = document.documentElement;
+  function rescale() {
+    var k = Math.min(window.innerWidth / 1280, window.innerHeight / 720);
+    root.style.setProperty('--k', String(k));
+  }
+  window.addEventListener('resize', rescale);
+  rescale();
+
+  var slides = Array.prototype.slice.call(document.querySelectorAll('.slide'));
+  var total = slides.length;
+  var current = 1; // 1-indexed, matches URL hash contract (#3 -> slide 3)
+
+  var counterEl = document.getElementById('counter');
+  var progressFill = document.getElementById('progressFill');
+  var notesDrawer = document.getElementById('notesDrawer');
+  var notesTitle = document.getElementById('notesTitle');
+  var notesBody = document.getElementById('notesBody');
+  var gridOverview = document.getElementById('gridOverview');
+  var gridGrid = document.getElementById('gridOverviewGrid');
+  var helpOverlay = document.getElementById('helpOverlay');
+
+  function pad2(n) { return n < 10 ? '0' + n : String(n); }
+
+  function render() {
+    slides.forEach(function (s, i) {
+      var active = (i + 1) === current;
+      s.classList.toggle('is-active', active);
+      s.setAttribute('aria-hidden', active ? 'false' : 'true');
+    });
+    counterEl.textContent = pad2(current) + ' / ' + pad2(total);
+    progressFill.style.width = (current / total * 100) + '%';
+
+    var slide = slides[current - 1];
+    notesTitle.textContent = slide.getAttribute('data-title') || '';
+    notesBody.textContent = slide.getAttribute('data-notes') || '';
+
+    // grid overview highlight
+    var thumbs = gridGrid.querySelectorAll('.thumb');
+    thumbs.forEach(function (t, i) {
+      t.classList.toggle('current', (i + 1) === current);
+    });
+
+    if (location.hash !== '#' + current) {
+      history.replaceState(null, '', '#' + current);
+    }
+  }
+
+  function goTo(n) {
+    if (n < 1) n = 1;
+    if (n > total) n = total;
+    current = n;
+    render();
+  }
+
+  function next() { goTo(current + 1); }
+  function prev() { goTo(current - 1); }
+
+  document.getElementById('btnNext').addEventListener('click', next);
+  document.getElementById('btnPrev').addEventListener('click', prev);
+  document.getElementById('zoneRight').addEventListener('click', next);
+  document.getElementById('zoneLeft').addEventListener('click', prev);
+
+  // ---- keyboard ----
+  window.addEventListener('keydown', function (e) {
+    if (e.ctrlKey || e.altKey || e.metaKey) return;
+    switch (e.key) {
+      case 'ArrowRight': case 'ArrowDown': case ' ': case 'PageDown': case 'n':
+        e.preventDefault(); next(); break;
+      case 'ArrowLeft': case 'ArrowUp': case 'PageUp': case 'p':
+        e.preventDefault(); prev(); break;
+      case 'Home':
+        e.preventDefault(); goTo(1); break;
+      case 'End':
+        e.preventDefault(); goTo(total); break;
+      case 's': case 'S':
+        toggleNotes(); break;
+      case 'g': case 'G':
+        toggleGrid(); break;
+      case '?':
+        toggleHelp(); break;
+      case 'Escape':
+        closeOverlays(); break;
+    }
+  });
+
+  // ---- speaker notes drawer ----
+  function toggleNotes() {
+    var open = notesDrawer.classList.toggle('open');
+    notesDrawer.setAttribute('aria-hidden', open ? 'false' : 'true');
+  }
+  document.getElementById('btnNotes').addEventListener('click', toggleNotes);
+
+  // ---- grid overview ----
+  function buildGrid() {
+    slides.forEach(function (s, i) {
+      var btn = document.createElement('button');
+      btn.className = 'thumb';
+      btn.type = 'button';
+      btn.setAttribute('aria-label', 'Go to slide ' + (i + 1) + ': ' + (s.getAttribute('data-title') || ''));
+      var idx = document.createElement('div');
+      idx.className = 'thumb__idx';
+      idx.textContent = pad2(i + 1);
+      var title = document.createElement('div');
+      title.className = 'thumb__title';
+      title.textContent = s.getAttribute('data-title') || '';
+      btn.appendChild(idx);
+      btn.appendChild(title);
+      btn.addEventListener('click', function () {
+        goTo(i + 1);
+        closeOverlays();
+      });
+      gridGrid.appendChild(btn);
+    });
+  }
+  buildGrid();
+
+  function toggleGrid() {
+    var open = gridOverview.classList.toggle('open');
+    gridOverview.setAttribute('aria-hidden', open ? 'false' : 'true');
+    if (open) helpOverlay.classList.remove('open');
+  }
+  document.getElementById('btnGrid').addEventListener('click', toggleGrid);
+
+  // ---- help overlay ----
+  function toggleHelp() {
+    var open = helpOverlay.classList.toggle('open');
+    helpOverlay.setAttribute('aria-hidden', open ? 'false' : 'true');
+  }
+  document.getElementById('btnHelp').addEventListener('click', toggleHelp);
+
+  function closeOverlays() {
+    notesDrawer.classList.remove('open');
+    notesDrawer.setAttribute('aria-hidden', 'true');
+    gridOverview.classList.remove('open');
+    gridOverview.setAttribute('aria-hidden', 'true');
+    helpOverlay.classList.remove('open');
+    helpOverlay.setAttribute('aria-hidden', 'true');
+  }
+
+  // ---- URL hash sync (#3 -> slide 3), guarded against out-of-range/garbage ----
+  function fromHash() {
+    var raw = location.hash.replace('#', '');
+    var n = parseInt(raw, 10);
+    if (!isNaN(n) && n >= 1 && n <= total) {
+      current = n;
+    } else {
+      current = 1;
+    }
+  }
+  window.addEventListener('hashchange', function () {
+    fromHash();
+    render();
+  });
+
+  fromHash();
+  render();
+})();
+</script>

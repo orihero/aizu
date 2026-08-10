@@ -8,6 +8,7 @@ four separate locations this consolidated.
 | Path | What it is |
 | --- | --- |
 | [`videos/madison/`](videos/madison/) | **The AIZU explainer** — the current, actively developed video. 11 scenes, 70.4s, still silent. Start at [`videos/README.md`](videos/README.md). |
+| [`pitch-deck/`](pitch-deck/) | **Decks.** Two separate audiences: the **scholarship deck** (`deck-scholarship.html`, for the IT Park Uzbekistan committee — every capability figure counted from the repo, no ask for capital) and the earlier **investor decks** (one content spec in three visual styles, with modelled figures marked `°`). See [`pitch-deck/README.md`](pitch-deck/README.md). |
 | [`website/`](website/) | A self-contained landing page draft. **Not the shipped aizu.uz home page** — see the caveat below. No build step — open `index.html`. |
 | [`aizu-promo-video-treatment.md`](aizu-promo-video-treatment.md) | An earlier written treatment for a ~75s promo. **Historical — read the caveat below before treating it as binding.** |
 | [`archive/`](archive/) | Superseded creative work, kept for reference. Not current direction. |

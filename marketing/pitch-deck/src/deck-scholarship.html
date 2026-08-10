@@ -1,0 +1,1162 @@
+<title>AIZU — Application to IT Park Uzbekistan</title>
+<style>
+/*__AIZU_FONTS__*/
+
+/* ============================================================
+   AIZU · scholarship deck
+   Register: institutional-editorial. Paper ground, Ink type,
+   Lime as signal only. Four full-bleed Ink slides punctuate.
+
+   Colour rule that is load-bearing: #d9f24f is never text on
+   paper (contrast 1.3:1, illegible). On paper it is a fill, a
+   rule, or a marker. It becomes type only on Ink.
+   ============================================================ */
+
+:root{
+  --paper:      #f7f7f4;
+  --card:       #ffffff;
+  --ink:        #14141a;
+  --ink-2:      #3d3d46;
+  --muted:      #86868f;
+  --faint:      #b4b4bb;
+  --rule:       #e2e2dc;
+  --rule-2:     #ededea;
+  --lime:       #d9f24f;
+  --lime-lo:    #c8e337;
+  --tint:       #f0f0ec;
+
+  --W: 1280px;
+  --H: 720px;
+  --pad: 76px;
+
+  --sans: 'Inter Tight', ui-sans-serif, system-ui, -apple-system, 'Segoe UI', sans-serif;
+  --mono: 'JetBrains Mono', ui-monospace, 'SF Mono', Menlo, monospace;
+}
+
+*{ box-sizing: border-box; }
+
+html, body{
+  margin:0; padding:0;
+  background: #0e0e12;
+  color: var(--ink);
+  font-family: var(--sans);
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+  overflow: hidden;
+}
+
+/* ---------- stage & scaling ------------------------------- */
+
+#stage{
+  position: fixed; inset: 0;
+  display: grid; place-items: center;
+}
+
+#reel{
+  width: var(--W); height: var(--H);
+  transform-origin: center center;
+  position: relative;
+}
+
+.slide{
+  position: absolute; inset: 0;
+  width: var(--W); height: var(--H);
+  background: var(--paper);
+  padding: var(--pad) var(--pad) 68px;
+  display: none;
+  overflow: hidden;
+}
+/* Flex column so a trailing takeaway anchors just above the footer rule
+   instead of leaving a void under short content. */
+.slide.on{ display: flex; flex-direction: column; }
+
+/* ---------- chrome: eyebrow, footer, rule ----------------- */
+
+.eyebrow{
+  font-family: var(--mono); font-size: 10.5px; font-weight: 500;
+  letter-spacing: .18em; text-transform: uppercase;
+  color: var(--muted);
+  display: flex; align-items: center; gap: 10px;
+}
+.eyebrow::before{
+  content:''; width: 22px; height: 3px; background: var(--lime);
+  display: block; flex: none;
+}
+
+h1.t{
+  font-size: 46px; font-weight: 600; letter-spacing: -.028em;
+  line-height: 1.04; margin: 18px 0 0; max-width: 20ch;
+  text-wrap: balance;
+}
+h1.t.wide{ max-width: 26ch; }
+
+.slide > .foot{
+  position: absolute; left: var(--pad); right: var(--pad); bottom: 30px;
+  display: flex; align-items: baseline; justify-content: space-between;
+  font-family: var(--mono); font-size: 10px; letter-spacing: .12em;
+  text-transform: uppercase; color: var(--faint);
+  border-top: 1px solid var(--rule); padding-top: 12px;
+}
+.foot .src{ text-transform: none; letter-spacing: .02em; color: var(--muted);
+  max-width: 78%; font-size: 10px; line-height: 1.5; }
+
+/* the body region sits between title and footer, and absorbs slack */
+.body{ margin-top: 40px; flex: 1 1 auto; min-height: 0; }
+
+/* ---------- ink slides ------------------------------------ */
+
+.slide.ink{ background: var(--ink); color: var(--paper); }
+.slide.ink .eyebrow{ color: #7d7d88; }
+.slide.ink .foot{ border-top-color: #2a2a32; color: #5c5c66; }
+.slide.ink .foot .src{ color: #7d7d88; }
+.slide.ink .lime{ color: var(--lime); }
+
+/* ---------- primitives ------------------------------------ */
+
+.lead{ font-size: 20px; line-height: 1.5; color: var(--ink-2); max-width: 46ch; }
+.take{
+  font-size: 17px; line-height: 1.45; color: var(--ink);
+  border-left: 3px solid var(--lime); padding-left: 16px;
+  max-width: 62ch; font-weight: 500;
+}
+
+ul.pts{ list-style: none; margin: 0; padding: 0; }
+ul.pts li{
+  font-size: 19px; line-height: 1.4; color: var(--ink-2);
+  padding: 15px 0 15px 0; border-top: 1px solid var(--rule);
+  display: grid; grid-template-columns: 30px 1fr; gap: 4px;
+}
+ul.pts li:last-child{ border-bottom: 1px solid var(--rule); }
+ul.pts li .n{
+  font-family: var(--mono); font-size: 10.5px; color: var(--faint);
+  letter-spacing: .1em; padding-top: 6px;
+}
+ul.pts li b{ color: var(--ink); font-weight: 600; }
+
+.grow{ flex: 1 1 auto; min-height: 0; }
+/* a grid body grown by the flex column centres its single row rather than
+   stretching it, so short content sits optically centred, not top-stuck */
+.body.two, .body.three, .body.four, .body.flow{ align-content: center; }
+.two{ display: grid; grid-template-columns: 1fr 1fr; gap: 56px; }
+.two.l{ grid-template-columns: 1.05fr .95fr; }
+.two.r{ grid-template-columns: .82fr 1.18fr; }
+.three{ display: grid; grid-template-columns: repeat(3,1fr); gap: 28px; }
+.four{ display: grid; grid-template-columns: repeat(4,1fr); gap: 22px; }
+
+.card{
+  background: var(--card); border: 1px solid var(--rule);
+  border-radius: 3px; padding: 24px 22px;
+}
+.card .h{
+  font-family: var(--mono); font-size: 10px; letter-spacing: .16em;
+  text-transform: uppercase; color: var(--muted); margin-bottom: 12px;
+}
+.card .k{ font-size: 21px; font-weight: 600; letter-spacing: -.02em; margin-bottom: 8px; }
+.card p{ margin: 0; font-size: 15.5px; line-height: 1.45; color: var(--ink-2); }
+
+/* data spotlight */
+.stat .fig{
+  font-size: 88px; font-weight: 600; letter-spacing: -.045em;
+  line-height: .92; margin-bottom: 16px; font-variant-numeric: tabular-nums;
+}
+.stat .fig .u{ font-size: 34px; letter-spacing: -.02em; color: var(--muted); }
+.stat .lab{
+  font-size: 15px; line-height: 1.4; color: var(--ink-2);
+  border-top: 2px solid var(--lime); padding-top: 12px;
+}
+.stat.q .lab{ border-top-color: var(--rule); }
+
+/* tables */
+table.grid{ width: 100%; border-collapse: collapse; }
+table.grid th{
+  font-family: var(--mono); font-size: 10px; letter-spacing: .16em;
+  text-transform: uppercase; color: var(--muted); text-align: left;
+  padding: 0 0 11px; border-bottom: 1px solid var(--ink); font-weight: 500;
+}
+table.grid td{
+  padding: 14px 0; border-bottom: 1px solid var(--rule);
+  font-size: 16.5px; color: var(--ink-2); vertical-align: baseline;
+}
+table.grid td:first-child{ color: var(--ink); font-weight: 600; }
+table.grid td .mono{ font-family: var(--mono); font-size: 13px; color: var(--muted); }
+
+.chip{
+  display: inline-block; font-family: var(--mono); font-size: 10.5px;
+  letter-spacing: .08em; padding: 4px 9px; border-radius: 2px;
+  background: var(--tint); color: var(--ink-2); text-transform: uppercase;
+}
+.chip.on{ background: var(--lime); color: var(--ink); }
+
+.note{
+  font-family: var(--mono); font-size: 11px; line-height: 1.6;
+  color: var(--muted);
+}
+
+/* ---------- slide 1: title -------------------------------- */
+
+.title-grid{
+  height: 100%; display: grid; grid-template-rows: auto 1fr auto;
+}
+.wordmark{
+  font-size: 30px; font-weight: 600; letter-spacing: .02em;
+  display: flex; align-items: baseline; gap: 12px;
+}
+.wordmark .jp{ font-size: 21px; color: var(--lime); letter-spacing: .06em; }
+.display{
+  font-size: 118px; font-weight: 600; letter-spacing: -.045em;
+  line-height: .95; margin: 0;
+}
+.display .lime{ color: var(--lime); }
+.titlemeta{
+  display: grid; grid-template-columns: repeat(3, auto); gap: 0 60px;
+  justify-content: start;
+  font-family: var(--mono); font-size: 11px; letter-spacing: .1em;
+  text-transform: uppercase; color: #7d7d88;
+  border-top: 1px solid #2a2a32; padding-top: 18px;
+}
+.titlemeta b{ display: block; color: var(--paper); font-weight: 500; margin-top: 6px; letter-spacing: .06em; }
+
+/* ---------- slide 3: comment wall ------------------------- */
+
+.wall{ display: grid; gap: 9px; }
+.cmt{
+  background: var(--card); border: 1px solid var(--rule-2); border-radius: 3px;
+  padding: 13px 15px; display: grid; grid-template-columns: 26px 1fr; gap: 12px;
+  align-items: start;
+}
+.cmt .av{ width: 26px; height: 26px; border-radius: 50%; background: var(--tint); }
+.cmt .who{ font-family: var(--mono); font-size: 10.5px; color: var(--faint); margin-bottom: 4px; letter-spacing: .04em; }
+.cmt .txt{ font-size: 14.5px; line-height: 1.35; color: var(--faint); }
+.cmt.hit{ border-color: var(--ink); box-shadow: -4px 0 0 0 var(--lime); }
+.cmt.hit .txt{ color: var(--ink); font-weight: 500; }
+.cmt.hit .who{ color: var(--ink-2); }
+.cmt.hit .av{ background: var(--ink); }
+.walltag{
+  font-family: var(--mono); font-size: 10px; letter-spacing: .14em;
+  text-transform: uppercase; color: var(--muted); margin-top: 14px;
+  display: flex; justify-content: space-between;
+}
+
+/* ---------- slide 6: flow --------------------------------- */
+
+.flow{ display: grid; grid-template-columns: repeat(5,1fr); gap: 0; }
+.step{ padding-right: 26px; position: relative; }
+/* connector drawn per step, so it tracks the dots however the row is aligned */
+.step::before{
+  content:''; position: absolute; top: 16px; left: 34px; right: 8px;
+  height: 1px; background: var(--rule);
+}
+.step:last-child::before{ display: none; }
+.step .dot{
+  width: 34px; height: 34px; border-radius: 50%; background: var(--lime);
+  display: grid; place-items: center; position: relative; z-index: 1;
+  font-family: var(--mono); font-size: 12px; font-weight: 500; color: var(--ink);
+}
+.step .k{ font-size: 19px; font-weight: 600; letter-spacing: -.02em; margin: 20px 0 8px; }
+.step p{ margin: 0; font-size: 14.5px; line-height: 1.45; color: var(--ink-2); }
+
+/* ---------- slide 11: product mock ------------------------ */
+
+.mock{
+  background: var(--card); border: 1px solid var(--rule); border-radius: 4px;
+  overflow: hidden; display: grid; grid-template-columns: 148px 1fr;
+  height: 390px;
+}
+.mock .rail{ background: var(--ink); padding: 17px 14px; }
+.mock .rail .wm{
+  font-size: 14.5px; font-weight: 600; color: var(--paper); letter-spacing: .02em;
+  margin-bottom: 22px; display: flex; align-items: center; gap: 7px;
+}
+.mock .rail .wm i{ width: 7px; height: 7px; background: var(--lime); display: block; }
+.mock .rail div.nv{
+  font-size: 12.5px; color: #74747f; padding: 7px 8px; border-radius: 2px; margin-bottom: 2px;
+}
+.mock .rail div.nv.sel{ background: #22222a; color: var(--paper); }
+.mock .main{ padding: 17px 20px; }
+.mock .bar{ display: flex; align-items: baseline; justify-content: space-between; margin-bottom: 15px; }
+.mock .bar .ttl{ font-size: 17px; font-weight: 600; letter-spacing: -.02em; }
+.mock table{ width: 100%; border-collapse: collapse; table-layout: fixed; }
+.mock th{
+  font-family: var(--mono); font-size: 9px; letter-spacing: .13em; text-transform: uppercase;
+  color: var(--faint); text-align: left; padding-bottom: 9px; border-bottom: 1px solid var(--rule);
+  font-weight: 500;
+}
+.mock td{
+  padding: 10px 8px 10px 0; border-bottom: 1px solid var(--rule-2);
+  font-size: 12.5px; color: var(--ink-2);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.mock th:last-child, .mock td:last-child{ padding-right: 0; }
+.mock td.q{ color: var(--ink); }
+.mock .sc{ font-family: var(--mono); font-size: 11px; color: var(--ink); font-variant-numeric: tabular-nums; }
+.mock .stg{ font-family: var(--mono); font-size: 9.5px; letter-spacing: .08em; text-transform: uppercase;
+  background: var(--tint); padding: 3px 7px; border-radius: 2px; color: var(--ink-2); }
+.mock .stg.new{ background: var(--lime); }
+
+.callouts{ display: grid; gap: 18px; align-content: center; }
+.callout .k{ font-size: 16px; font-weight: 600; margin-bottom: 5px; letter-spacing: -.01em; }
+.callout p{ margin: 0; font-size: 14.5px; line-height: 1.45; color: var(--ink-2); }
+
+/* ---------- slide 16: timeline ---------------------------- */
+
+.tl{ display: grid; grid-template-columns: repeat(4,1fr); gap: 0; position: relative; margin-top: 8px; }
+.tl::before{
+  content:''; position: absolute; left: 0; right: 0; top: 26px; height: 1px; background: var(--rule);
+}
+.tl .q{ padding-right: 30px; position: relative; }
+.tl .q .mk{ font-family: var(--mono); font-size: 11px; letter-spacing: .14em; color: var(--muted); margin-bottom: 12px; }
+.tl .q .pin{ width: 11px; height: 11px; background: var(--card); border: 2px solid var(--ink); border-radius: 50%; position: relative; z-index: 1; }
+.tl .q.first .pin{ background: var(--lime); border-color: var(--lime); }
+.tl .q .k{ font-size: 18px; font-weight: 600; letter-spacing: -.02em; margin: 22px 0 8px; }
+.tl .q p{ margin: 0; font-size: 14.5px; line-height: 1.45; color: var(--ink-2); }
+
+/* ---------- proven / not-yet columns ---------------------- */
+
+.col-h{
+  font-family: var(--mono); font-size: 10.5px; letter-spacing: .16em; text-transform: uppercase;
+  padding-bottom: 12px; border-bottom: 2px solid var(--ink); margin-bottom: 4px; color: var(--ink);
+}
+.col-h.soft{ border-bottom-color: var(--faint); color: var(--muted); }
+ul.tick{ list-style: none; margin: 0; padding: 0; }
+ul.tick li{
+  font-size: 17px; line-height: 1.4; color: var(--ink-2);
+  padding: 15px 0 15px 26px; border-bottom: 1px solid var(--rule); position: relative;
+}
+ul.tick li::before{
+  content:''; position: absolute; left: 0; top: 22px;
+  width: 10px; height: 10px; background: var(--lime);
+}
+ul.tick.soft li::before{ background: none; border: 1px solid var(--faint); }
+
+/* ---------- ask slide ------------------------------------- */
+
+.ask ul.pts li{ border-color: #2a2a32; color: #c9c9d2; font-size: 20px; }
+.ask ul.pts li b{ color: var(--paper); }
+.ask ul.pts li .n{ color: #5c5c66; }
+
+/* ---------- overview & notes ------------------------------ */
+
+#ov{
+  position: fixed; inset: 0; background: rgba(14,14,18,.97); z-index: 60;
+  display: none; padding: 40px; overflow: auto;
+}
+#ov.on{ display: block; }
+#ov h4{
+  font-family: var(--mono); font-size: 11px; letter-spacing: .18em; text-transform: uppercase;
+  color: #7d7d88; margin: 0 0 22px; font-weight: 500;
+}
+#ovg{ display: grid; grid-template-columns: repeat(6,1fr); gap: 14px; }
+.thumb{
+  aspect-ratio: 16/9; background: var(--paper); border: 1px solid #2a2a32; border-radius: 2px;
+  padding: 10px; cursor: pointer; position: relative; overflow: hidden;
+  display: flex; align-items: flex-end;
+}
+.thumb.dark{ background: var(--ink); }
+.thumb span{ font-size: 11px; line-height: 1.25; font-weight: 600; color: var(--ink); letter-spacing: -.01em; }
+.thumb.dark span{ color: var(--paper); }
+.thumb i{
+  position: absolute; top: 8px; left: 10px; font-style: normal;
+  font-family: var(--mono); font-size: 9px; color: var(--faint); letter-spacing: .1em;
+}
+.thumb.cur{ border-color: var(--lime); box-shadow: 0 0 0 1px var(--lime); }
+
+#notes{
+  position: fixed; left: 0; right: 0; bottom: 0; z-index: 50;
+  background: #17171d; border-top: 1px solid #2a2a32;
+  padding: 16px 26px; display: none;
+  font-size: 14px; line-height: 1.5; color: #c9c9d2; max-height: 30vh; overflow: auto;
+}
+#notes.on{ display: block; }
+#notes b{
+  font-family: var(--mono); font-size: 10px; letter-spacing: .16em; text-transform: uppercase;
+  color: var(--lime); display: block; margin-bottom: 7px; font-weight: 500;
+}
+
+#hud{
+  position: fixed; right: 18px; bottom: 14px; z-index: 40;
+  font-family: var(--mono); font-size: 10.5px; letter-spacing: .12em; color: #4a4a55;
+}
+#bar{
+  position: fixed; left: 0; top: 0; height: 2px; background: var(--lime); z-index: 45;
+  width: 0; transition: width .28s cubic-bezier(.16,1,.3,1);
+}
+#help{
+  position: fixed; inset: 0; background: rgba(14,14,18,.97); z-index: 70;
+  display: none; place-items: center;
+}
+#help.on{ display: grid; }
+#help div{ font-family: var(--mono); font-size: 13px; line-height: 2.1; color: #c9c9d2; }
+#help kbd{
+  background: #22222a; border: 1px solid #33333d; border-radius: 3px;
+  padding: 2px 8px; color: var(--lime); margin-right: 12px; display: inline-block; min-width: 74px; text-align: center;
+}
+
+/* ---------- print ----------------------------------------- */
+
+@media print{
+  @page{ size: 13.333in 7.5in; margin: 0; }
+  html, body{ background: #fff; overflow: visible; }
+  #stage{ position: static; display: block; }
+  #reel{ transform: none !important; width: auto; height: auto; }
+  #ov, #notes, #hud, #bar, #help{ display: none !important; }
+  /* keep the flex column in print so takeaways stay anchored above the footer,
+     exactly as they sit on screen */
+  .slide{
+    position: relative !important; display: flex !important; flex-direction: column;
+    width: 1280px; height: 720px; break-after: page; page-break-after: always;
+    -webkit-print-color-adjust: exact; print-color-adjust: exact;
+  }
+  .slide:last-child{ break-after: auto; page-break-after: auto; }
+}
+</style>
+
+<div id="bar"></div>
+<div id="stage"><div id="reel">
+
+<!-- ═══ 01 · TITLE ══════════════════════════════════════════ -->
+<section class="slide ink on"
+  data-t="Title"
+  data-n="Good morning. My name is [NAME]. AIZU is a lead-discovery system for businesses that sell online. I want to be direct about one thing before I start: we have no revenue and no customers. What we have is a finished, working system, and I would rather you inspect it than take my word for anything. That is the whole application.">
+  <div class="title-grid">
+    <div class="wordmark">AIZU <span class="jp">合図</span></div>
+    <div style="align-self:center">
+      <p class="display">A signal<br>to <span class="lime">act.</span></p>
+      <p style="font-size:21px;line-height:1.45;color:#a8a8b2;max-width:40ch;margin:34px 0 0">
+        Brief-driven lead discovery across six social platforms.
+        Written in Tashkent. Running today.
+      </p>
+    </div>
+    <div class="titlemeta">
+      <div>Submitted to<b>IT Park Uzbekistan</b></div>
+      <div>Programme<b>Scholarship track</b></div>
+      <div>Date<b>10 August 2026</b></div>
+    </div>
+  </div>
+</section>
+
+<!-- ═══ 02 · AGENDA ═════════════════════════════════════════ -->
+<section class="slide"
+  data-t="Agenda"
+  data-n="Four movements. I spend most of the time on the second one, because what is built is the only thing that separates this application from a proposal.">
+  <div class="eyebrow">Agenda</div>
+  <h1 class="t">What the next twelve<br>minutes cover</h1>
+  <div class="body two r" style="margin-top:52px">
+    <div>
+      <p class="lead" style="font-size:18px">
+        This is not a plan for a product. It is a walkthrough
+        of one that already runs, followed by an honest account
+        of what it still lacks.
+      </p>
+      <p class="note" style="margin-top:28px">
+        A live demonstration is available at any point.<br>
+        The system runs on the laptop in this room.
+      </p>
+    </div>
+    <ul class="pts">
+      <li><span class="n">01</span><span><b>The problem.</b> Demand is public. Reading it is not possible by hand.</span></li>
+      <li><span class="n">02</span><span><b>The system.</b> Six platforms, four applications, all shipped.</span></li>
+      <li><span class="n">03</span><span><b>The relevance.</b> Why this was built in Uzbekistan, deliberately.</span></li>
+      <li><span class="n">04</span><span><b>The request.</b> What we ask of the programme — and it is not money.</span></li>
+    </ul>
+  </div>
+  <div class="foot"><span class="src"></span><span>02</span></div>
+</section>
+
+<!-- ═══ 03 · PROBLEM ════════════════════════════════════════ -->
+<section class="slide"
+  data-t="Problem"
+  data-n="Point at the highlighted comment. Everything above and below it is noise — emoji, tags, small talk. One line in that stack is a person with money, a need, and no supplier. A human could find it. A human cannot find it a thousand times a day, across six platforms, forever.">
+  <div class="eyebrow">The problem</div>
+  <h1 class="t">Your buyer already<br>asked. In public.</h1>
+  <div class="body two l" style="margin-top:44px">
+    <div>
+      <ul class="pts">
+        <li><span class="n">—</span><span>Every day people post exactly what they intend to buy.</span></li>
+        <li><span class="n">—</span><span>Under reviews, inside groups, beneath a competitor's post.</span></li>
+        <li><span class="n">—</span><span>Nobody reads those comments. There are far too many.</span></li>
+        <li><span class="n">—</span><span>The seller who answers first usually takes the sale.</span></li>
+      </ul>
+      <p class="take" style="margin-top:30px">
+        The demand is free, public and already written down.
+        Reading it is the bottleneck.
+      </p>
+    </div>
+    <div>
+      <div class="wall">
+        <div class="cmt"><div class="av"></div><div><div class="who">@dilnoza_k</div><div class="txt">third one is my favourite 🔥</div></div></div>
+        <div class="cmt"><div class="av"></div><div><div class="who">@marat.designs</div><div class="txt">@aziz look at this</div></div></div>
+        <div class="cmt hit"><div class="av"></div><div><div class="who">@shoxrux_tex</div><div class="txt">does anyone know a supplier for these in Tashkent? need about 20 units this month</div></div></div>
+        <div class="cmt"><div class="av"></div><div><div class="who">@lola.home</div><div class="txt">😍😍😍</div></div></div>
+        <div class="cmt"><div class="av"></div><div><div class="who">@bekzod99</div><div class="txt">been using mine for two years, no complaints</div></div></div>
+      </div>
+      <div class="walltag"><span>One post · 340 comments</span><span>One buyer</span></div>
+    </div>
+  </div>
+  <div class="foot"><span class="src">Illustrative reconstruction of a typical comment thread. Handles are fictional.</span><span>03</span></div>
+</section>
+
+<!-- ═══ 04 · ALTERNATIVES ═══════════════════════════════════ -->
+<section class="slide"
+  data-t="Why it goes unanswered"
+  data-n="Three existing answers, three different failures. The first two are the entire lead-generation industry. The third is what actually works and what nobody can sustain. AIZU is the third one, made repeatable.">
+  <div class="eyebrow">Why it goes unanswered</div>
+  <h1 class="t wide">The alternatives each fail differently</h1>
+  <div class="body three" style="margin-top:46px">
+    <div class="card">
+      <div class="h">Option one</div>
+      <div class="k">Bought contact lists</div>
+      <p>Strangers who never asked for anything. Low reply rates, and the sender carries the spam risk.</p>
+    </div>
+    <div class="card">
+      <div class="h">Option two</div>
+      <div class="k">Advertising platforms</div>
+      <p>You pay to interrupt people who were doing something else. Cost per lead rises as intent falls.</p>
+    </div>
+    <div class="card" style="border-color:var(--ink)">
+      <div class="h">Option three</div>
+      <div class="k">Reading comments by hand</div>
+      <p>It works. It is also six hours a day that no founder or salesperson actually has.</p>
+    </div>
+  </div>
+  <p class="take" style="margin-top:44px">
+    Only the third one answers a person who already asked. AIZU makes the third one survivable.
+  </p>
+  <div class="foot"><span class="src"></span><span>04</span></div>
+</section>
+
+<!-- ═══ 05 · WHAT IT IS (INK) ═══════════════════════════════ -->
+<section class="slide ink"
+  data-t="What AIZU is"
+  data-n="Say this sentence slowly and then stop talking for a beat. It is the whole product. Everything after this slide is evidence that it is real.">
+  <div class="eyebrow">The system</div>
+  <div style="margin-top:52px;max-width:24ch">
+    <p style="font-size:64px;font-weight:600;letter-spacing:-.04em;line-height:1.04;margin:0">
+      One brief.<br>Every platform.<br>A short <span class="lime">list.</span>
+    </p>
+  </div>
+  <p class="grow" style="font-size:22px;line-height:1.5;color:#a8a8b2;max-width:52ch;margin:44px 0 0">
+    You describe what you sell and who you serve, once.
+    AIZU reads what people say in public and returns the ones
+    who are ready to buy — every week, in one inbox.
+  </p>
+  <p class="note" style="margin-top:26px;color:#5c5c66">
+    Read-only by default · six platforms · no messages sent on your behalf
+  </p>
+  <div class="foot"><span class="src"></span><span>05</span></div>
+</section>
+
+<!-- ═══ 06 · HOW IT WORKS ═══════════════════════════════════ -->
+<section class="slide"
+  data-t="How it works"
+  data-n="The only human step is the first one. Note step two carefully — the engine attaches to a browser the operator already opened and logged into. It never opens one itself, never asks for a password, and never stores one. That single decision is why the system is safe to run.">
+  <div class="eyebrow">How it works</div>
+  <h1 class="t wide">Five steps, and only one is yours</h1>
+  <div class="body flow" style="margin-top:56px">
+    <div class="step">
+      <div class="dot">01</div>
+      <div class="k">Brief</div>
+      <p>You describe what you sell and who you serve. Once, in plain language.</p>
+    </div>
+    <div class="step">
+      <div class="dot">02</div>
+      <div class="k">Attach</div>
+      <p>The engine joins a browser session you already opened — or an official API.</p>
+    </div>
+    <div class="step">
+      <div class="dot">03</div>
+      <div class="k">Read</div>
+      <p>Each post is scored for relevance, then every comment beneath it.</p>
+    </div>
+    <div class="step">
+      <div class="dot">04</div>
+      <div class="k">Qualify</div>
+      <p>Commenters who signal intent become leads, with the fields you asked for.</p>
+    </div>
+    <div class="step">
+      <div class="dot">05</div>
+      <div class="k">Triage</div>
+      <p>Six platforms land in one inbox — tagged, staged, ready to answer.</p>
+    </div>
+  </div>
+  <p class="take" style="margin-top:52px">
+    Step 01 needs a person. Steps 02 to 05 repeat on a schedule, without one.
+  </p>
+  <div class="foot"><span class="src">Source: docs/architecture/overview.md, §4 "End-to-end data flow".</span><span>06</span></div>
+</section>
+
+<!-- ═══ 07 · NOT A PROTOTYPE ════════════════════════════════ -->
+<section class="slide"
+  data-t="Not a prototype"
+  data-n="These four numbers are counted from the repository, not estimated. If the committee wants, the count can be reproduced in front of you in about ten seconds. The test number is the one I would look at: sixteen hundred automated tests is not what a demo has. It is what a system someone intends to maintain has.">
+  <div class="eyebrow">Evidence</div>
+  <h1 class="t wide">This is running code, not a concept</h1>
+  <div class="body four" style="margin-top:58px">
+    <div class="stat">
+      <div class="fig">6</div>
+      <div class="lab">platform engines shipped and running end to end</div>
+    </div>
+    <div class="stat">
+      <div class="fig">1,661</div>
+      <div class="lab">automated tests, passing on every change</div>
+    </div>
+    <div class="stat">
+      <div class="fig">57<span class="u">k</span></div>
+      <div class="lab">lines of production Python and TypeScript</div>
+    </div>
+    <div class="stat">
+      <div class="fig">4</div>
+      <div class="lab">separate applications, each working today</div>
+    </div>
+  </div>
+  <p class="take" style="margin-top:56px">
+    Nothing on this slide is a projection. It is a count, and it can be re-run on request.
+  </p>
+  <div class="foot"><span class="src">Counted from the repository, 10 Aug 2026: engine 30,346 lines Python across 97 modules; panel 26,748 lines TypeScript; 55 API endpoints; 40 database tables.</span><span>07</span></div>
+</section>
+
+<!-- ═══ 08 · ARCHITECTURE ═══════════════════════════════════ -->
+<section class="slide"
+  data-t="Architecture"
+  data-n="Four processes, one file. Everything reads and writes a single SQLite database — no separate application server, no ORM, no cloud state we cannot point at. That matters here for two reasons: it runs where bandwidth is unreliable, and every byte of customer data can stay on a machine the customer owns.">
+  <div class="eyebrow">Architecture</div>
+  <h1 class="t wide">Four processes, one database</h1>
+  <div class="body" style="margin-top:34px">
+    <svg viewBox="0 0 1140 440" width="100%" style="height:auto;display:block" role="img"
+         aria-label="AIZU architecture: operator surfaces, a control-plane bridge, execution processes, and one shared SQLite database.">
+      <defs>
+        <marker id="ar" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto">
+          <path d="M0,0 L10,5 L0,10 z" fill="#b4b4bb"/>
+        </marker>
+      </defs>
+      <style>
+        .bx{ fill:#ffffff; stroke:#e2e2dc; stroke-width:1; }
+        .bk{ fill:#14141a; }
+        .ch{ fill:#f0f0ec; stroke:none; }
+        .tt{ font-family:'Inter Tight',sans-serif; font-size:17px; font-weight:600; fill:#14141a; letter-spacing:-.01em; }
+        .tw{ font-family:'Inter Tight',sans-serif; font-size:17px; font-weight:600; fill:#f7f7f4; letter-spacing:-.01em; }
+        .ss{ font-family:'Inter Tight',sans-serif; font-size:13px; fill:#86868f; }
+        .sw{ font-family:'Inter Tight',sans-serif; font-size:13px; fill:#8f8f9a; }
+        .lb{ font-family:'JetBrains Mono',monospace; font-size:10px; letter-spacing:.16em; fill:#b4b4bb; }
+        .cp{ font-family:'JetBrains Mono',monospace; font-size:11px; fill:#3d3d46; }
+        .cn{ stroke:#d5d5cf; stroke-width:1; marker-end:url(#ar); }
+      </style>
+
+      <!-- tier 1 -->
+      <text class="lb" x="0" y="9">SURFACES</text>
+      <rect class="bx" x="0"   y="18" width="360" height="70" rx="3"/>
+      <text class="tt" x="20" y="46">Admin panel</text><text class="ss" x="20" y="68">React SPA · 26 screens · any browser</text>
+      <rect class="bx" x="390" y="18" width="360" height="70" rx="3"/>
+      <text class="tt" x="410" y="46">Desktop app</text><text class="ss" x="410" y="68">Tauri 2 · supervises the worker binary</text>
+      <rect class="bx" x="780" y="18" width="360" height="70" rx="3"/>
+      <text class="tt" x="800" y="46">Command line</text><text class="ss" x="800" y="68">aizu run · aizu-worker · scriptable</text>
+
+      <line class="cn" x1="180" y1="90" x2="180" y2="118"/>
+      <line class="cn" x1="570" y1="90" x2="570" y2="118"/>
+      <line class="cn" x1="960" y1="90" x2="960" y2="118"/>
+
+      <!-- tier 2 -->
+      <text class="lb" x="0" y="113">CONTROL PLANE</text>
+      <rect class="bx" x="0" y="122" width="1140" height="116" rx="3"/>
+      <rect x="0" y="122" width="4" height="116" fill="#d9f24f"/>
+      <text class="tt" x="24" y="152">Engine bridge</text>
+      <text class="ss" x="24" y="174">One stdlib Python HTTP server. No web framework, no ORM, no vendor runtime.</text>
+      <g>
+        <rect class="ch" x="24"  y="192" width="204" height="30" rx="2"/><text class="cp" x="38"  y="212">55 API endpoints</text>
+        <rect class="ch" x="246" y="192" width="204" height="30" rx="2"/><text class="cp" x="260" y="212">Auth + RBAC</text>
+        <rect class="ch" x="468" y="192" width="204" height="30" rx="2"/><text class="cp" x="482" y="212">Scheduler</text>
+        <rect class="ch" x="690" y="192" width="204" height="30" rx="2"/><text class="cp" x="704" y="212">Lease reclaim</text>
+        <rect class="ch" x="912" y="192" width="204" height="30" rx="2"/><text class="cp" x="926" y="212">Billing</text>
+      </g>
+
+      <line class="cn" x1="180" y1="240" x2="180" y2="268"/>
+      <line class="cn" x1="570" y1="240" x2="570" y2="268"/>
+      <line class="cn" x1="960" y1="240" x2="960" y2="268"/>
+
+      <!-- tier 3 -->
+      <text class="lb" x="0" y="263">EXECUTION</text>
+      <rect class="bx" x="0"   y="272" width="360" height="70" rx="3"/>
+      <text class="tt" x="20" y="300">Run process</text><text class="ss" x="20" y="322">One campaign at a time · pausable · killable</text>
+      <rect class="bx" x="390" y="272" width="360" height="70" rx="3"/>
+      <text class="tt" x="410" y="300">Worker fleet</text><text class="ss" x="410" y="322">Pull model · off-cloud · no inbound ports</text>
+      <rect class="bx" x="780" y="272" width="360" height="70" rx="3"/>
+      <text class="tt" x="800" y="300">Platform access</text><text class="ss" x="800" y="322">Warmed Chrome over CDP · official APIs</text>
+
+      <line class="cn" x1="180" y1="344" x2="180" y2="372"/>
+      <line class="cn" x1="570" y1="344" x2="570" y2="372"/>
+      <line class="cn" x1="960" y1="344" x2="960" y2="372"/>
+
+      <!-- tier 4 -->
+      <text class="lb" x="0" y="367">STATE</text>
+      <rect class="bk" x="0" y="376" width="1140" height="64" rx="3"/>
+      <text class="tw" x="24" y="404">One SQLite database</text>
+      <text class="sw" x="24" y="426">40 tables · every process reads and writes this one file · the durable source of truth</text>
+    </svg>
+  </div>
+  <div class="foot"><span class="src">Source: docs/architecture/overview.md, §2–§3. Endpoint and table counts taken from the code.</span><span>08</span></div>
+</section>
+
+<!-- ═══ 09 · PLATFORMS ══════════════════════════════════════ -->
+<section class="slide"
+  data-t="Six platforms"
+  data-n="Half of these use the platform's own official API — Reddit, YouTube, Telegram. The other three attach to a logged-in browser. Note the last column: five of six never write anything at all. Instagram can like or save a post, and only if the operator switches it on.">
+  <div class="eyebrow">Coverage</div>
+  <h1 class="t wide">Six platforms, three ways in</h1>
+  <div class="body two l" style="margin-top:42px;gap:48px">
+    <table class="grid">
+      <tr><th style="width:34%">Platform</th><th>How it connects</th></tr>
+      <tr><td>Instagram</td><td>Warmed Chrome over CDP <span class="mono">+ vision</span></td></tr>
+      <tr><td>LinkedIn</td><td>Warmed Chrome over CDP <span class="mono">+ vision</span></td></tr>
+      <tr><td>X</td><td>Warmed Chrome over CDP <span class="mono">+ vision</span></td></tr>
+      <tr><td>Reddit</td><td>Official Data API <span class="mono">OAuth2</span></td></tr>
+      <tr><td>YouTube</td><td>Official Data API v3 <span class="mono">key</span></td></tr>
+      <tr><td>Telegram</td><td>MTProto / Bot API <span class="mono">official</span></td></tr>
+    </table>
+    <div>
+      <div class="card" style="margin-bottom:20px">
+        <div class="h">Write behaviour</div>
+        <div class="k">Five of six never write</div>
+        <p>Reddit, YouTube, Telegram, LinkedIn and X are read-only. Only Instagram can like or save — and only if the operator turns it on.</p>
+      </div>
+      <div class="card">
+        <div class="h">Not claimed</div>
+        <div class="k">Five more are specified only</div>
+        <p>Facebook, Pinterest, Quora, Threads and TikTok exist as written specifications with no code behind them. They are roadmap, not coverage.</p>
+      </div>
+    </div>
+  </div>
+  <div class="foot"><span class="src">Source: docs/architecture/engines.md; planned platforms from docs/prd/planned/. See Appendix B.</span><span>09</span></div>
+</section>
+
+<!-- ═══ 10 · GUARDRAILS ═════════════════════════════════════ -->
+<section class="slide"
+  data-t="Guardrails"
+  data-n="This is the slide I would press me on, so let me press first. Anyone can write a script that reads a feed. It will be blocked within a week. Staying unblocked for months is the actual engineering, and it is four rules that were designed in from the beginning rather than patched on after the first ban.">
+  <div class="eyebrow">Defensibility</div>
+  <h1 class="t wide">The safety rules are the product</h1>
+  <div class="body four" style="margin-top:52px;gap:20px">
+    <div class="card">
+      <div class="h">Session</div>
+      <div class="k">Attach, never launch</div>
+      <p>It joins a browser the operator already opened and logged into. It never opens one, never asks for a password, never stores one.</p>
+    </div>
+    <div class="card">
+      <div class="h">Pacing</div>
+      <div class="k">Daytime only</div>
+      <p>Sessions halt outside roughly 8am to 9pm and pace with randomised pauses. No overnight bursts, no three-in-the-morning spikes.</p>
+    </div>
+    <div class="card">
+      <div class="h">Cost</div>
+      <div class="k">Capped spend</div>
+      <p>Every model call is budgeted against a limit set on the campaign. On breach it degrades and raises a flag rather than overspending.</p>
+    </div>
+    <div class="card">
+      <div class="h">Access</div>
+      <div class="k">Roles on the server</div>
+      <p>Four roles, checked server-side on every request. The interface mirrors them; it is never the thing that enforces them.</p>
+    </div>
+  </div>
+  <p class="take" style="margin-top:50px">
+    A challenge or CAPTCHA is never solved automatically. The run stops and waits for a person.
+  </p>
+  <div class="foot"><span class="src">Source: docs/architecture/overview.md §6; engine/aizu/rbac.py; engine/aizu/core/router.py.</span><span>10</span></div>
+</section>
+
+<!-- ═══ 11 · PRODUCT ════════════════════════════════════════ -->
+<section class="slide"
+  data-t="The operator surface"
+  data-n="This is the screen an operator actually lives in. Every row is a real person who wrote a real sentence in public, with the platform it came from, what they said, and the score that qualified them. The reply action goes straight back to the post. No exported spreadsheet, no separate tool.">
+  <div class="eyebrow">The product</div>
+  <h1 class="t wide">One screen for every lead</h1>
+  <div class="body" style="margin-top:38px;display:grid;grid-template-columns:1.62fr 1fr;gap:44px">
+    <div class="mock">
+      <div class="rail">
+        <div class="wm"><i></i>AIZU</div>
+        <div class="nv">Dashboard</div>
+        <div class="nv sel">Leads</div>
+        <div class="nv">Campaigns</div>
+        <div class="nv">Reports</div>
+        <div class="nv">Health</div>
+        <div class="nv">Spend</div>
+        <div class="nv">Team</div>
+        <div class="nv">Billing</div>
+      </div>
+      <div class="main">
+        <div class="bar"><span class="ttl">Leads</span><span class="chip">This week · 34</span></div>
+        <table>
+          <colgroup><col style="width:46px"><col style="width:112px"><col><col style="width:52px"><col style="width:88px"></colgroup>
+          <tr><th>Src</th><th>Handle</th><th>What they said</th><th>Score</th><th>Stage</th></tr>
+          <tr><td><span class="chip">IG</span></td><td>@shoxrux_tex</td><td class="q">need a supplier, 20 units this month</td><td class="sc">0.91</td><td><span class="stg new">New</span></td></tr>
+          <tr><td><span class="chip">TG</span></td><td>@sardor_biz</td><td class="q">who delivers to Samarkand?</td><td class="sc">0.87</td><td><span class="stg">Qualified</span></td></tr>
+          <tr><td><span class="chip">RD</span></td><td>u/mgmt_ops</td><td class="q">looking to replace ours next quarter</td><td class="sc">0.84</td><td><span class="stg">Qualified</span></td></tr>
+          <tr><td><span class="chip">LI</span></td><td>D. Karimova</td><td class="q">budget approved for Q4, need vendors</td><td class="sc">0.79</td><td><span class="stg">Contacted</span></td></tr>
+          <tr><td><span class="chip">YT</span></td><td>@aziz_reviews</td><td class="q">where can I buy this in UZ?</td><td class="sc">0.76</td><td><span class="stg">Contacted</span></td></tr>
+          <tr><td><span class="chip">X</span></td><td>@fbek_ops</td><td class="q">anyone got a recommendation?</td><td class="sc">0.74</td><td><span class="stg">Qualified</span></td></tr>
+          <tr><td><span class="chip">IG</span></td><td>@nodira.shop</td><td class="q">how much for 50 pieces</td><td class="sc">0.71</td><td><span class="stg">Contacted</span></td></tr>
+        </table>
+      </div>
+    </div>
+    <div class="callouts">
+      <div class="callout">
+        <div class="k">Twenty-six screens</div>
+        <p>Campaigns, leads, reports, health, spend, team and billing — one panel, four permission levels.</p>
+      </div>
+      <div class="callout">
+        <div class="k">Every lead carries its proof</div>
+        <p>Source platform, the exact sentence, the date, and the fields the brief asked to extract.</p>
+      </div>
+      <div class="callout">
+        <div class="k">New → Qualified → Contacted</div>
+        <p>Six platforms in one queue, with a reply that goes back to the original post in one click.</p>
+      </div>
+      <div class="callout">
+        <div class="k">Managers see cost, not just leads</div>
+        <p>Cost per lead by channel and by stage, so the spend is arguable rather than assumed.</p>
+      </div>
+    </div>
+  </div>
+  <div class="foot"><span class="src">Interface reconstruction of the shipped panel. Lead rows are illustrative; handles are fictional.</span><span>11</span></div>
+</section>
+
+<!-- ═══ 12 · BUILT HERE ═════════════════════════════════════ -->
+<section class="slide"
+  data-t="Built in Tashkent"
+  data-n="I want to be careful here, because it would be easy to overclaim. Three of these four are shipped and checkable. The fourth — the Uzbek audio tier — is written but has never been run against live Instagram traffic, and I will not describe it as working until it has been.">
+  <div class="eyebrow">Local relevance</div>
+  <h1 class="t wide">Built here, and shaped by here</h1>
+  <div class="body two l" style="margin-top:42px">
+    <div>
+      <ul class="pts">
+        <li><span class="n">01</span><span><b>Tashkent time is in the core.</b> Scheduling runs on UTC+5, not as a user setting.</span></li>
+        <li><span class="n">02</span><span><b>Local-first by design.</b> One file, one machine — no dependency on stable bandwidth.</span></li>
+        <li><span class="n">03</span><span><b>Data can stay in country.</b> There is no hidden cloud store to move it to.</span></li>
+        <li><span class="n">04</span><span><b>An Uzbek speech tier exists.</b> Written for local-language video. Not yet verified live.</span></li>
+      </ul>
+    </div>
+    <div style="align-self:center">
+      <p class="take" style="font-size:19px">
+        The customers are abroad and pay in dollars.
+        The engineering, the salaries and the data stay here.
+      </p>
+      <div class="card" style="margin-top:32px">
+        <div class="h">Stated plainly</div>
+        <p>Item 04 is code that has only ever run against test fixtures. It is included because it is real work, and excluded from every capability claim in this deck.</p>
+      </div>
+    </div>
+  </div>
+  <div class="foot"><span class="src">Scheduler timezone: Asia/Tashkent (UTC+5), docs/architecture/overview.md §2.</span><span>12</span></div>
+</section>
+
+<!-- ═══ 13 · IMPACT ═════════════════════════════════════════ -->
+<section class="slide"
+  data-t="National impact"
+  data-n="Every number on this slide carries a degree mark, and the degree mark means projection. I am not going to present a forecast as a fact in front of this committee. What is not a projection is the shape: the buyers are outside Uzbekistan, the pricing is in dollars, and the payroll is in Tashkent.">
+  <div class="eyebrow">Impact</div>
+  <h1 class="t wide">Where the value lands</h1>
+  <div class="body three" style="margin-top:56px;gap:38px">
+    <div class="stat">
+      <div class="fig">$120<span class="u">k°</span></div>
+      <div class="lab">export revenue in year one, invoiced in dollars to buyers outside Uzbekistan</div>
+    </div>
+    <div class="stat">
+      <div class="fig">9<span class="u">°</span></div>
+      <div class="lab">engineering roles based in Tashkent by month twelve, from three today</div>
+    </div>
+    <div class="stat q">
+      <div class="fig">6</div>
+      <div class="lab">shipped platform integrations that transfer to any future product built here</div>
+    </div>
+  </div>
+  <p class="take" style="margin-top:56px">
+    Every customer is abroad. Every salary is paid here. That is the entire economic argument.
+  </p>
+  <div class="foot"><span class="src">° Projection, not a commitment. Modelled on shipped pricing (Starter $24.99/mo, Pro $149/mo). There is no revenue today. The 6 is a count, not a forecast.</span><span>13</span></div>
+</section>
+
+<!-- ═══ 14 · HONEST STANDING ════════════════════════════════ -->
+<section class="slide"
+  data-t="Where we stand"
+  data-n="I put this slide in deliberately, and I would ask you to read the right-hand column first. We have no customers and no revenue. The terms of service and privacy policy are not written. Throughput at scale is untested. I would rather you hear that from me now than find it later.">
+  <div class="eyebrow">Honest standing</div>
+  <h1 class="t wide">What is proven, and what is not</h1>
+  <div class="body two" style="margin-top:44px;gap:60px">
+    <div>
+      <div class="col-h">Proven — inspect it today</div>
+      <ul class="tick">
+        <li>Six platform engines run end to end.</li>
+        <li>1,661 automated tests pass on every change.</li>
+        <li>Billing, roles and multi-tenancy are wired and working.</li>
+        <li>Panel, worker fleet and desktop app are all usable now.</li>
+      </ul>
+    </div>
+    <div>
+      <div class="col-h soft">Not yet — no claim made</div>
+      <ul class="tick soft">
+        <li>No paying customer. No revenue. None.</li>
+        <li>Terms of service and privacy policy are unwritten.</li>
+        <li>The Uzbek audio tier has never run against live traffic.</li>
+        <li>Throughput beyond a handful of parallel runs is untested.</li>
+      </ul>
+    </div>
+  </div>
+  <p class="take" style="margin-top:42px">
+    We would rather be believed than impressive. Both columns are on this slide for that reason.
+  </p>
+  <div class="foot"><span class="src"></span><span>14</span></div>
+</section>
+
+<!-- ═══ 15 · RISK ═══════════════════════════════════════════ -->
+<section class="slide"
+  data-t="Risks"
+  data-n="Three risks that a serious reviewer will find anyway. The first is structural and cannot be removed, only managed — and the mitigations listed are in the code today, not planned. The second is the one I would want the programme's help with: the compliance work is real and we would rather do it properly than quickly.">
+  <div class="eyebrow">Risk</div>
+  <h1 class="t wide">Three real risks, stated first</h1>
+  <div class="body" style="margin-top:40px">
+    <table class="grid">
+      <tr><th style="width:32%">Risk</th><th>How it is handled today</th></tr>
+      <tr>
+        <td>Platform terms and account blocks</td>
+        <td>Read-only on five of six platforms; daytime pacing; challenges are never solved automatically; the write subsystem is off by default. Structural, not removable — managed.</td>
+      </tr>
+      <tr>
+        <td>Personal data of people who did not opt in</td>
+        <td>Only public posts are read, never private messages. A retention, consent and deletion policy is the first item on the roadmap, and the reason we are applying.</td>
+      </tr>
+      <tr>
+        <td>Model cost volatility</td>
+        <td>A hard spend cap per campaign, enforced per call. A local-model path already exists and removes the external dependency entirely if needed.</td>
+      </tr>
+    </table>
+  </div>
+  <p class="take" style="margin-top:38px">
+    None of these are hypothetical. All three have code behind the mitigation, not a plan.
+  </p>
+  <div class="foot"><span class="src">Source: docs/architecture/engines.md §9; docs/architecture/overview.md §6.</span><span>15</span></div>
+</section>
+
+<!-- ═══ 16 · ROADMAP ════════════════════════════════════════ -->
+<section class="slide"
+  data-t="Roadmap"
+  data-n="Notice what is first. Not features — compliance. Terms, privacy, retention and deletion, before the first customer rather than after the first complaint. That ordering is deliberate and it is the part the programme can most directly help with.">
+  <div class="eyebrow">Roadmap</div>
+  <h1 class="t wide">Twelve months, four milestones</h1>
+  <div class="body tl" style="margin-top:52px">
+    <div class="q first">
+      <div class="mk">QUARTER 1</div>
+      <div class="pin"></div>
+      <div class="k">Compliance base</div>
+      <p>Terms of service, privacy policy, retention and deletion. Written before the first customer, not after the first complaint.</p>
+    </div>
+    <div class="q">
+      <div class="mk">QUARTER 2</div>
+      <div class="pin"></div>
+      <div class="k">First paying accounts</div>
+      <p>Fifty self-serve accounts. Verify the Uzbek audio tier against live traffic or drop the claim entirely.</p>
+    </div>
+    <div class="q">
+      <div class="mk">QUARTER 3</div>
+      <div class="pin"></div>
+      <div class="k">Concurrency</div>
+      <p>The distributed worker fleet becomes the default path, removing the one-run-at-a-time ceiling. Two further platforms.</p>
+    </div>
+    <div class="q">
+      <div class="mk">QUARTER 4</div>
+      <div class="pin"></div>
+      <div class="k">Agency channel</div>
+      <p>Multi-client agency tier and a partner route to market. First export revenue formally reported.</p>
+    </div>
+  </div>
+  <p class="take" style="margin-top:44px">
+    Compliance first, customers second. That ordering is deliberate, and it is where the programme helps most.
+  </p>
+  <div class="foot"><span class="src">Sequencing commitment, not a revenue forecast.</span><span>16</span></div>
+</section>
+
+<!-- ═══ 17 · THE ASK (INK) ══════════════════════════════════ -->
+<section class="slide ink ask"
+  data-t="The ask"
+  data-n="This is the only thing I am actually asking for, so I will say it once and clearly. We are not asking the programme for money. We are asking for a place — standing, guidance on compliance and on selling abroad, and access to the talent pool. The product is finished enough to inspect. That is the whole application.">
+  <div class="eyebrow">The request</div>
+  <div class="two r grow" style="margin-top:44px;gap:56px;align-items:center">
+    <div>
+      <p style="font-size:46px;font-weight:600;letter-spacing:-.035em;line-height:1.06;margin:0">
+        We are not<br>asking for<br><span class="lime">capital.</span>
+      </p>
+      <p style="font-size:19px;line-height:1.5;color:#a8a8b2;margin:32px 0 0;max-width:26ch">
+        We are asking for a place, and for the reasons to keep building this company here.
+      </p>
+    </div>
+    <ul class="pts" style="align-self:center">
+      <li><span class="n">01</span><span><b>Residency</b> in the programme, and the standing that comes with it.</span></li>
+      <li><span class="n">02</span><span><b>Guidance on compliance</b> — data protection and platform terms, done properly.</span></li>
+      <li><span class="n">03</span><span><b>A route to buyers abroad</b>, where the revenue has to come from.</span></li>
+      <li><span class="n">04</span><span><b>Access to engineers</b> in Tashkent, to grow from three to nine.</span></li>
+    </ul>
+  </div>
+  <p style="font-size:17px;color:#7d7d88;margin-top:44px;border-left:3px solid var(--lime);padding-left:16px;max-width:64ch;line-height:1.5">
+    The product is already finished enough to inspect. That, rather than a forecast, is the whole application.
+  </p>
+  <div class="foot"><span class="src"></span><span>17</span></div>
+</section>
+
+<!-- ═══ 18 · CLOSE (INK) ════════════════════════════════════ -->
+<section class="slide ink"
+  data-t="Thank you"
+  data-n="Stop here. Do not add anything. If there are no questions, offer the live demonstration — it runs on this laptop and takes under two minutes to show a real run.">
+  <div class="title-grid">
+    <div class="wordmark">AIZU <span class="jp">合図</span></div>
+    <div style="align-self:center">
+      <p style="font-size:72px;font-weight:600;letter-spacing:-.04em;line-height:1;margin:0">
+        Thank you.<br><span class="lime">Questions welcome.</span>
+      </p>
+      <p style="font-size:19px;line-height:1.5;color:#a8a8b2;margin:36px 0 0;max-width:44ch">
+        A live run can be demonstrated on this laptop in under two minutes,
+        on any of the six platforms.
+      </p>
+    </div>
+    <div class="titlemeta">
+      <div>Contact<b>[NAME] · [EMAIL]</b></div>
+      <div>Phone<b>[PHONE]</b></div>
+      <div>Product<b>aizu.uz</b></div>
+    </div>
+  </div>
+</section>
+
+<!-- ═══ A · APPENDIX: SPEC ══════════════════════════════════ -->
+<section class="slide"
+  data-t="Appendix A · Specification"
+  data-n="Appendix. Do not present unless asked. Every figure here is counted from the repository and can be reproduced on request.">
+  <div class="eyebrow">Appendix A</div>
+  <h1 class="t wide">Technical specification</h1>
+  <div class="body two" style="margin-top:38px;gap:56px">
+    <table class="grid">
+      <tr><th style="width:52%">Engine</th><th>Figure</th></tr>
+      <tr><td>Language</td><td>Python ≥ 3.10, package <span class="mono">aizu</span></td></tr>
+      <tr><td>Modules</td><td>97</td></tr>
+      <tr><td>Lines of code</td><td>30,346</td></tr>
+      <tr><td>Automated tests</td><td>1,661</td></tr>
+      <tr><td>HTTP server</td><td>Standard library only</td></tr>
+      <tr><td>API endpoints</td><td>55</td></tr>
+      <tr><td>Database</td><td>SQLite, WAL, 40 tables</td></tr>
+      <tr><td>Platform engines</td><td>6 + warming subsystem</td></tr>
+    </table>
+    <table class="grid">
+      <tr><th style="width:52%">Panel &amp; desktop</th><th>Figure</th></tr>
+      <tr><td>Stack</td><td>React 19, Vite 6, TypeScript strict</td></tr>
+      <tr><td>Source files</td><td>236</td></tr>
+      <tr><td>Lines of code</td><td>26,748</td></tr>
+      <tr><td>Application screens</td><td>26</td></tr>
+      <tr><td>Permission roles</td><td>4, enforced server-side</td></tr>
+      <tr><td>Auth planes</td><td>3, fully separated</td></tr>
+      <tr><td>Desktop shell</td><td>Tauri 2, 1,810 lines Rust</td></tr>
+      <tr><td>Billing</td><td>Polar — checkout, portal, webhooks</td></tr>
+    </table>
+  </div>
+  <div class="foot"><span class="src">All figures counted from the repository on 10 August 2026 and reproducible on request.</span><span>A</span></div>
+</section>
+
+<!-- ═══ B · APPENDIX: ROADMAP PLATFORMS ═════════════════════ -->
+<section class="slide"
+  data-t="Appendix B · Not built"
+  data-n="Appendix. This slide exists so that nothing in the main deck can be misread as a claim. These five platforms have written specifications and no code.">
+  <div class="eyebrow">Appendix B</div>
+  <h1 class="t wide">Specified, and not built</h1>
+  <div class="body" style="margin-top:38px">
+    <p class="lead" style="max-width:70ch;font-size:18px">
+      Five further platforms exist as written product specifications in the repository,
+      with no implementation behind them. They appear nowhere in this deck as coverage.
+    </p>
+    <div class="four" style="margin-top:36px;gap:16px">
+      <div class="card"><div class="k" style="font-size:18px">Facebook</div><p>Specification only</p></div>
+      <div class="card"><div class="k" style="font-size:18px">TikTok</div><p>Specification only</p></div>
+      <div class="card"><div class="k" style="font-size:18px">Threads</div><p>Specification only</p></div>
+      <div class="card"><div class="k" style="font-size:18px">Pinterest</div><p>Specification only</p></div>
+    </div>
+    <div class="four" style="margin-top:16px;gap:16px">
+      <div class="card"><div class="k" style="font-size:18px">Quora</div><p>Specification only</p></div>
+    </div>
+    <p class="take" style="margin-top:40px">
+      Two of these five are the quarter-three commitment on the roadmap. The other three are unscheduled.
+    </p>
+  </div>
+  <div class="foot"><span class="src">Source: docs/prd/planned/ — five PRD documents, no corresponding engine code.</span><span>B</span></div>
+</section>
+
+</div></div>
+
+<div id="notes"></div>
+<div id="hud"></div>
+<div id="ov"><h4>Slide overview — click to jump, Esc to close</h4><div id="ovg"></div></div>
+<div id="help"><div>
+  <div><kbd>→ / ␣</kbd> next slide</div>
+  <div><kbd>←</kbd> previous slide</div>
+  <div><kbd>G</kbd> overview grid</div>
+  <div><kbd>S</kbd> speaker notes</div>
+  <div><kbd>F</kbd> fullscreen</div>
+  <div><kbd>Ctrl+P</kbd> export PDF</div>
+  <div><kbd>Esc</kbd> close · <kbd>?</kbd> this list</div>
+</div></div>
+
+<script>
+(function(){
+  var reel   = document.getElementById('reel');
+  var slides = Array.prototype.slice.call(reel.querySelectorAll('.slide'));
+  var notes  = document.getElementById('notes');
+  var hud    = document.getElementById('hud');
+  var bar    = document.getElementById('bar');
+  var ov     = document.getElementById('ov');
+  var ovg    = document.getElementById('ovg');
+  var help   = document.getElementById('help');
+  var i = 0, showNotes = false;
+
+  function fit(){
+    var pad = 26;
+    var s = Math.min((innerWidth - pad*2)/1280, (innerHeight - pad*2)/720);
+    reel.style.transform = 'scale(' + s + ')';
+  }
+
+  function render(){
+    slides.forEach(function(s, k){ s.classList.toggle('on', k === i); });
+    hud.textContent = String(i+1).padStart(2,'0') + ' / ' + slides.length;
+    bar.style.width = ((i+1)/slides.length*100) + '%';
+    notes.innerHTML = '<b>' + (slides[i].dataset.t || '') + '</b>' + (slides[i].dataset.n || '');
+    Array.prototype.forEach.call(ovg.children, function(t, k){ t.classList.toggle('cur', k === i); });
+    if (location.hash !== '#' + (i+1)) history.replaceState(null, '', '#' + (i+1));
+  }
+
+  function go(n){ i = Math.max(0, Math.min(slides.length-1, n)); render(); }
+
+  slides.forEach(function(s, k){
+    var t = document.createElement('div');
+    t.className = 'thumb' + (s.classList.contains('ink') ? ' dark' : '');
+    t.innerHTML = '<i>' + String(k+1).padStart(2,'0') + '</i><span>' + (s.dataset.t || '') + '</span>';
+    t.onclick = function(){ ov.classList.remove('on'); go(k); };
+    ovg.appendChild(t);
+  });
+
+  addEventListener('keydown', function(e){
+    var k = e.key;
+    if (k === 'Escape'){ ov.classList.remove('on'); help.classList.remove('on'); return; }
+    if (k === '?' ){ help.classList.toggle('on'); return; }
+    if (k === 'g' || k === 'G'){ help.classList.remove('on'); ov.classList.toggle('on'); return; }
+    if (k === 's' || k === 'S'){ showNotes = !showNotes; notes.classList.toggle('on', showNotes); return; }
+    if (k === 'f' || k === 'F'){
+      if (document.fullscreenElement) document.exitFullscreen(); else document.documentElement.requestFullscreen();
+      return;
+    }
+    if (k === 'ArrowRight' || k === 'PageDown' || k === ' '){ e.preventDefault(); go(i+1); }
+    else if (k === 'ArrowLeft' || k === 'PageUp'){ e.preventDefault(); go(i-1); }
+    else if (k === 'Home'){ go(0); }
+    else if (k === 'End'){ go(slides.length-1); }
+  });
+
+  addEventListener('click', function(e){
+    if (ov.classList.contains('on') || help.classList.contains('on')) return;
+    if (e.clientX < innerWidth * 0.22) go(i-1); else go(i+1);
+  });
+
+  addEventListener('resize', fit);
+  fit();
+  var start = parseInt((location.hash || '').slice(1), 10);
+  go(isNaN(start) ? 0 : start - 1);
+})();
+</script>
