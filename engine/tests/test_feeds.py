@@ -122,6 +122,50 @@ def test_resolve_credentials_none_when_unregistered_or_unset():
         store.close()
 
 
+# ----- B4 fix review finding #2: baked credentials (JobSpec.platform_credentials) -----
+
+def test_resolve_credentials_prefers_baked_over_local_lookup():
+    """A non-None `baked` (server._dispatch_run_to_fleet's per-org secret shipped in
+    the job spec) wins outright, without touching the store at all."""
+    store = _store_with_cipher()
+    try:
+        org_id = store.create_organization(name="Acme")
+        store.upsert_campaign_meta("c1", org_id=org_id)
+        store.set_integration_secret(org_id, "youtube", {"api_key": "LOCAL"})
+        assert _resolve_platform_credentials(
+            _campaign("youtube"), store, baked={"api_key": "BAKED"}
+        ) == {"api_key": "BAKED"}
+    finally:
+        store.close()
+
+
+def test_resolve_credentials_baked_survives_an_empty_local_store():
+    """The genuinely-remote-worker case this fix targets: NO campaign_meta row and NO
+    integration_secrets row on this box at all (store.org_for_campaign would resolve
+    None here, exactly like on a real remote worker's empty local DB) — the baked
+    credential from the job spec still gets through instead of silently falling back
+    to an env lookup that was never going to find a per-org secret."""
+    store = _store_with_cipher()  # nothing registered, nothing stored
+    try:
+        assert _resolve_platform_credentials(
+            _campaign("youtube"), store, baked={"api_key": "BAKED"}
+        ) == {"api_key": "BAKED"}
+    finally:
+        store.close()
+
+
+def test_resolve_credentials_falls_back_to_local_lookup_when_not_baked():
+    """No `baked` kwarg at all (a direct CLI run) → unchanged local-lookup behavior."""
+    store = _store_with_cipher()
+    try:
+        org_id = store.create_organization(name="Acme")
+        store.upsert_campaign_meta("c1", org_id=org_id)
+        store.set_integration_secret(org_id, "youtube", {"api_key": "STORED"})
+        assert _resolve_platform_credentials(_campaign("youtube"), store) == {"api_key": "STORED"}
+    finally:
+        store.close()
+
+
 def test_instagram_build_feed_threads_include_home_feed(monkeypatch):
     from aizu.engines.instagram.cdp import CDPFeed
     monkeypatch.setattr(CDPFeed, "attach", lambda self: None)  # no real Chrome

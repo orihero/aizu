@@ -143,9 +143,21 @@ app-data `com.aizu.workerdesktop/aizu.db`, empty), not the server's `engine/aizu
 where the brief lives. The job spec does NOT carry the campaign brief.
 **Fix (local dev):** Set `db_path` in the worker's `config.toml` to the absolute
 `engine/aizu.db` (the documented shared-DB local model).
-**OPEN (real remote):** A worker on a different machine can't share the SQLite file — the brief
-must be BAKED INTO THE JOB SPEC (like soul now is). `JobSpec` currently carries no brief; this is
-a real gap for true multi-machine deployment.
+~~**OPEN (real remote):** A worker on a different machine can't share the SQLite file — the brief
+must be BAKED INTO THE JOB SPEC (like soul now is).~~ **CLOSED 2026-08-12 — the brief is now
+baked.** `JobSpec.campaign_brief` (optional, defaults None) carries `campaign_to_brief(campaign)`;
+`server._dispatch_run_to_fleet` bakes it at enqueue; `job_runner._resolve_campaign` PREFERS the
+baked brief and falls back to the box-local `resolve_campaign`, so an already-queued job with no
+baked brief still runs. A malformed baked brief raises `ValueError` from `campaign_from_brief`
+exactly as a malformed DB brief does, flowing through the existing `campaign_malformed` nack with
+no new mapping code. Size-capped at `MAX_CAMPAIGN_BRIEF_BYTES` (512 KiB vs a ~12.5 KB real brief),
+enforced server-side pre-bake and again in `JobSpec.from_payload`.
+**The trap that nearly shipped:** the first implementation passed 362 worker tests while being
+completely INERT on the real wire — `store._job_row_to_lease` WHITELISTS which spec keys become
+the lease response, and `campaignBrief` was never added to it. Every new test either constructed
+`JobSpec` directly or read the raw `spec` DB column; none went through `POST /api/worker/lease`.
+**Any new job-spec field must be added to `_job_row_to_lease`, and its test must hit the served
+HTTP endpoint** — a test that would still pass with the fix reverted is worthless.
 **How to avoid/detect:** Confirm the worker and server agree on the DB:
 `ps -wwE -p <sidecar_pid> | tr ' ' '\n' | grep AIZU_DB` vs the server's `--db`.
 
@@ -173,6 +185,62 @@ This is the standing "live exit gate." See [engine-live-run notes] and CDP gotch
 a real `connect_over_cdp('http://127.0.0.1:9333')` must succeed — HTTP 200 on `/json/version`
 is NOT sufficient. Consider surfacing a non-zero `halt_reason` when Chrome can't attach so a
 0-result run isn't silently reported as success.
+
+### B7. Per-org platform credentials on a remote box — fetch, never bake
+**Symptom:** A youtube/telegram/reddit fleet job on a genuinely remote worker resolves its
+campaign fine (B4 is fixed) and then fails with `YouTube live run needs YOUTUBE_API_KEY in the
+environment (.env)`. That message matches neither `cli._is_auth_error` nor sidecar's
+`_POISON_HALTS`, so it nacks as a plain transient failure and retries identically until it
+dead-letters.
+**Root cause:** `cli._resolve_platform_credentials` → `store.org_for_campaign` reads local-only
+tables (`campaign_meta`/`campaign_briefs`), empty on a remote box, so `org_id` is None and the
+org's connected integration secret is never found. Baking the brief does not help — the secret
+does not live in the brief.
+**Fix (2026-08-12):** `POST /api/worker/jobs/{id}/credential` — a 4th job-scoped worker action
+that decrypts `store.get_integration_secret` **fresh per request** and returns it in the response
+body only. The sidecar fetches at job start (only for `PER_ORG_CREDENTIAL_PLATFORMS`; CDP
+platforms drive a warmed browser and never fetch) and threads it onto the JobSpec via
+`dataclasses.replace`, so the existing 0600 spec-file hand-off carries it to the killable child
+unchanged. A fetch failure nacks with a distinct reason instead of the confusing downstream
+error above.
+**The rejected design — do not reintroduce it:** baking the decrypted secret into the job spec
+at enqueue. `store.ack_job` updates only status/result/session_id/leased_by/lease_expires_at —
+**it never scrubs `spec`** — and there is no DELETE or prune of the `jobs` table anywhere in
+`store.py`. A baked secret therefore persists **forever, in plaintext**, in the `jobs.spec` TEXT
+column, undoing the Fernet-at-rest protection in `core/secrets.py`.
+**Authorization:** `store.get_leased_job_for_worker(job_id, worker_id)` —
+`WHERE id=? AND leased_by=? AND status IN ('leased','running')`. Org and platform come from the
+JOB ROW, never from the request. Deliberately does NOT touch `_job_capability_covers`: the
+lease-holder check is strictly tighter than capability matching, so pool-wide `[null, platform,
+null]` capabilities keep working (see B1/B2 — breaking those regresses every deployment).
+
+### B8. Cross-tenant credential reach via the shared bootstrap token (OPEN)
+**Symptom:** None observed — a design exposure surfaced by security review, not a live bug.
+**Root cause:** `AIZU_WORKER_BOOTSTRAP_TOKEN` is ONE shared secret for the whole fleet, and a
+worker self-declares its capabilities at register. `_job_capability_covers` treats `cap_org=None`
+as matching ANY org (deliberately — one managed box serves ~10 companies, PRD scale). So any box
+holding the bootstrap token can register pool-wide, legitimately lease another org's job, become
+its `leased_by`, and therefore pass B7's lease-holder check and receive that org's decrypted
+credential.
+**Assessment:** the gap is **pre-existing** — it long predates B7, which raises the stakes
+(campaign metadata → a live credential, a full logged-in session for Telegram) without authoring
+it. The bootstrap token IS the fleet's trust boundary today: anyone holding it could already
+lease, run, and sync leads for any org.
+**Fix direction (not done):** per-worker, single-use, revocable enrolment tokens instead of one
+shared fleet token — so a worker's org scope is server-assigned at enrolment rather than
+self-declared. Do NOT "fix" it by rejecting `cap_org=None`; that breaks the shipped desktop app,
+which registers pool-wide by default (B1/B2).
+
+### B9. Spend cap silently resets per worker box (OPEN)
+**Symptom:** A campaign with a `--spend-cap` can spend up to the full cap again each time its
+job lands on a different worker box.
+**Root cause:** `core/router.py` checks `self.store.total_spend(campaign_id) >= self.spend_cap_usd`
+against the **local** `spend_log` table. A fleet job is unpinned (pool-wide capability), so box B
+has no rows for a campaign previously run on box A or on the server, sees $0, and permits a full
+fresh budget. The cap is effectively per-box, not per-campaign.
+**Fix direction (not done):** either roll spend up to the cloud on ack (alongside the existing
+lead sync-back, which already proves the pattern) and gate against the authoritative total, or
+ship the campaign's already-spent total in the job spec so the box starts from the right number.
 
 ---
 
@@ -263,8 +331,14 @@ fine at PRD scale, revisit Postgres only past a measured throughput ceiling.
   X rotates `doc_id`s every ~2–4 weeks, so also confirm the empty-interception canary trips on
   drift. Full detail in
   [`docs/archive/handover-linkedin-x-2026-06-29.md`](../docs/archive/handover-linkedin-x-2026-06-29.md) §2A.
-- **Campaign brief not shipped to remote workers** (B4): works locally via shared DB only. Bake
-  the brief into the job spec for true multi-machine deployment.
+- ~~**Campaign brief not shipped to remote workers** (B4)~~ **CLOSED 2026-08-12** — baked into
+  the job spec; per-org platform credentials now fetched on demand (B7). A remote box no longer
+  needs the shared SQLite file to resolve a campaign or its credentials.
+- **Shared fleet bootstrap token** (B8): one secret for the whole fleet, so any box holding it can
+  lease any org's job and now reach that org's decrypted credential. Needs per-worker, revocable
+  enrolment tokens.
+- **Spend cap is per-box, not per-campaign** (B9): `total_spend` sums the local `spend_log`, so an
+  unpinned fleet job gets a fresh full budget on each new box.
 - **Live exit gate** (B6): a real `target_leads>=1` run producing leads on a warmed, logged-in
   Chrome has not been verified end-to-end on a worker box.
 - **Windows/Linux packaging**: `.exe`/`.msi`/NSIS need a Windows host; code-signing/notarization

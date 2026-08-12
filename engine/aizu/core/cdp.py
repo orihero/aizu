@@ -31,7 +31,6 @@ import time
 from dataclasses import dataclass
 from typing import Callable, Iterator, Optional
 
-from .bounded import call_bounded
 from .feed import Comment, FeedSource, Reel
 from .human import HumanSim
 from .logsetup import get_logger
@@ -231,13 +230,30 @@ class CDPFeedBase(FeedSource):
         return self._ipage
 
     def _call_bounded(self, fn, timeout_s: Optional[float] = None):
-        """Run ``fn`` with a real hard deadline (``core.bounded.call_bounded``),
-        raising ``PlaywrightTimeout`` — not just letting it hang — for the call
-        sites Playwright's own timeout config does not actually cover (mouse.*,
-        and evaluate once the CDP pipe itself has gone quiet). Defaults the
-        deadline to ``cfg.js_timeout_ms`` so callers don't have to repeat it."""
-        bound = timeout_s if timeout_s is not None else self.cfg.js_timeout_ms / 1000.0
-        return call_bounded(fn, bound, timeout_exc=PlaywrightTimeout)
+        """Run ``fn`` directly, on the caller's (Playwright-owning) thread.
+
+        This USED to route ``fn`` through ``core.bounded.call_bounded`` to get a
+        real hard deadline for the call sites Playwright's own timeout config
+        does not cover (mouse.*, and evaluate once the CDP pipe has gone quiet).
+        That was wrong and silently broke every CDP walk: ``call_bounded`` runs
+        the callable on a daemon thread, and Playwright's SYNC API is
+        greenlet-based and thread-affine, so every wrapped call raised
+        ``greenlet.error: Cannot switch to a different thread`` — 100% of the
+        time, not intermittently. In ``_wheel_once`` both the wheel AND its JS
+        fallback were wrapped, so every scroll notch was skipped, the feed never
+        advanced, and Instagram/X/LinkedIn harvested nothing. Reproduced live:
+        the same ``page.mouse.wheel`` succeeds called directly and fails through
+        ``call_bounded``.
+
+        The wedge risk the deadline existed to prevent is REAL and is now
+        unguarded again — a hung mouse.* can still block a run. Re-fixing it
+        needs an approach that keeps the call on its owning thread (a dedicated
+        Playwright thread with a queue, or a transport-level kill), NOT one that
+        moves the call. ``timeout_s`` is accepted and ignored so the call sites
+        stay untouched for that follow-up.
+        """
+        del timeout_s  # no deadline is enforced here any more — see docstring
+        return fn()
 
     def close(self) -> None:
         """Disconnect from the warmed Chrome and release the Playwright driver so the

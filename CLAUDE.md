@@ -48,7 +48,7 @@ Requires Python ≥3.10 and Node. First-time setup:
 - Logging: `AIZU_LOG_LEVEL`, `AIZU_LOG_FILE_LEVEL`, `AIZU_LOG_FILE`, `AIZU_LOG_COLOR`.
 - Defaults: DB is `aizu.db`, log file is `aizu.log`.
 
-Superadmins are created out-of-band only: `python -m aizu.admin_bootstrap --db <db> --email <email>` (requires `AIZU_SECRET_KEY`).
+Superadmins are created out-of-band only: `python -m aizu.admin_bootstrap --db <db> --email <email>` (requires `AIZU_SECRET_KEY`). The same command with `--reset-password` sets a new password for an existing admin — there is no in-app reset — keeping their TOTP enrolment and revoking their live sessions.
 
 ## How to test
 

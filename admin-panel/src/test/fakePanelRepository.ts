@@ -13,10 +13,13 @@ import type {
   ControlFlagSetInput,
   EnqueueJobInput,
   EnqueuedJob,
+  EnrolmentToken,
   ExecutionBackend,
   ExecutionBackendState,
   FleetWorker,
   ImpersonateInput,
+  MintEnrolmentTokenInput,
+  MintEnrolmentTokenResult,
   ModelComparisonSettings,
   ModelComparisonStatsPage,
 } from '@/shared/schemas/admin';
@@ -189,6 +192,15 @@ export class FakePanelRepository implements PanelRepository {
   adminSession: AdminSession | null = null;
   /** Fleet snapshot fetchFleet serves. */
   fleet: FleetWorker[] = [];
+  /** Enrolment-token list fetchEnrolmentTokens serves. */
+  enrolmentTokens: EnrolmentToken[] = [];
+  /** The token record (sans plaintext) mintEnrolmentToken echoes back, merged with a
+   * freshly-generated plaintext each call. Tests override the fixed fields. */
+  mintedEnrolmentToken: Omit<EnrolmentToken, 'id'> = {
+    scopeKind: 'org', orgId: 1, label: null, createdAt: 1_700_000_000,
+    createdByAdminId: 1, expiresAt: 1_700_604_800, redeemedAt: null,
+    redeemedByWorkerId: null, revokedAt: null, revokedByAdminId: null,
+  };
   /** Control-flag list fetchControlFlags serves. */
   controlFlags: ControlFlag[] = [];
   /** Cross-org index fetchAdminOrgs serves. */
@@ -211,6 +223,8 @@ export class FakePanelRepository implements PanelRepository {
   adminLogoutCount = 0;
   readonly controlFlagWrites: ControlFlagSetInput[] = [];
   readonly workerRevokes: string[] = [];
+  readonly enrolmentTokenMints: MintEnrolmentTokenInput[] = [];
+  readonly enrolmentTokenRevokes: string[] = [];
   readonly enqueueRequests: EnqueueJobInput[] = [];
   readonly impersonateRequests: ImpersonateInput[] = [];
   endImpersonateCount = 0;
@@ -656,6 +670,40 @@ export class FakePanelRepository implements PanelRepository {
     if (failure) return failure;
     this.workerRevokes.push(workerId);
     return Promise.resolve(ok({ revoked: true }));
+  }
+
+  mintEnrolmentToken(input: MintEnrolmentTokenInput): Promise<Result<MintEnrolmentTokenResult>> {
+    const failure = this.takeAdminFailure<MintEnrolmentTokenResult>();
+    if (failure) return failure;
+    this.enrolmentTokenMints.push(input);
+    const id = `wet-fake-${this.enrolmentTokenMints.length}`;
+    const record: EnrolmentToken = {
+      ...this.mintedEnrolmentToken,
+      id,
+      scopeKind: input.scope,
+      orgId: input.scope === 'org' ? (input.orgId ?? this.mintedEnrolmentToken.orgId) : null,
+      label: input.label ?? null,
+    };
+    this.enrolmentTokens = [record, ...this.enrolmentTokens];
+    return Promise.resolve(ok({ ...record, token: `fake-plaintext-token-${id}` }));
+  }
+
+  fetchEnrolmentTokens(): Promise<Result<EnrolmentToken[]>> {
+    return this.takeAdminFailure<EnrolmentToken[]>()
+      ?? Promise.resolve(ok(this.enrolmentTokens));
+  }
+
+  revokeEnrolmentToken(tokenId: string): Promise<Result<{ revoked: boolean }>> {
+    const failure = this.takeAdminFailure<{ revoked: boolean }>();
+    if (failure) return failure;
+    this.enrolmentTokenRevokes.push(tokenId);
+    let revoked = false;
+    this.enrolmentTokens = this.enrolmentTokens.map((t) => {
+      if (t.id !== tokenId || t.redeemedAt !== null || t.revokedAt !== null) return t;
+      revoked = true;
+      return { ...t, revokedAt: 1_700_100_000, revokedByAdminId: 1 };
+    });
+    return Promise.resolve(ok({ revoked }));
   }
 
   enqueueJob(input: EnqueueJobInput): Promise<Result<EnqueuedJob>> {

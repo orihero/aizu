@@ -109,6 +109,7 @@ def test_jobspec_payload_round_trips():
     job = JobSpec(id="j1", org_id=7, campaign_id="c-x", platform="instagram",
                   required_account_handle="acme_ig", target_leads=25,
                   duration_minutes=30, engine_mode="harvest", soul_text="soul",
+                  campaign_brief={"platform": "instagram", "goal": "lead"},
                   run_id="run-9")
     assert JobSpec.from_payload(job.to_payload()) == job
 

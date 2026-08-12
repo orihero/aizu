@@ -7,6 +7,7 @@ import {
   buildAdminOrg,
   buildAdminSession,
   buildAuditEntry,
+  buildEnrolmentToken,
   buildWorker,
   renderAdmin,
 } from './adminTestUtils';
@@ -135,6 +136,48 @@ describe('fleet actions', () => {
 
     await waitFor(() => { expect(repo.controlFlagWrites).toHaveLength(1); });
     expect(repo.controlFlagWrites[0]).toMatchObject({ scope: 'global', halt: true });
+  });
+});
+
+describe('enrolment tokens', () => {
+  test('mints an org-scoped token and shows the plaintext once', async () => {
+    const user = userEvent.setup();
+    const repo = makeRepo();
+    repo.adminSession = buildAdminSession();
+    repo.fleet = [buildWorker()];
+    repo.adminOrgs = [buildAdminOrg({ id: 7, name: 'Acme Inc' })];
+
+    renderAdmin(repo, '/admin');
+
+    await user.click(await screen.findByRole('button', { name: /^mint token$/i }));
+    const dialog = await screen.findByRole('dialog');
+    await user.selectOptions(within(dialog).getByLabelText(/^org$/i), '7');
+    await user.click(within(dialog).getByRole('button', { name: /^mint token$/i }));
+
+    await waitFor(() => { expect(repo.enrolmentTokenMints).toHaveLength(1); });
+    expect(repo.enrolmentTokenMints[0]).toMatchObject({ scope: 'org', orgId: 7 });
+    // The plaintext token is shown exactly once, in a copy-once field.
+    expect(within(dialog).getByLabelText('Enrolment token')).toHaveValue(
+      'fake-plaintext-token-wet-fake-1',
+    );
+  });
+
+  test('revokes a pending enrolment token after confirmation', async () => {
+    const user = userEvent.setup();
+    const repo = makeRepo();
+    repo.adminSession = buildAdminSession();
+    repo.fleet = [];
+    repo.enrolmentTokens = [buildEnrolmentToken({ id: 'wet-xyz', label: 'wet-row-1' })];
+
+    renderAdmin(repo, '/admin');
+
+    await screen.findByText('wet-row-1');
+    await user.click(screen.getByRole('button', { name: /revoke/i }));
+
+    const dialog = await screen.findByRole('dialog');
+    await user.click(within(dialog).getByRole('button', { name: /^revoke$/i }));
+
+    await waitFor(() => { expect(repo.enrolmentTokenRevokes).toEqual(['wet-xyz']); });
   });
 });
 

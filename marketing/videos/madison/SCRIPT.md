@@ -29,19 +29,19 @@ The verbatim source is preserved below as the origin; the table is what we are a
 
 | Scene | File | Status | Line |
 | --- | --- | --- | --- |
-| **01** — Where leads live | `compositions/scene01.html` | **built** · 9.5s | In today's world, the best source to find clients and leads is the internet. So having a strong online presence is crucial. |
-| **02** — Ads cost, and mostly miss | `compositions/scene02.html` | **built** · 5.5s | So you run ads. They're expensive — and most of what comes back isn't worth calling. |
-| **03** — Doing it yourself | `compositions/scene03.html` | **built** · 5.5s | Managing them yourself is a full-time job. Hiring someone to do it is another headache. |
-| **04** — Logo reveal | `compositions/scene04.html` | **built** · 5.0s | Until now. Meet AIZU — your new sales expert. |
-| **05** — Product pillars + price | `compositions/scene05.html` | **built** · 6.5s | Find leads, manage them, and uncover actionable insights — for as low as $9 a month. |
-| **06** — Campaign creator | `compositions/scene06.html` | **built** · 7.1s · *provisional footage* | It's simple. Just create a campaign with our AI-powered campaign creator, |
-| **07** — Six platforms in, hot leads out | `compositions/scene07.html` | **built** · 5.8s | …and AIZU finds you relevant hot leads across six social media platforms — |
-| **08** — The proof | `compositions/scene08.html` | **built** · 6.9s · *provisional footage* | — by filtering out the accounts that reacted to posts similar to your product or service. |
-| **09** — It learns your ICP | `compositions/scene09.html` | **built** · 6.0s | Over time AIZU learns your ICP and improves the lead quality. |
-| **10** — Centralized, visualized | `compositions/scene10.html` | **built** · 6.0s | AIZU also uncovers actionable insights by centralizing and visualizing key analytics. |
-| **11** — Go to AIZU.UZ | `compositions/scene11.html` | **built** · 6.6s | Ready to acquire new customers without headaches and crazy cost? Go to AIZU.UZ |
+| **01** — Where leads live | `compositions/scene01.html` | **built** · 8.89s | In today's world, the best source to find clients and leads is the internet. So having a strong online presence is crucial. |
+| **02** — Ads cost, and mostly miss | `compositions/scene02.html` | **built** · 5.87s | So you run ads. They're expensive — and most of what comes back isn't worth calling. |
+| **03** — Doing it yourself | `compositions/scene03.html` | **built** · 7.13s | Managing them yourself is a full-time job. Hiring someone to do it is another headache. |
+| **04** — Logo reveal | `compositions/scene04.html` | **built** · 4.06s | Until now. Meet AIZU — your new sales expert. |
+| **05** — Product pillars + price | `compositions/scene05.html` | **built** · 7.27s | Find leads, manage them, and uncover actionable insights — for as low as $29 a month. |
+| **06** — Campaign creator | `compositions/scene06.html` | **built** · 5.83s · *provisional footage* | It's simple. Just create a campaign with our AI-powered campaign creator, |
+| **07** — Six platforms in, hot leads out | `compositions/scene07.html` | **built** · 6.01s | …and AIZU finds you relevant hot leads across six social media platforms — |
+| **08** — The proof | `compositions/scene08.html` | **built** · 6.20s · *provisional footage* | — by filtering out the accounts that reacted to posts similar to your product or service. |
+| **09** — It learns your ICP | `compositions/scene09.html` | **built** · 6.43s | Over time AIZU learns your ICP and improves the lead quality. |
+| **10** — Centralized, visualized | `compositions/scene10.html` | **built** · 7.27s | AIZU also uncovers actionable insights by centralizing and visualizing key analytics. |
+| **11** — Go to AIZU.UZ | `compositions/scene11.html` | **built** · 7.73s | Ready to acquire new customers without headaches and crazy cost? Go to AIZU.UZ |
 
-**All 11 scenes built — 70.4 s.** Full cut: `out/aizu-full.mp4`. Still silent.
+**All 11 scenes built — 72.8 s.** Full cut: `out/aizu-full.mp4`, narrated with the designed ElevenLabs voice *Aizu Narrator*; every scene holds ~0.66 s after its line.
 
 ### Changes from the verbatim source, and why
 

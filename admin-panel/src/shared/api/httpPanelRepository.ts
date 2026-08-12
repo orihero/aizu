@@ -40,9 +40,12 @@ import {
   controlFlagsResponseSchema,
   enqueueJobResponseSchema,
   executionBackendResponseSchema,
+  fleetEnrolmentTokensResponseSchema,
   fleetResponseSchema,
+  mintEnrolmentTokenResponseSchema,
   modelComparisonSettingsResponseSchema,
   modelComparisonStatsResponseSchema,
+  revokeEnrolmentTokenResponseSchema,
   revokeWorkerResponseSchema,
   type AdminLoginInput,
   type AdminOrg,
@@ -56,10 +59,13 @@ import {
   type ControlFlagSetInput,
   type EnqueueJobInput,
   type EnqueuedJob,
+  type EnrolmentToken,
   type ExecutionBackend,
   type ExecutionBackendState,
   type FleetWorker,
   type ImpersonateInput,
+  type MintEnrolmentTokenInput,
+  type MintEnrolmentTokenResult,
   type ModelComparisonSettings,
   type ModelComparisonStatsPage,
 } from '@/shared/schemas/admin';
@@ -147,6 +153,8 @@ const ADMIN_WHOAMI_ENDPOINT = '/api/admin/whoami';
 const ADMIN_FLEET_ENDPOINT = '/api/admin/fleet';
 const ADMIN_CONTROL_FLAGS_ENDPOINT = '/api/admin/control-flags';
 const ADMIN_WORKER_REVOKE_ENDPOINT = '/api/admin/workers/revoke';
+const ADMIN_WORKER_ENROLMENT_TOKENS_ENDPOINT = '/api/admin/worker-enrolment-tokens';
+const ADMIN_WORKER_ENROLMENT_TOKEN_REVOKE_ENDPOINT = '/api/admin/worker-enrolment-tokens/revoke';
 const ADMIN_ENQUEUE_ENDPOINT = '/api/admin/jobs/enqueue';
 const ADMIN_ORGS_ENDPOINT = '/api/admin/orgs';
 const ADMIN_IMPERSONATE_ENDPOINT = '/api/admin/impersonate';
@@ -648,6 +656,23 @@ export class HttpPanelRepository implements PanelRepository {
 
   revokeWorker(workerId: string): Promise<Result<{ revoked: boolean }>> {
     return this.postForData(ADMIN_WORKER_REVOKE_ENDPOINT, { workerId }, revokeWorkerResponseSchema);
+  }
+
+  mintEnrolmentToken(input: MintEnrolmentTokenInput): Promise<Result<MintEnrolmentTokenResult>> {
+    return this.postForData(
+      ADMIN_WORKER_ENROLMENT_TOKENS_ENDPOINT, input, mintEnrolmentTokenResponseSchema);
+  }
+
+  async fetchEnrolmentTokens(): Promise<Result<EnrolmentToken[]>> {
+    const result = await this.adminGet<{ tokens: EnrolmentToken[] }>(
+      ADMIN_WORKER_ENROLMENT_TOKENS_ENDPOINT, fleetEnrolmentTokensResponseSchema,
+      'enrolment-tokens');
+    return result.ok ? ok(result.value.tokens) : result;
+  }
+
+  revokeEnrolmentToken(tokenId: string): Promise<Result<{ revoked: boolean }>> {
+    return this.postForData(
+      ADMIN_WORKER_ENROLMENT_TOKEN_REVOKE_ENDPOINT, { tokenId }, revokeEnrolmentTokenResponseSchema);
   }
 
   async enqueueJob(input: EnqueueJobInput): Promise<Result<EnqueuedJob>> {

@@ -139,6 +139,45 @@ export const revokeWorkerResponseSchema = adminEnvelope(
 );
 
 // ---------------------------------------------------------------------------
+// Worker enrolment tokens (v22 — per-worker, single-use, admin-minted tokens
+// that carry a SERVER-ASSIGNED scope; BUILD-PLAN B8 fix, engine/aizu/server.py's
+// ADMIN_WORKER_ENROLMENT_TOKENS_PATH / ADMIN_WORKER_ENROLMENT_TOKEN_REVOKE_PATH)
+// ---------------------------------------------------------------------------
+
+export const ENROLMENT_SCOPE_KINDS = ['org', 'pool'] as const;
+export type EnrolmentScopeKind = (typeof ENROLMENT_SCOPE_KINDS)[number];
+
+/** A minted enrolment token, never the plaintext or hash. */
+export const enrolmentTokenSchema = z.object({
+  id: z.string(),
+  scopeKind: z.enum(ENROLMENT_SCOPE_KINDS),
+  orgId: z.number().nullable(),
+  label: z.string().nullable(),
+  createdAt: z.number(),
+  createdByAdminId: z.number().nullable(),
+  expiresAt: z.number(),
+  redeemedAt: z.number().nullable(),
+  redeemedByWorkerId: z.string().nullable(),
+  revokedAt: z.number().nullable(),
+  revokedByAdminId: z.number().nullable(),
+});
+export type EnrolmentToken = z.infer<typeof enrolmentTokenSchema>;
+
+export const fleetEnrolmentTokensResponseSchema = adminEnvelope(
+  z.object({ tokens: z.array(enrolmentTokenSchema) }),
+);
+
+/** Mint returns the token record PLUS the plaintext — shown to the admin exactly
+ * once; the plaintext never appears in any other response (list/redeem). */
+const mintedEnrolmentTokenSchema = enrolmentTokenSchema.extend({ token: z.string() });
+export type MintEnrolmentTokenResult = z.infer<typeof mintedEnrolmentTokenSchema>;
+export const mintEnrolmentTokenResponseSchema = adminEnvelope(mintedEnrolmentTokenSchema);
+
+export const revokeEnrolmentTokenResponseSchema = adminEnvelope(
+  z.object({ revoked: z.boolean() }),
+);
+
+// ---------------------------------------------------------------------------
 // Execution backend (v16 superadmin run-routing switch)
 // ---------------------------------------------------------------------------
 
@@ -393,6 +432,13 @@ export interface EnqueueJobInput {
   readonly targetLeads?: number | null;
   readonly durationMinutes?: number | null;
   readonly soulText?: string | null;
+}
+
+export interface MintEnrolmentTokenInput {
+  readonly scope: EnrolmentScopeKind;
+  readonly orgId?: number;
+  readonly label?: string;
+  readonly ttlHours?: number;
 }
 
 export interface AdminOrgLeadsQuery {

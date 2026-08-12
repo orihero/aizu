@@ -19,7 +19,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Optional
 
-from ..core.config import SUPPORTED_PLATFORMS
+from ..core.config import MAX_CAMPAIGN_BRIEF_BYTES, SUPPORTED_PLATFORMS
 from . import DEFAULT_CONTROL_SURFACE_PORT, DEFAULT_HEARTBEAT_INTERVAL_SEC
 
 # A job whose duration is unbounded by the spec still gets a worst-case wall-clock
@@ -124,6 +124,26 @@ class JobSpec:
     duration_minutes: Optional[int] = None
     engine_mode: str = "harvest"
     soul_text: Optional[str] = None
+    # Baked at enqueue time by server._dispatch_run_to_fleet (mirrors soul_text) so a
+    # REMOTE worker with no shared DB row can still resolve the campaign — see
+    # job_runner._resolve_campaign. None on a legacy/pre-existing queued job or a
+    # same-box dev run; the worker falls back to resolve_campaign(store, ...) then.
+    campaign_brief: Optional[dict[str, Any]] = None
+    # NOT baked by the server (SECURITY REVIEW CRITICAL/HIGH: a decrypted per-org
+    # secret must never ride the enqueue spec, the `jobs.spec` DB column, or the lease
+    # response — see server._dispatch_run_to_fleet / store._job_row_to_lease). For a
+    # per-org-credentialed platform (youtube/telegram/reddit —
+    # core.config.PER_ORG_CREDENTIAL_PLATFORMS) the sidecar instead fetches this field
+    # itself, fresh, at job start (Sidecar._fetch_job_credential →
+    # POST /api/worker/jobs/{id}/credential, lease-holder-gated) and threads it onto a
+    # `dataclasses.replace`d JobSpec before the spec file is written — so it still
+    # crosses the supervisor→child process boundary through the SAME 0600 spec-file
+    # mechanism as campaign_brief/soul_text (from_payload/to_payload round-trip
+    # unchanged). None means either the platform isn't per-org credentialed, the org
+    # has no secret connected, or (same-box dev/legacy path) no fetch was ever
+    # attempted — cli._resolve_platform_credentials' fallback to the box-local store
+    # lookup covers all three identically.
+    platform_credentials: Optional[dict[str, Any]] = None
     # Cloud-assigned at enqueue so the org's activity drawer can poll this run live and
     # the worker emits/streams run_events under the SAME id the cloud already knows.
     # Absent for a hand-rolled/legacy job → the worker generates one locally.
@@ -180,6 +200,10 @@ class JobSpec:
                 pick("durationMinutes", "duration_minutes"), "durationMinutes"),
             engine_mode=engine_mode,
             soul_text=_coerce_optional_str(pick("soulText", "soul_text")),
+            campaign_brief=_coerce_optional_dict(
+                pick("campaignBrief", "campaign_brief"), "campaignBrief"),
+            platform_credentials=_coerce_optional_dict(
+                pick("platformCredentials", "platform_credentials"), "platformCredentials"),
             run_id=_coerce_optional_str(pick("runId", "run_id")),
         )
 
@@ -212,6 +236,10 @@ class JobSpec:
             payload["durationMinutes"] = self.duration_minutes
         if self.soul_text is not None:
             payload["soulText"] = self.soul_text
+        if self.campaign_brief is not None:
+            payload["campaignBrief"] = self.campaign_brief
+        if self.platform_credentials is not None:
+            payload["platformCredentials"] = self.platform_credentials
         if self.run_id is not None:
             payload["runId"] = self.run_id
         return payload
@@ -372,6 +400,9 @@ class WorkerConfig:
             db=self.db_path,
             verbose=False,
             quiet=False,
+            # Baked per-org secret (see JobSpec.platform_credentials) — cli._build_run_io
+            # / _build_warming_io read this to prefer it over the box-local store lookup.
+            platform_credentials=job.platform_credentials,
         )
 
 
@@ -404,4 +435,21 @@ def _coerce_optional_str(value: Any) -> Optional[str]:
         return None
     if not isinstance(value, str):
         raise JobSpecError(f"expected a string, got {type(value).__name__}")
+    return value
+
+
+def _coerce_optional_dict(value: Any, label: str) -> Optional[dict]:
+    """Like :func:`_coerce_optional_str` but for the baked campaign brief, which is a
+    nested object (already-decoded JSON at this boundary), not free-text. Also enforces
+    MAX_CAMPAIGN_BRIEF_BYTES here as a worker-side backstop — defense-in-depth against a
+    corrupted/tampered spec file or a future untrusted caller of from_payload, even
+    though the server is expected to enforce the same cap before baking."""
+    if value is None:
+        return None
+    if not isinstance(value, dict):
+        raise JobSpecError(f"job.{label} is not an object: {type(value).__name__}")
+    size = len(json.dumps(value, ensure_ascii=False).encode("utf-8"))
+    if size > MAX_CAMPAIGN_BRIEF_BYTES:
+        raise JobSpecError(
+            f"job.{label} is {size} bytes, exceeds the {MAX_CAMPAIGN_BRIEF_BYTES}-byte cap")
     return value

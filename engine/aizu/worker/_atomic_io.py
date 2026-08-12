@@ -12,9 +12,15 @@ import os
 import sys
 from pathlib import Path
 
-# Spec files carry soul_text + local paths; result files carry a summary. Neither is a
-# credential, but there is no reason to expose them beyond the owner, so mirror the 0600
-# discipline FernetFileBackend uses for the token.
+# Result files carry a summary; spec files carry soul_text + local paths + (SECURITY
+# REVIEW CRITICAL/HIGH, since sidecar.py started fetching per-job credentials
+# on-demand) that job's platform_credentials, if the platform needs one — so a spec
+# file CAN be a credential now, briefly, for the life of one job. That's accepted: the
+# box already holds the secret in memory to call the platform API with it, this file is
+# 0600 (owner-only) like the token store, and job_runner._cleanup unlinks it in a
+# `finally` on every exit path (plus the startup sweep for anything a hard crash
+# missed) — so nothing durable is added. The defect that review closed was the CLOUD-
+# SIDE copy (jobs.spec, forever); this on-box, one-job-lifetime file was never that.
 _FILE_MODE = 0o600
 
 

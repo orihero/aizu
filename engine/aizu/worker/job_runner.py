@@ -34,7 +34,7 @@ from pathlib import Path
 from typing import Callable, Iterator, Optional
 
 from .. import cli
-from ..core.config import Soul, resolve_campaign
+from ..core.config import Campaign, Soul, campaign_from_brief, resolve_campaign
 from ..core.logsetup import get_logger
 from . import (JOB_RESULT_KIND_CAMPAIGN_MALFORMED, JOB_RESULT_KIND_CAMPAIGN_NOT_FOUND,
                JOB_RESULT_KIND_ERROR, JOB_RESULT_KIND_SOUL_MISSING)
@@ -416,11 +416,11 @@ def _execute_job(store, job: JobSpec, *, cfg: WorkerConfig) -> dict:
 
     This is the historical ``run_one_job`` body, unchanged — it now runs inside
     ``job_child`` under the supervisor, or directly in unit tests."""
-    # resolve_campaign raises ValueError on a malformed brief (caller → nack
-    # 'campaign_malformed'); returns None for an unknown id (→ CampaignNotFound).
-    campaign = resolve_campaign(store, cfg.cfg_dir, job.campaign_id)
-    if campaign is None:
-        raise CampaignNotFound(job.campaign_id)
+    # Prefer the brief baked into the job spec (B4/mirrors soul_text); only a legacy/
+    # same-box job with no baked brief falls back to the DB/file lookup. Either path
+    # raises ValueError on a malformed brief (caller → nack 'campaign_malformed'); the
+    # fallback path returns None for an unknown id (→ CampaignNotFound).
+    campaign = _resolve_campaign(job, store, cfg)
 
     soul = _resolve_soul(job, cfg.cfg_dir)
     # Prefer the cloud-assigned run_id (so the org drawer + the heartbeat run_events
@@ -443,6 +443,20 @@ def _execute_job(store, job: JobSpec, *, cfg: WorkerConfig) -> dict:
             # session raised (BUILD-PLAN C6).
             _unlink_quietly(pause_path)
     return {**summary, "run_id": run_id, "job_id": job.id}
+
+
+def _resolve_campaign(job: JobSpec, store, cfg: WorkerConfig) -> Campaign:
+    """Prefers the brief baked into the job spec (mirrors _resolve_soul); a malformed
+    baked brief is a hard error (raises ValueError, mapped by the caller to
+    campaign_malformed) and NEVER falls through to the box-local DB/file lookup —
+    silently substituting a different (possibly stale, possibly absent) local campaign
+    for a corrupt baked one would be worse than failing loud."""
+    if job.campaign_brief is not None:
+        return campaign_from_brief(job.campaign_id, job.campaign_brief)
+    campaign = resolve_campaign(store, cfg.cfg_dir, job.campaign_id)
+    if campaign is None:
+        raise CampaignNotFound(job.campaign_id)
+    return campaign
 
 
 def _resolve_soul(job: JobSpec, cfg_dir: Path) -> Soul:

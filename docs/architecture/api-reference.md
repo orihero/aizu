@@ -47,6 +47,7 @@ For protected org routes the ladder is: `401` (no session) → `403` (no `orgId`
 | Set | Values | Source |
 |---|---|---|
 | Platforms | `instagram, youtube, telegram, reddit, linkedin, x` | `core/config.py:24` |
+| CDP (browser-driven) platforms | `instagram, linkedin, x` | `core/config.py:CDP_PLATFORMS` |
 | Lead statuses | `new, in_progress, interested, closed, couldnt_connect, archived` | `store.py:43` |
 | Forced-reason statuses (require a note) | `closed, couldnt_connect, archived` | `store.py:47` |
 | Campaign statuses | `live, paused, draft, ended` | `store.py:76` |
@@ -207,6 +208,7 @@ All require `run_campaigns` (owner/admin). All `503` if run control is disabled 
 Start a run for one campaign or all live campaigns. In-process by default; distributed-backend live runs enqueue to the worker fleet.
 - **Body**: exactly one of `{campaignId}` or `{all:true}`; `mode` ∈ `dry|live` (default `dry`); optional `targetLeadCount` (1–1000), `durationMinutes` (1–720). `_validate_run` (`server.py:1291`).
 - **Billing gate** (`server.py:2884`): `402` if subscription status ∉ `active|trialing`, or `402` if the period lead cap is exhausted; remaining cap **clamps** the target.
+- **Readiness gate** (in-process **live** runs only): `409` with its OWN shape — `{error:"agent_not_ready", detail, readiness}` (not the `{ok,data,error}` envelope) — when the agent that would execute the run isn't ready. Narrow by design: a `dry` run walks a fake feed, and an API-only campaign (youtube/reddit/telegram) never touches the shared browser, so neither is gated. A campaign with an Instagram channel additionally requires `instagram == "logged_in"`; other CDP channels (linkedin/x) only require CDP reachability. A probe failure allows the run rather than blocking it.
 - **Response (in-process)**: `202 {ok, data:{accepted:true, scope, campaignId, mode}}`; `409 "a run is already active"`; `400` not runnable.
 - **Response (distributed)**: `202 {ok, data:{accepted:true, backend:"distributed", scope, jobs:[...], runId, runIds:[...], skipped:[{campaignId,reason}]}}`; `409` if no capable worker / nothing dispatched. Handler `server.py:2853`, fleet dispatch `server.py:2940`.
 
@@ -223,6 +225,34 @@ Start a run for one campaign or all live campaigns. In-process by default; distr
 Live activity feed for one run (counters + narrative event stream + open flags), paged on a monotonic cursor. Ownership proven in-memory or via org-stamped DB rows.
 - **Query**: `runId` required; `after` cursor (default 0).
 - **Response**: `200 {ok, data:{runId, finished, fleetJob, counters:{reelsSeen,relevancePasses,commentsScored,matches,spendUsd,likes,follows}, events:[...], flags:[{kind,severity,detail}], cursor}}`; `400` missing runId; `404` unknown/foreign run. Counters aggregated by `_aggregate_run_counters` (`server.py:246`); handler `server.py:4109`.
+
+---
+
+## 5b. Agent readiness (org session)
+
+"Can a live run start right now?" — polled by the panel's global `AgentReadinessBanner` every 60s and reused as the `POST /api/run` gate above. Both answer a **raw** dict (no envelope).
+
+| Method | Path | Role gate |
+|---|---|---|
+| GET | `/api/agent/readiness[?refresh=1]` | any org session |
+| POST | `/api/agent/launch-login` | `fix_agent` (owner/admin) |
+
+What "ready" measures follows the superadmin execution-backend switch:
+
+| Backend | Probed | Ready when |
+|---|---|---|
+| `in_process` | this box's warmed Chrome (`readiness.check_readiness`) | CDP answers **and** the Instagram session is logged in |
+| `distributed` | the worker fleet (`readiness.fleet_readiness`) | ≥1 non-revoked worker is `online` — the cloud has no browser of its own, so probing local CDP would say nothing true |
+
+### GET `/api/agent/readiness`
+- **Query**: `refresh=1` forces a live probe past the ≤60s server-side cache.
+- **Response**: `200 {ready, cdp:"ok"|"unreachable", instagram:"logged_in"|"logged_out"|"unknown", checkedAt, cdpUrl, detail, backend}`; `401` anonymous. In `distributed` mode `instagram` stays `"unknown"` — a box's login state never rides the presence heartbeat — so clients should render `detail`, not the enums.
+- A live run holds the one CDP connection this architecture allows, so an in-process check never attaches a second Playwright client mid-run: it serves the last-known snapshot instead.
+
+### POST `/api/agent/launch-login`
+Open (or focus) a Chrome tab on instagram.com so a human can sign the warmed browser back in.
+- **Body**: `{}`. **Response**: `200 {launched, readiness}` (`launched` is best-effort — `false` with a still-unready snapshot is a normal answer, not an error); `409 {error:"run_active", detail}` while a run is in flight; `500 {error, detail}` if Chrome itself couldn't be started; `403` without `fix_agent`.
+- In `distributed` mode this is a no-op `200 {launched:false, ...}`: the warmed Chrome lives on the worker PC and is signed in from that box's own desktop app.
 
 ---
 
@@ -349,6 +379,8 @@ Job-scoped lifecycle. URL job_id + bearer token are authoritative (one worker ca
 ## 10. Superadmin plane
 
 Gated by `_current_admin` (IP-allowlist + `rr_admin_session` cookie + TOTP MFA). Env: `admin_auth.ADMIN_IP_ALLOWLIST_ENV`, `ADMIN_TRUSTED_PROXIES_ENV`. `_require_admin` returns `401 "platform admin authentication required"` when unauthenticated.
+
+There is no signup and no password-reset **route** here on purpose — an emailed reset link would be a second, unaudited way into the highest-privilege surface. Both live in the out-of-band CLI (`python -m aizu.admin_bootstrap`, needs shell + DB access): bare to mint an admin, `--reset-password` to re-set an existing one's password, which keeps the TOTP enrolment, revokes that admin's live sessions, and appends `admin.password.reset` to the hash-chained audit log.
 
 | Method | Path | Purpose |
 |---|---|---|

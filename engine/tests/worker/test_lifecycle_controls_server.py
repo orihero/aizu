@@ -15,7 +15,7 @@ import pytest
 import sqlite3
 import time
 
-from aizu.core.store import WORKER_TOKEN_TTL_SEC
+from aizu.core.store import Store, WORKER_TOKEN_TTL_SEC
 from aizu.admin_auth import ADMIN_IP_ALLOWLIST_ENV
 from aizu.secrets import SECRET_KEY_ENV
 from aizu.server import (MIN_AGENT_VERSION_ENV, WORKER_BOOTSTRAP_ENV, serve)
@@ -289,3 +289,118 @@ def test_job_heartbeat_clean_when_no_flags(srv):
                        {}, bearer=token)
     assert code == 200
     assert resp["data"]["halt"] is False and resp["data"]["drain"] is False
+
+
+# ----- v22 worker enrolment tokens (BUILD-PLAN B8 fix) --------------------------
+
+def _mint(srv, *, scope="pool", org_id=None, label=None, ttl_hours=None,
+          cookie=None):
+    body = {"scope": scope}
+    if org_id is not None:
+        body["orgId"] = org_id
+    if label is not None:
+        body["label"] = label
+    if ttl_hours is not None:
+        body["ttlHours"] = ttl_hours
+    return _post(srv["base"], "/api/admin/worker-enrolment-tokens", body,
+                cookie=cookie or srv["admin_cookie"])
+
+
+def test_enrolment_mint_requires_platform_admin(srv):
+    code, resp = _mint(srv, scope="pool", cookie=srv["normal_cookie"])
+    assert code == 401, resp
+
+
+def test_enrolment_mint_validates_scope_org_requires_org_id(srv):
+    code, resp = _mint(srv, scope="org")  # no orgId
+    assert code == 400, resp
+
+
+def test_enrolment_mint_validates_scope_pool_rejects_org_id(srv):
+    code, resp = _mint(srv, scope="pool", org_id=1)
+    assert code == 400, resp
+
+
+def test_enrolment_mint_validates_scope_value(srv):
+    code, resp = _mint(srv, scope="bogus")
+    assert code == 400, resp
+
+
+def test_enrolment_mint_validates_ttl_range(srv):
+    code, resp = _mint(srv, scope="pool", ttl_hours=0)
+    assert code == 400, resp
+    code, resp = _mint(srv, scope="pool", ttl_hours=721)
+    assert code == 400, resp
+    code, resp = _mint(srv, scope="pool", ttl_hours=720)
+    assert code == 200, resp
+
+
+def test_enrolment_mint_returns_plaintext_once_never_in_list(srv):
+    code, resp = _mint(srv, scope="org", org_id=1, label="box-A")
+    assert code == 200, resp
+    rec = resp["data"]
+    assert isinstance(rec["token"], str) and rec["token"]
+    assert rec["scopeKind"] == "org"
+    assert rec["orgId"] == 1
+    assert rec["label"] == "box-A"
+
+    code, listed = _get(srv["base"], "/api/admin/worker-enrolment-tokens",
+                        cookie=srv["admin_cookie"])
+    assert code == 200, listed
+    row = next(t for t in listed["data"]["tokens"] if t["id"] == rec["id"])
+    assert "token" not in row and "tokenHash" not in row and "token_hash" not in row
+
+
+def test_enrolment_list_requires_platform_admin(srv):
+    code, resp = _get(srv["base"], "/api/admin/worker-enrolment-tokens",
+                      cookie=srv["normal_cookie"])
+    assert code == 401, resp
+
+
+def test_enrolment_revoke_pending_then_idempotent(srv):
+    _, minted = _mint(srv, scope="pool")
+    token_id = minted["data"]["id"]
+    code, resp = _post(srv["base"], "/api/admin/worker-enrolment-tokens/revoke",
+                       {"tokenId": token_id}, cookie=srv["admin_cookie"])
+    assert code == 200 and resp["data"]["revoked"] is True
+    code, resp = _post(srv["base"], "/api/admin/worker-enrolment-tokens/revoke",
+                       {"tokenId": token_id}, cookie=srv["admin_cookie"])
+    assert code == 200 and resp["data"]["revoked"] is False
+
+
+def test_enrolment_revoke_already_redeemed_is_noop(srv):
+    _, minted = _mint(srv, scope="pool")
+    token_id, token = minted["data"]["id"], minted["data"]["token"]
+    code, resp = _post(srv["base"], "/api/worker/register",
+                       {"machineId": "m-enrol-redeemed"}, bearer=token)
+    assert code == 200, resp
+    code, resp = _post(srv["base"], "/api/admin/worker-enrolment-tokens/revoke",
+                       {"tokenId": token_id}, cookie=srv["admin_cookie"])
+    assert code == 200 and resp["data"]["revoked"] is False
+
+
+def test_enrolment_revoke_requires_platform_admin(srv):
+    code, resp = _post(srv["base"], "/api/admin/worker-enrolment-tokens/revoke",
+                       {"tokenId": "whatever"}, cookie=srv["normal_cookie"])
+    assert code == 401, resp
+
+
+def test_enrolment_mint_and_revoke_are_audited(srv):
+    _, minted = _mint(srv, scope="pool", label="audit-me")
+    token_id = minted["data"]["id"]
+    _post(srv["base"], "/api/admin/worker-enrolment-tokens/revoke",
+         {"tokenId": token_id}, cookie=srv["admin_cookie"])
+    store = Store(srv["db"])
+    try:
+        assert store.verify_admin_audit_chain()["ok"] is True
+        rows = store.list_admin_audit(limit=200)
+        mint_row = next(r for r in rows
+                        if r["action"] == "worker_enrolment_token.mint"
+                        and r["target_resource"] == token_id)
+        revoke_row = next(r for r in rows
+                          if r["action"] == "worker_enrolment_token.revoke"
+                          and r["target_resource"] == token_id)
+        assert mint_row["acting_admin_id"] is not None
+        assert revoke_row["acting_admin_id"] is not None
+    finally:
+        store.close()

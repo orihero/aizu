@@ -88,3 +88,20 @@ def test_endpoint_paths_are_correct():
     assert seen["path"] == "/api/worker/jobs/job-9/heartbeat"
     lc.ack("job-9", {})
     assert seen["path"] == "/api/worker/jobs/job-9/ack"
+    lc.credential("job-9")
+    assert seen["path"] == "/api/worker/jobs/job-9/credential"
+
+
+def test_credential_returns_the_fetched_secret():
+    lc = _client(lambda req: httpx.Response(
+        200, json={"ok": True, "data": {"credential": {"api_key": "K"}}}))
+    res = lc.credential("job-1")
+    assert res.ok and res.data == {"credential": {"api_key": "K"}}
+
+
+def test_credential_404_from_a_non_lease_holder_is_a_failure_not_a_crash():
+    """SECURITY REVIEW CRITICAL/HIGH: a worker that doesn't hold the job's lease gets
+    404, folded into the same never-throw Result envelope as any other failure."""
+    lc = _client(lambda req: httpx.Response(404, json={"ok": False, "error": "unknown job"}))
+    res = lc.credential("job-not-mine")
+    assert not res.ok and res.status == 404 and res.error == "unknown job"

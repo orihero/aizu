@@ -68,6 +68,25 @@ def test_redacting_filter_scrubs_known_secrets(monkeypatch):
     assert "«redacted»" in msg
 
 
+def test_redacting_filter_scrubs_credential_shaped_keywords():
+    """SECURITY REVIEW hardening: the worker's fetched-on-demand platform_credentials
+    (sidecar.py) crosses this box's own log stream on its way to/from the credential
+    endpoint and the child spec file — the keyword list must catch every shape that
+    dict's keys (and its own wire/spec-file field name) can appear under, including a
+    Python dict repr's single quotes, not just JSON's double quotes."""
+    flt = logsetup.RedactingFilter()
+    record = logging.LogRecord(
+        "aizu.t", logging.INFO, __file__, 1,
+        '{"platformCredentials": {"api_key": "YT-LIVE", \'client_secret\': \'CS-1\', '
+        "'session': 'TG-SESSION-STR', 'api_hash': 'AH-1', 'bot_token': 'BT-1'}}",
+        (), None)
+    flt.filter(record)
+    msg = record.getMessage()
+    for secret in ("YT-LIVE", "CS-1", "TG-SESSION-STR", "AH-1", "BT-1"):
+        assert secret not in msg, msg
+    assert "«redacted»" in msg
+
+
 def test_redacting_filter_keeps_innocuous_text():
     flt = logsetup.RedactingFilter()
     record = logging.LogRecord("aizu.t", logging.INFO, __file__, 1,

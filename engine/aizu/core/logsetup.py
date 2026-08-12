@@ -89,11 +89,25 @@ _configured = False
 # ---- redaction -----------------------------------------------------------
 
 # Token shapes to scrub regardless of value (covers headers, cookies, blobs).
+#
+# The keyword-value pattern's alternation was widened (SECURITY REVIEW hardening —
+# credentials now cross a process boundary via the worker's fetched-on-demand
+# platform_credentials, see worker/sidecar.py) to explicitly name every key shape a
+# stored per-org secret or its wire/spec-file DTO can appear under: platformCredentials
+# (the JobSpec/spec-file field itself), apiKey (YouTube), clientSecret, session/api_hash
+# (Telegram — core/store.py's _SECRET_DETAIL_MARKERS), bot_token. `secret`/`token`/
+# `api_key` already covered clientSecret/bot_token/apiKey by SUBSTRING match, but listing
+# them explicitly makes the coverage self-documenting rather than an accident of regex
+# alternation order. Quotes now match BOTH `"`/`'` (a Python dict repr like
+# `{'api_key': 'X'}` — e.g. an exception message embedding a credential dict — uses
+# single quotes the prior double-quote-only pattern would silently pass through).
 _REDACT_PATTERNS = [
     re.compile(r"(?i)(bearer\s+)[A-Za-z0-9\-._~+/]+=*"),
     re.compile(r"(?i)(authorization\s*[:=]\s*)\S+"),
     re.compile(r"(rr_session=)[^;\s]+"),
-    re.compile(r"(?i)(\"?(?:password|api[_-]?key|secret|token)\"?\s*[:=]\s*\"?)[^\s\",}]+"),
+    re.compile(r"(?i)([\"']?(?:password|api[_-]?key|api[_-]?hash|bot[_-]?token|"
+              r"client[_-]?secret|platform[_-]?credentials|secret|token|session)"
+              r"[\"']?\s*[:=]\s*[\"']?)[^\s\"',}]+"),
     re.compile(r"\bgAAAAA[A-Za-z0-9\-_=]+"),  # Fernet token
 ]
 _REDACTED = "«redacted»"

@@ -114,6 +114,12 @@ export const agentReadinessSchema = z.object({
   checkedAt: z.number(),
   detail: z.string().nullable(),
   cdpUrl: z.string(),
+  /** Which backend the server measured. `distributed` means live runs execute on
+   * worker PCs, so `cdp`/`instagram` describe fleet presence rather than a browser on
+   * the server — read `detail` for the accurate sentence, and don't offer to launch a
+   * login browser there is no browser for. Optional: a server predating the field
+   * still parses. */
+  backend: z.enum(['in_process', 'distributed']).optional(),
 });
 
 /** POST /api/agent/launch-login → attempted to spawn/attach Chrome and open a login

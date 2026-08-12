@@ -32,7 +32,7 @@ if TYPE_CHECKING:
 
 logger = get_logger(__name__)
 
-SCHEMA_VERSION = 21  # v2: platform dimension; v3: panel ops tables; v4: campaign_briefs; v5: auth; v6: lead Kanban (status set + audit log + notes); v7: multi-tenancy (organizations + memberships role + invites; per-org settings/integrations); v8: encrypted per-(org, platform) integration secrets; v9: security audit log; v10: run_events live activity feed; v11: account warming (accounts + state_changes + campaign_accounts + account_secrets; sessions.engine_mode/account_id, health_flags.account_id, actions.account_id); v12: campaign lifecycle controls (campaign_meta.archived_at/paused_reason + fixed-cadence schedule cols: schedule_enabled/kind/dow/hour/minute/tz, next_run_at, last_scheduled_run_at, schedule_target_leads, schedule_duration_minutes); v13: billing subscriptions (Polar + provider-agnostic, soft run-cap); v14: distributed workers pool (token-based registry + presence; status DERIVED not stored); v15: superadmin plane (platform_admins + platform_admin_sessions with impersonation principal + hash-chained admin_audit_log + DB-backed admin_login_throttle); v16: platform_settings (superadmin execution_backend switch — route runs to in-process RunManager vs distributed worker fleet); v17: model comparison (superadmin-switchable LLM fan-out — matches.found_by_models + model_comparison_log; platform_settings.model_comparison_enabled); v18: Uzbek-only local STT transcript (seen_reels.transcript/transcript_lang/transcript_ms; sessions.transcriptions); v19: video-analysis tier (seen_reels.video_analyzed/video_analysis_summary; sessions.video_analyses); v20: session liveness heartbeat (sessions.last_activity_at/pid) so SessionWatchdog can detect a wedged-but-never-excepting session; v21: self-healing anti-bot cooldown (session_cooldowns: per-(campaign_id, platform) attempt counter + exponential-backoff cooldown_until for a SOFT halt, gap #1)
+SCHEMA_VERSION = 22  # v2: platform dimension; v3: panel ops tables; v4: campaign_briefs; v5: auth; v6: lead Kanban (status set + audit log + notes); v7: multi-tenancy (organizations + memberships role + invites; per-org settings/integrations); v8: encrypted per-(org, platform) integration secrets; v9: security audit log; v10: run_events live activity feed; v11: account warming (accounts + state_changes + campaign_accounts + account_secrets; sessions.engine_mode/account_id, health_flags.account_id, actions.account_id); v12: campaign lifecycle controls (campaign_meta.archived_at/paused_reason + fixed-cadence schedule cols: schedule_enabled/kind/dow/hour/minute/tz, next_run_at, last_scheduled_run_at, schedule_target_leads, schedule_duration_minutes); v13: billing subscriptions (Polar + provider-agnostic, soft run-cap); v14: distributed workers pool (token-based registry + presence; status DERIVED not stored); v15: superadmin plane (platform_admins + platform_admin_sessions with impersonation principal + hash-chained admin_audit_log + DB-backed admin_login_throttle); v16: platform_settings (superadmin execution_backend switch — route runs to in-process RunManager vs distributed worker fleet); v17: model comparison (superadmin-switchable LLM fan-out — matches.found_by_models + model_comparison_log; platform_settings.model_comparison_enabled); v18: Uzbek-only local STT transcript (seen_reels.transcript/transcript_lang/transcript_ms; sessions.transcriptions); v19: video-analysis tier (seen_reels.video_analyzed/video_analysis_summary; sessions.video_analyses); v20: session liveness heartbeat (sessions.last_activity_at/pid) so SessionWatchdog can detect a wedged-but-never-excepting session; v21: self-healing anti-bot cooldown (session_cooldowns: per-(campaign_id, platform) attempt counter + exponential-backoff cooldown_until for a SOFT halt, gap #1); v22: per-worker enrolment tokens (worker_enrolment_tokens: single-use, admin-minted, server-assigned org/pool scope for worker enrolment, closing gap B8 — shared bootstrap token could self-declare pool-wide capability)
 
 
 def _now_iso() -> str:
@@ -617,10 +617,40 @@ CREATE TABLE IF NOT EXISTS workers (
     capabilities      TEXT,                     -- JSON array of [org_id, platform, account_handle]
     worker_token_hash TEXT NOT NULL,            -- SHA-256 at rest (never plaintext)
     token_expires_at  REAL,                     -- NULL = no expiry (long-lived; rotation is Phase 4)
-    revoked_at        REAL                      -- NULL = active; set = revoked
+    revoked_at        REAL,                     -- NULL = active; set = revoked
+    enrolment_scope_kind TEXT                   -- v22: 'org'|'pool' if enrolled via a token, else
+                                                 -- NULL (legacy/self-declared). Sticky across
+                                                 -- re-register — see register_worker.
 );
 CREATE INDEX IF NOT EXISTS idx_workers_org   ON workers(org_id);
 CREATE INDEX IF NOT EXISTS idx_workers_token ON workers(worker_token_hash);
+
+-- v22: per-worker enrolment tokens (BUILD-PLAN B8 fix). A worker's org scope is
+-- SERVER-ASSIGNED at enrolment (this table), not self-declared by the box. Single-use:
+-- redeemed_at is set exactly once, atomically, by Store.redeem_worker_enrolment_token
+-- under _tx_immediate (mirrors lease_one_job's single-winner claim). scope_kind is an
+-- explicit ADMIN decision: 'org' (org_id required) pins the worker+every capability's
+-- cap_org to that org at redemption; 'pool' (org_id NULL) is the deliberate multi-org
+-- grant (PRD: one managed box serving ~10 companies) and leaves capabilities unclamped.
+-- id is an opaque, NON-secret admin-facing identifier (like workers.id); token_hash is
+-- the ONLY persisted form of the plaintext (SHA-256 via hash_session_token, same as
+-- worker bearer tokens) -- the plaintext is minted at the HTTP boundary and returned
+-- to the admin exactly once, never stored, never logged.
+CREATE TABLE IF NOT EXISTS worker_enrolment_tokens (
+    id                    TEXT PRIMARY KEY,
+    token_hash            TEXT NOT NULL UNIQUE,
+    scope_kind            TEXT NOT NULL CHECK (scope_kind IN ('org','pool')),
+    org_id                INTEGER REFERENCES organizations(id) ON DELETE CASCADE,
+    label                 TEXT,
+    created_at            REAL NOT NULL,
+    created_by_admin_id   INTEGER REFERENCES platform_admins(id),
+    expires_at            REAL NOT NULL,
+    redeemed_at           REAL,
+    redeemed_by_worker_id TEXT,
+    revoked_at            REAL,
+    revoked_by_admin_id   INTEGER REFERENCES platform_admins(id)
+);
+CREATE INDEX IF NOT EXISTS idx_worker_enrolment_tokens_org ON worker_enrolment_tokens(org_id);
 
 -- Leased engine jobs (BUILD-PLAN §5, Phase 3). Net-new table → CREATE IF NOT EXISTS
 -- (no ADD-COLUMN migration). status is a STORED lifecycle column with a CHECK guard;
@@ -1036,11 +1066,42 @@ def _job_row_to_dict(row) -> dict[str, Any]:
     }
 
 
+def _enrolment_token_row_to_dict(row) -> dict[str, Any]:
+    """Decoded worker_enrolment_tokens row, camelCase for the API. NEVER includes
+    token_hash — the plaintext is minted at the HTTP boundary and returned exactly
+    once from the mint response; every other read of this table goes through this
+    helper so the hash can never leak into a list/read response."""
+    return {
+        "id": row["id"],
+        "scopeKind": row["scope_kind"],
+        "orgId": row["org_id"],
+        "label": row["label"],
+        "createdAt": row["created_at"],
+        "createdByAdminId": row["created_by_admin_id"],
+        "expiresAt": row["expires_at"],
+        "redeemedAt": row["redeemed_at"],
+        "redeemedByWorkerId": row["redeemed_by_worker_id"],
+        "revokedAt": row["revoked_at"],
+        "revokedByAdminId": row["revoked_by_admin_id"],
+    }
+
+
 def _job_row_to_lease(row, *, lease_expires_at: float) -> dict[str, Any]:
     """The lease payload the worker plane returns — the JobSpec fields the sidecar's
     ``JobSpec.from_payload`` consumes, flattened from the row + its decoded spec. The
-    `spec` blob holds the run knobs (target_leads/duration/engine_mode/soul_text) so the
-    job table stays narrow; lease unpacks them into the camelCase wire shape."""
+    `spec` blob holds the run knobs (target_leads/duration/engine_mode/soul_text/
+    campaign_brief) so the job table stays narrow; lease unpacks them into the
+    camelCase wire shape. campaignBrief MUST be unpacked here too (not just readable
+    off the raw spec column via get_job) — this is the actual HTTP response body a
+    remote worker's POST /api/worker/lease receives and JobSpec.from_payload consumes;
+    anything baked into the spec but missing from this dict never reaches a genuinely
+    remote worker (BUILD-PLAN B4/C5).
+
+    `platformCredentials` is DELIBERATELY absent (SECURITY REVIEW CRITICAL/HIGH): a
+    decrypted per-org secret must never ride the lease response OR the `spec` column it
+    is read from (server._dispatch_run_to_fleet no longer bakes one there either) — a
+    worker instead pulls its job's credential fresh, per request, via the lease-holder-
+    gated POST /api/worker/jobs/{id}/credential (Handler._handle_job_credential)."""
     spec = _decode_job_spec(row["spec"])
     return {
         "id": row["id"],
@@ -1052,6 +1113,7 @@ def _job_row_to_lease(row, *, lease_expires_at: float) -> dict[str, Any]:
         "durationMinutes": spec.get("duration_minutes"),
         "engineMode": spec.get("engine_mode", "harvest"),
         "soulText": spec.get("soul_text"),
+        "campaignBrief": spec.get("campaign_brief"),
         "runId": spec.get("run_id"),
         "leaseExpiresAt": lease_expires_at,
     }
@@ -1225,6 +1287,11 @@ class Store:
             # heartbeat yet" (COALESCE to started_at) rather than crashing.
             self._add_column_if_missing(c, "sessions", "last_activity_at REAL")
             self._add_column_if_missing(c, "sessions", "pid INTEGER")
+            # v22: enrolment_scope_kind on an upgrading `workers` table (fresh DBs get
+            # it from SCHEMA already). Purely additive — existing rows take NULL, which
+            # register_worker/the register handler treat as "legacy/self-declared"
+            # (BUILD-PLAN B8 fix — see server.py._handle_worker_register).
+            self._add_column_if_missing(c, "workers", "enrolment_scope_kind TEXT")
             # org_id indexes — created now (not in SCHEMA) because the columns may be
             # added by the v7 migration above, after executescript ran.
             c.execute("CREATE INDEX IF NOT EXISTS idx_users_org ON users(org_id)")
@@ -3096,6 +3163,7 @@ class Store:
         max_sessions: int = 1,
         capabilities: Optional[list] = None,
         token_expires_at: Optional[float] = None,
+        enrolment_scope_kind: Optional[str] = None,
     ) -> dict[str, Any]:
         """Idempotent register/re-register by stable worker id (UPSERT on PK).
 
@@ -3104,6 +3172,18 @@ class Store:
         (same worker_id) ROTATES the token hash, refreshes metadata, sets
         last_heartbeat_at = registered_at = now, current_sessions = 0, and CLEARS
         revoked_at (a box coming back is active again). `capabilities` is JSON-encoded.
+
+        `enrolment_scope_kind` ('org'|'pool'|None, v22 BUILD-PLAN B8 fix) is STICKY:
+        pass it only when THIS call just redeemed an enrolment token (the caller
+        already clamped org_id/capabilities to that scope). Passing None (the
+        default — every plain re-register on an already-enrolled worker's own
+        bearer token) PRESERVES whatever scope kind the row already has via
+        `COALESCE(excluded.enrolment_scope_kind, workers.enrolment_scope_kind)`,
+        rather than clobbering it back to NULL. This is what lets the register
+        HANDLER re-clamp a re-register against the worker's ORIGINAL enrolment
+        scope instead of trusting the box's freshly self-declared org_id/
+        capabilities on every subsequent call — see server.py's
+        _handle_worker_register docstring.
 
         Returns the stored row shape (NO token, NO hash):
             {"id", "orgId", "displayName", "host", "os", "agentVersion",
@@ -3119,8 +3199,8 @@ class Store:
                        (id, org_id, display_name, host, os, agent_version,
                         last_heartbeat_at, registered_at, max_sessions,
                         current_sessions, capabilities, worker_token_hash,
-                        token_expires_at, revoked_at)
-                   VALUES (?,?,?,?,?,?, ?,?,?, 0, ?, ?, ?, NULL)
+                        token_expires_at, revoked_at, enrolment_scope_kind)
+                   VALUES (?,?,?,?,?,?, ?,?,?, 0, ?, ?, ?, NULL, ?)
                    ON CONFLICT(id) DO UPDATE SET
                        org_id            = excluded.org_id,
                        display_name      = excluded.display_name,
@@ -3133,10 +3213,12 @@ class Store:
                        capabilities      = excluded.capabilities,
                        worker_token_hash = excluded.worker_token_hash,
                        token_expires_at  = excluded.token_expires_at,
-                       revoked_at        = NULL""",
+                       revoked_at        = NULL,
+                       enrolment_scope_kind = COALESCE(excluded.enrolment_scope_kind,
+                                                        workers.enrolment_scope_kind)""",
                 (worker_id, org_id, display_name, host, os, agent_version,
                  now, now, int(max_sessions), caps_json, token_hash,
-                 token_expires_at),
+                 token_expires_at, enrolment_scope_kind),
             )
             # Read back canonical timestamps: on a re-register the ON CONFLICT clause
             # PRESERVES the original registered_at, so the returned shape must mirror
@@ -3199,13 +3281,13 @@ class Store:
 
         Returns the authenticated worker identity (NO hash):
             {"id", "orgId", "capabilities", "maxSessions", "currentSessions",
-             "agentVersion"}
+             "agentVersion", "enrolmentScopeKind"}
         or None."""
         if not token:
             return None
         row = self._conn.execute(
             """SELECT id, org_id, capabilities, max_sessions, current_sessions,
-                      agent_version
+                      agent_version, enrolment_scope_kind
                  FROM workers
                 WHERE worker_token_hash = ?
                   AND revoked_at IS NULL
@@ -3221,6 +3303,7 @@ class Store:
             "maxSessions": int(row["max_sessions"]),
             "currentSessions": int(row["current_sessions"]),
             "agentVersion": row["agent_version"],
+            "enrolmentScopeKind": row["enrolment_scope_kind"],
         }
 
     def list_workers(self, *, now: Optional[float] = None) -> list[dict[str, Any]]:
@@ -3310,6 +3393,143 @@ class Store:
                 "UPDATE workers SET revoked_at = ? "
                 "WHERE id = ? AND revoked_at IS NULL",
                 (now_v, worker_id),
+            )
+            return cur.rowcount == 1
+
+    # ----- v22 worker enrolment tokens (BUILD-PLAN B8 fix) -----
+    # Per-worker, single-use, admin-minted tokens that carry a SERVER-ASSIGNED scope
+    # ('org'+org_id or explicit 'pool'), so a worker's org reach is decided by an admin
+    # at enrolment rather than self-declared by the box at register (see server.py's
+    # _handle_worker_register redemption branch, which CLAMPS org_id/capabilities to
+    # the redeemed token's scope). Mirrors register_worker's mint-plaintext-at-the-
+    # HTTP-boundary / persist-only-hash discipline.
+
+    def create_worker_enrolment_token(
+        self,
+        *,
+        token_id: str,
+        token: str,
+        scope_kind: str,
+        org_id: Optional[int],
+        label: Optional[str],
+        created_by_admin_id: Optional[int],
+        expires_at: float,
+        now: Optional[float] = None,
+    ) -> dict[str, Any]:
+        """Mint one enrolment token row. `scope_kind`/`org_id` pairing is validated
+        HERE too (not just at the HTTP boundary) — a caller passing 'org' without an
+        org_id, or 'pool' with one, is a PROGRAMMER error (the HTTP layer already
+        rejects this in the request body), so it raises ValueError rather than
+        silently writing an ambiguous row. Stores ONLY hash_session_token(token); the
+        plaintext is never persisted or logged here — the caller (HTTP handler) is
+        the one and only place it is returned to the admin."""
+        if scope_kind not in ("org", "pool"):
+            raise ValueError(f"scope_kind must be 'org' or 'pool', got {scope_kind!r}")
+        if scope_kind == "org" and org_id is None:
+            raise ValueError("scope_kind='org' requires an org_id")
+        if scope_kind == "pool" and org_id is not None:
+            raise ValueError("scope_kind='pool' must not carry an org_id")
+        now_v = now if now is not None else time.time()
+        token_hash = hash_session_token(token)
+        with self._tx() as c:
+            c.execute(
+                """INSERT INTO worker_enrolment_tokens
+                       (id, token_hash, scope_kind, org_id, label, created_at,
+                        created_by_admin_id, expires_at, redeemed_at,
+                        redeemed_by_worker_id, revoked_at, revoked_by_admin_id)
+                   VALUES (?,?,?,?,?,?, ?,?, NULL, NULL, NULL, NULL)""",
+                (token_id, token_hash, scope_kind, org_id, label, now_v,
+                 created_by_admin_id, expires_at),
+            )
+        return {
+            "id": token_id,
+            "scopeKind": scope_kind,
+            "orgId": org_id,
+            "label": label,
+            "createdAt": now_v,
+            "createdByAdminId": created_by_admin_id,
+            "expiresAt": expires_at,
+            "redeemedAt": None,
+            "redeemedByWorkerId": None,
+            "revokedAt": None,
+            "revokedByAdminId": None,
+        }
+
+    def redeem_worker_enrolment_token(
+        self, *, token: str, worker_id: str, now: Optional[float] = None,
+    ) -> Optional[dict[str, Any]]:
+        """Atomically claim an enrolment token for `worker_id`, or None on any
+        failure (unknown/expired/revoked/already-redeemed token). Single-use, race-
+        safe: BEGIN IMMEDIATE (write lock at statement one, same as lease_one_job —
+        SQLite has no SELECT … FOR UPDATE SKIP LOCKED, D5) + a conditional UPDATE
+        guarded on `redeemed_at IS NULL` + a rowcount==1 backstop, so of N concurrent
+        redeemers of the SAME token exactly one wins. Returns the token's dict (scope
+        the caller clamps onto the new worker row) — never the hash."""
+        now_v = now if now is not None else time.time()
+        token_hash = hash_session_token(token)
+        with self._tx_immediate() as c:
+            row = c.execute(
+                """SELECT id, scope_kind, org_id, label, created_at,
+                          created_by_admin_id, expires_at
+                     FROM worker_enrolment_tokens
+                    WHERE token_hash = ?
+                      AND redeemed_at IS NULL
+                      AND revoked_at IS NULL
+                      AND expires_at > ?""",
+                (token_hash, now_v),
+            ).fetchone()
+            if row is None:
+                return None
+            cur = c.execute(
+                """UPDATE worker_enrolment_tokens
+                      SET redeemed_at = ?, redeemed_by_worker_id = ?
+                    WHERE id = ? AND redeemed_at IS NULL""",
+                (now_v, worker_id, row["id"]),
+            )
+            if cur.rowcount != 1:
+                return None
+            return {
+                "id": row["id"],
+                "scopeKind": row["scope_kind"],
+                "orgId": row["org_id"],
+                "label": row["label"],
+                "createdAt": row["created_at"],
+                "createdByAdminId": row["created_by_admin_id"],
+                "expiresAt": row["expires_at"],
+                "redeemedAt": now_v,
+                "redeemedByWorkerId": worker_id,
+                "revokedAt": None,
+                "revokedByAdminId": None,
+            }
+
+    def list_worker_enrolment_tokens(self) -> list[dict[str, Any]]:
+        """All enrolment tokens (pending/redeemed/revoked), newest-minted first, for
+        the admin console. Never exposes token/hash. Read-only."""
+        rows = self._conn.execute(
+            """SELECT id, scope_kind, org_id, label, created_at, created_by_admin_id,
+                      expires_at, redeemed_at, redeemed_by_worker_id, revoked_at,
+                      revoked_by_admin_id
+                 FROM worker_enrolment_tokens
+                ORDER BY created_at DESC, id ASC""",
+        ).fetchall()
+        return [_enrolment_token_row_to_dict(r) for r in rows]
+
+    def revoke_worker_enrolment_token(
+        self, token_id: str, *, by_admin_id: Optional[int], now: Optional[float] = None,
+    ) -> bool:
+        """Cancel a still-pending token (sets revoked_at/revoked_by_admin_id WHERE
+        id=? AND redeemed_at IS NULL AND revoked_at IS NULL). Idempotent, matching
+        revoke_worker's exact contract: True iff a live pending row was revoked;
+        False (a no-op) for an unknown, already-redeemed, or already-revoked token —
+        an already-redeemed token has nothing left to cancel (the operator revokes
+        the WORKER it enrolled instead)."""
+        now_v = now if now is not None else time.time()
+        with self._tx() as c:
+            cur = c.execute(
+                """UPDATE worker_enrolment_tokens
+                      SET revoked_at = ?, revoked_by_admin_id = ?
+                    WHERE id = ? AND redeemed_at IS NULL AND revoked_at IS NULL""",
+                (now_v, by_admin_id, token_id),
             )
             return cur.rowcount == 1
 
@@ -3821,6 +4041,28 @@ class Store:
         """Read one job by id (read-only). Returns the decoded row or None."""
         row = self._conn.execute(
             "SELECT * FROM jobs WHERE id=?", (job_id,)).fetchone()
+        return _job_row_to_dict(row) if row else None
+
+    def get_leased_job_for_worker(self, job_id: str,
+                                  worker_id: str) -> Optional[dict[str, Any]]:
+        """Read-only: the job row IFF it is CURRENTLY leased/running AND `leased_by`
+        is exactly `worker_id`; None otherwise (unknown id, another worker's job, an
+        already-terminal job, or a lease that expired but hasn't been reclaimed yet —
+        `lease_expires_at` is intentionally NOT re-checked against now() here, mirroring
+        `ack_job`/`nack_job`'s own `leased_by=?` ownership check, not `extend_lease`'s
+        freshness one).
+
+        This is the per-job worker-plane credential endpoint's authorization gate
+        (SECURITY REVIEW CRITICAL/HIGH): deliberately TIGHTER than
+        `_job_capability_covers`, which only proves a worker COULD serve jobs like this
+        one — it says nothing about whether THIS worker currently holds THIS job. A
+        worker that merely shares the job's (org, platform) capability, or held the
+        lease previously, must never be able to pull the job's decrypted credential."""
+        row = self._conn.execute(
+            """SELECT * FROM jobs
+                WHERE id=? AND leased_by=? AND status IN ('leased','running')
+                  AND dead_lettered_at IS NULL""",
+            (job_id, worker_id)).fetchone()
         return _job_row_to_dict(row) if row else None
 
     def get_job_for_run(self, run_id: str,
@@ -4344,6 +4586,21 @@ class Store:
         return int(self._conn.execute(
             "SELECT COUNT(*) AS n FROM platform_admins").fetchone()["n"])
 
+    def set_platform_admin_password(self, admin_id: int, password_hash: str) -> bool:
+        """Replace an admin's password hash (the out-of-band reset in admin_bootstrap).
+        The MFA secret is deliberately untouched — a forgotten password must not cost
+        the operator their authenticator enrolment. Returns False if no such admin.
+
+        This does NOT revoke live sessions; the caller pairs it with
+        delete_admin_sessions_for_admin so a stolen cookie can't outlive the reset."""
+        if not password_hash:
+            raise ValueError("password_hash is required")
+        with self._tx() as c:
+            cur = c.execute(
+                "UPDATE platform_admins SET password_hash=?, updated_at=? WHERE id=?",
+                (password_hash, time.time(), admin_id))
+            return cur.rowcount > 0
+
     def get_admin_totp_secret(self, admin_id: int) -> Optional[str]:
         """Decrypt the admin's TOTP shared secret from its Fernet blob. Raises
         SecretCipherError (caught at the API boundary) if AIZU_SECRET_KEY is
@@ -4408,6 +4665,16 @@ class Store:
             cur = c.execute(
                 "DELETE FROM platform_admin_sessions WHERE expires_at <= ?",
                 (time.time(),))
+            return cur.rowcount
+
+    def delete_admin_sessions_for_admin(self, admin_id: int) -> int:
+        """Kill every live session of one admin, returning how many were dropped. A
+        credential change has to invalidate the cookies minted under the old one —
+        otherwise a password reset prompted by a suspected theft leaves the thief
+        logged in for the rest of the 12h TTL."""
+        with self._tx() as c:
+            cur = c.execute(
+                "DELETE FROM platform_admin_sessions WHERE admin_id=?", (admin_id,))
             return cur.rowcount
 
     def set_admin_impersonation(self, token: str, *, effective_org_id: Optional[int],

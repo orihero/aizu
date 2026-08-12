@@ -88,7 +88,11 @@ def validate_command(payload: Any) -> tuple:
 
 def status_to_wire(snap: StatusSnapshot) -> dict:
     """Serialize a snapshot to the camelCase wire DTO. The SINGLE leak-safety choke
-    point — emits only identifiers/status enums/timestamps, never a secret."""
+    point — emits only identifiers/status enums/timestamps, never a secret. Confirmed
+    safe against the SECURITY REVIEW CRITICAL/HIGH credential-fetch change too:
+    CurrentJobInfo (the source of currentJob below) has no platform_credentials field
+    at all, so there is nothing here for a fetched job credential to leak through even
+    transitively — the control-surface status feed and JobSpec are unrelated shapes."""
     return {
         "workerId": snap.worker_id,
         "accounts": [

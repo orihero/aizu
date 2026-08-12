@@ -33,7 +33,6 @@ import time
 from dataclasses import dataclass, field
 from typing import Callable, Dict, Literal, Optional, Tuple
 
-from .bounded import call_bounded
 from .logsetup import get_logger
 
 log = get_logger(__name__)
@@ -170,11 +169,15 @@ class HumanSim:
         self._last_keyed_call[key] = self._clock()
 
     def _bounded(self, fn):
-        """Run fn() under call_timeout_s when one is wired, else call it straight
-        through (bare HumanSim() / unit tests keep zero behavior change)."""
-        if self.call_timeout_s is None:
-            return fn()
-        return call_bounded(fn, self.call_timeout_s, timeout_exc=TimeoutError)
+        """Run fn() directly, on the caller's (Playwright-owning) thread.
+
+        Previously routed through ``call_bounded`` when ``call_timeout_s`` was
+        wired. That moved the call to a daemon thread, which Playwright's
+        thread-affine sync API rejects with ``greenlet.error: Cannot switch to a
+        different thread`` — so mouse_move's evaluate + mouse.move failed on
+        every invocation. See ``CDPFeedBase._call_bounded`` for the full write-up
+        and the follow-up needed to restore a real deadline."""
+        return fn()
 
     # ---- input (best-effort; swallow ALL exceptions) ----
     def mouse_move(self, page, box: Optional[dict] = None) -> None:

@@ -26,6 +26,7 @@ FONT_MARKER = "/*__AIZU_FONTS__*/"
 ROOT = Path(__file__).resolve().parents[3]
 FONT_DIR = ROOT / "admin-panel" / "public" / "landing" / "fonts"
 CAP_DIR = ROOT / "marketing" / "videos" / "madison" / "assets" / "capture"
+TEAM_DIR = Path(__file__).resolve().parents[1] / "assets" / "team"
 OUT_DIR = Path(__file__).resolve().parents[1] / "dist"
 
 FACES = [
@@ -39,6 +40,11 @@ FACES = [
 ASSETS = {
     "dashboard": CAP_DIR / "dashboard.png",
     "reports": CAP_DIR / "reports.png",
+    # Team headshots, cropped square and face-centred so the circular avatar
+    # frames the same amount of face for each of the three.
+    "team_abdumutal": TEAM_DIR / "abdumutal.jpg",
+    "team_sevinch": TEAM_DIR / "sevinch.jpg",
+    "team_nurulloh": TEAM_DIR / "nurulloh.jpg",
 }
 
 

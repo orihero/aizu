@@ -74,6 +74,25 @@ describe('AgentReadinessBanner', () => {
     expect(banner).toHaveTextContent('Instagram session logged out');
   });
 
+  test('distributed backend names the fleet problem, not Chrome, and offers no launch', async () => {
+    // The cloud control plane has no browser: pointing an admin at "Chrome (CDP)
+    // unreachable" would send them to the wrong machine, and there is nothing here
+    // for "Launch login browser" to open.
+    const repository = new FakePanelRepository(buildPanelState());
+    repository.agentReadiness = buildAgentReadiness({
+      ready: false, cdp: 'unreachable', instagram: 'unknown', backend: 'distributed',
+      detail: 'no worker is online — a live run would be queued with nothing to pick it up.',
+    });
+    renderBanner(repository, 'admin');
+
+    const banner = await screen.findByRole('alert');
+    expect(banner).toHaveTextContent(/no worker is online/i);
+    expect(banner).not.toHaveTextContent('Chrome (CDP) unreachable');
+    expect(screen.queryByRole('button', { name: /launch login browser/i })).not.toBeInTheDocument();
+    // Re-check still applies — a worker can come online at any moment.
+    expect(screen.getByRole('button', { name: /re-check/i })).toBeInTheDocument();
+  });
+
   test('Launch login browser calls launchAgentLogin and shows feedback', async () => {
     const user = userEvent.setup();
     const repository = new FakePanelRepository(buildPanelState());

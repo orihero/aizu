@@ -90,6 +90,15 @@ class LeaseClient:
     def nack(self, job_id: str, body: dict) -> Result:
         return self._post(f"/api/worker/jobs/{job_id}/nack", body)
 
+    def credential(self, job_id: str) -> Result:
+        """Decrypt-on-demand fetch of THIS job's per-org platform credential (SECURITY
+        REVIEW CRITICAL/HIGH — replaces the server baking a decrypted secret into the
+        job spec/lease). The server gates this on the caller CURRENTLY holding the
+        job's lease — a stale/lost lease or another worker's job answers 404, folded
+        into ``Result(ok=False, ...)`` here like any other envelope failure; never
+        raises, and the credential is never written to disk by this client itself."""
+        return self._post(f"/api/worker/jobs/{job_id}/credential", {})
+
     # --- the never-throw boundary ----------------------------------------------
 
     def _headers(self) -> dict:

@@ -100,6 +100,76 @@ def test_malformed_brief_propagates_valueerror(monkeypatch, cfg: WorkerConfig):
         job_runner._execute_job(object(), _job(), cfg=cfg)
 
 
+def test_prefers_baked_campaign_brief_over_local_resolve(monkeypatch, cfg: WorkerConfig):
+    # The DB/file lookup must never be consulted when a brief is baked into the job —
+    # asserting on a call raises AssertionError so any accidental fallback fails loud.
+    def must_not_be_called(*_a, **_k):
+        raise AssertionError("must not be called when a brief is baked")
+    monkeypatch.setattr(job_runner, "resolve_campaign", must_not_be_called)
+    captured = {}
+
+    def fake_loop(*, campaign, store, soul, args):
+        captured["campaign"] = campaign
+        return {"matches": 1, "spend_usd": 0.0}
+    monkeypatch.setattr(job_runner.cli, "_run_session_loop", fake_loop)
+    brief = {"platform": "instagram", "goal": "lead"}
+    job = _job(campaign_brief=brief)
+    summary = job_runner._execute_job(object(), job, cfg=cfg)
+    assert summary["matches"] == 1
+    assert captured["campaign"].campaign_id == job.campaign_id
+    assert captured["campaign"].platform == "instagram"
+
+
+def test_malformed_baked_brief_raises_without_touching_local_resolve(
+        monkeypatch, cfg: WorkerConfig):
+    def must_not_be_called(*_a, **_k):
+        raise AssertionError("must not be called when a brief is baked")
+    monkeypatch.setattr(job_runner, "resolve_campaign", must_not_be_called)
+    job = _job(campaign_brief={"platform": "not-a-real-platform"})
+    with pytest.raises(ValueError):
+        job_runner._execute_job(object(), job, cfg=cfg)
+
+
+def test_legacy_job_with_no_baked_brief_still_uses_local_resolve(patched, cfg: WorkerConfig):
+    # job.campaign_brief defaults to None (_job() never sets it) — the module-patched
+    # resolve_campaign must still be the one consulted, proving zero behavior change
+    # for an already-queued/legacy job.
+    summary = job_runner._execute_job(object(), _job(), cfg=cfg)
+    assert summary["matches"] == 2  # patched fixture's fake_loop return value
+
+
+def test_baked_brief_lets_a_job_run_on_a_box_with_no_local_campaign_row(
+        monkeypatch, tmp_path, cfg: WorkerConfig):
+    """The literal known-issues.md B4 regression: a REMOTE worker whose local SQLite
+    DB has no campaign_briefs row for this campaign_id (and no campaign.md on disk)
+    must still be able to run the job, off the baked brief alone. resolve_campaign is
+    deliberately NOT monkeypatched — this exercises the real DB-miss/file-miss path."""
+    from aizu.core.config import campaign_to_brief, load_campaign
+    from aizu.core.store import Store
+
+    store = Store(tmp_path / "empty-remote.db")
+    try:
+        real_campaign = load_campaign(Path(__file__).resolve().parents[2]
+                                      / "config" / "campaign.md")
+        brief = campaign_to_brief(real_campaign)
+        # cfg.cfg_dir (from the `cfg` fixture) is an empty tmp dir with no campaign.md.
+        job = _job(campaign_id=real_campaign.campaign_id, platform=real_campaign.platform,
+                   campaign_brief=brief)
+
+        captured = {}
+
+        def fake_loop(*, campaign, store, soul, args):
+            captured["campaign"] = campaign
+            return {"matches": 0, "spend_usd": 0.0}
+        monkeypatch.setattr(job_runner.cli, "_run_session_loop", fake_loop)
+
+        summary = job_runner._execute_job(store, job, cfg=cfg)
+        assert "run_id" in summary
+        assert captured["campaign"].campaign_id == real_campaign.campaign_id
+    finally:
+        store.close()
+
+
 def test_soul_missing_raises_when_no_baked_and_no_file(monkeypatch, cfg: WorkerConfig):
     monkeypatch.setattr(job_runner, "resolve_campaign", lambda *_a, **_k: _Campaign())
     with pytest.raises(SoulMissing):

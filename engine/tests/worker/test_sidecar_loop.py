@@ -21,13 +21,22 @@ from aizu.worker.sidecar import (Controls, Sidecar, apply_heartbeat,
 
 
 class _FakeClient:
-    """Scripts lease responses; records ack/nack calls. Heartbeats are inert."""
+    """Scripts lease responses; records ack/nack calls. Heartbeats are inert.
 
-    def __init__(self, *, leases: list[Result], heartbeat: Optional[Result] = None):
+    ``credential`` defaults to a benign 'nothing connected' success (matches the
+    legitimate no-secret-yet case) so every EXISTING test — none of which lease a
+    per-org-credentialed platform — is unaffected; tests that care about the fetch
+    override it via ``credential_result`` and/or read ``credential_calls``."""
+
+    def __init__(self, *, leases: list[Result], heartbeat: Optional[Result] = None,
+                 credential_result: Optional[Result] = None):
         self._leases = list(leases)
         self._heartbeat = heartbeat or Result(ok=True, data={})
+        self._credential_result = credential_result or Result(
+            ok=True, data={"credential": None})
         self.acks: list[dict] = []
         self.nacks: list[dict] = []
+        self.credential_calls: list[str] = []
         self.registered = False
 
     def with_token(self, token):
@@ -50,6 +59,10 @@ class _FakeClient:
     def nack(self, job_id, body):
         self.nacks.append(body)
         return Result(ok=True, data={})
+
+    def credential(self, job_id):
+        self.credential_calls.append(job_id)
+        return self._credential_result
 
     def close(self):
         pass
@@ -198,6 +211,55 @@ def test_run_exception_nacks_and_loop_survives(monkeypatch, cfg: WorkerConfig):
     # Outbound reason is a fixed code, NOT the raw exception (security review M1); the
     # full detail is in the redacted local log only.
     assert client.nacks[0]["reason"] == "error"
+
+
+# ----- credential fetch (SECURITY REVIEW CRITICAL/HIGH) --------------------------
+
+def test_credentialed_platform_job_fetches_and_threads_the_credential(monkeypatch,
+                                                                       cfg: WorkerConfig):
+    """youtube/telegram/reddit: the sidecar fetches the credential BEFORE running and
+    hands the enriched JobSpec (platform_credentials populated) to run_one_job — the
+    delivery mechanism cli._resolve_platform_credentials' `baked` param expects."""
+    seen_jobs = []
+    monkeypatch.setattr(job_runner, "run_one_job",
+                        lambda store, job, **k: seen_jobs.append(job) or {"matches": 1})
+    client = _FakeClient(
+        leases=[_lease_job(platform="youtube")],
+        credential_result=Result(ok=True, data={"credential": {"api_key": "FETCHED"}}))
+    sc = _sidecar(cfg, client)
+    sc.run(max_iterations=1)
+    assert client.credential_calls == ["job-1"]
+    assert seen_jobs[0].platform_credentials == {"api_key": "FETCHED"}
+    assert client.acks and client.nacks == []
+
+
+def test_cdp_platform_job_never_fetches_a_credential(monkeypatch, cfg: WorkerConfig):
+    """instagram/linkedin/x drive the warmed CDP browser, not an API key — the fetch
+    must never even be attempted for them."""
+    monkeypatch.setattr(job_runner, "run_one_job", lambda *a, **k: {"matches": 1})
+    client = _FakeClient(leases=[_lease_job(platform="instagram")])  # default platform
+    sc = _sidecar(cfg, client)
+    sc.run(max_iterations=1)
+    assert client.credential_calls == []
+    assert client.acks and client.nacks == []
+
+
+def test_credential_fetch_failure_nacks_with_a_distinct_reason_and_never_runs(
+        monkeypatch, cfg: WorkerConfig):
+    """A failed fetch (bad bearer / lease lost / transport / 500) for a platform that
+    NEEDS a credential must nack with its OWN diagnosable reason — never fall through
+    to run_one_job and hit a confusing downstream 'needs YOUTUBE_API_KEY' error that
+    matches no known halt kind and dead-letters after silent retries."""
+    ran = []
+    monkeypatch.setattr(job_runner, "run_one_job", lambda *a, **k: ran.append(1) or {})
+    client = _FakeClient(leases=[_lease_job(platform="youtube")],
+                         credential_result=Result(ok=False, error="lease lost", status=404))
+    sc = _sidecar(cfg, client)
+    sc.run(max_iterations=1)
+    assert ran == []                     # never spawned the child
+    assert client.acks == []
+    assert client.nacks[0]["reason"] == sidecar.CREDENTIAL_FETCH_FAILED_REASON
+    assert client.nacks[0]["poison"] is False  # transient — requeue with backoff
 
 
 def test_malformed_leased_job_is_rejected(monkeypatch, cfg: WorkerConfig):

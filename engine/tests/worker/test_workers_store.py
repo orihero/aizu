@@ -14,6 +14,11 @@ from aizu.core.store import (
     derive_worker_status,
 )
 
+import threading
+import time as _time
+
+import pytest
+
 
 def _tmp() -> str:
     fd, path = tempfile.mkstemp(suffix=".db")
@@ -195,7 +200,8 @@ def test_get_worker_by_token_matches_active():
         ident = store.get_worker_by_token(token)
         assert ident == {
             "id": "w-1", "orgId": 7, "capabilities": [[7, "youtube", "yt"]],
-            "maxSessions": 4, "currentSessions": 0, "agentVersion": None}
+            "maxSessions": 4, "currentSessions": 0, "agentVersion": None,
+            "enrolmentScopeKind": None}
     finally:
         store.close()
 
@@ -418,5 +424,225 @@ def test_list_workers_enriches_current_job():
         assert cj["platform"] == "instagram"
         assert cj["status"] == "leased"
         assert cj["runId"] == "run-abc"
+    finally:
+        store.close()
+
+
+# ----- v22 worker enrolment tokens (BUILD-PLAN B8 fix) -----
+# worker_enrolment_tokens.org_id is a real FK to organizations(id) (unlike
+# workers.org_id, which is a plain unconstrained int) — an 'org'-scoped mint needs a
+# real organizations row, so _mint() auto-creates one unless the caller passes an
+# explicit org_id it already seeded itself.
+
+_AUTO_ORG = object()
+
+
+def _mint(store: Store, token_id="wet-1", *, scope_kind="org", org_id=_AUTO_ORG,
+          label=None, created_by_admin_id=None, ttl=3600.0, token=None,
+          now=1_000_000.0):
+    if org_id is _AUTO_ORG:
+        org_id = store.create_organization(name=f"org-for-{token_id}") \
+            if scope_kind == "org" else None
+    token = token or new_session_token()
+    rec = store.create_worker_enrolment_token(
+        token_id=token_id, token=token, scope_kind=scope_kind, org_id=org_id,
+        label=label, created_by_admin_id=created_by_admin_id,
+        expires_at=now + ttl, now=now)
+    return rec, token
+
+
+def test_create_worker_enrolment_token_happy_path():
+    store = Store(_tmp())
+    try:
+        org_id = store.create_organization(name="Acme")
+        # created_by_admin_id is a real FK to platform_admins(id); NULL exercises
+        # the shape without needing to seed a platform_admins row here (the HTTP
+        # layer always supplies a real admin id — see test_lifecycle_controls_server).
+        rec, token = _mint(store, "wet-a", scope_kind="org", org_id=org_id,
+                           label="box A", created_by_admin_id=None)
+        assert rec["id"] == "wet-a"
+        assert rec["scopeKind"] == "org"
+        assert rec["orgId"] == org_id
+        assert rec["label"] == "box A"
+        assert rec["createdByAdminId"] is None
+        assert rec["redeemedAt"] is None
+        assert rec["revokedAt"] is None
+        # Only the hash is persisted.
+        row = store._conn.execute(
+            "SELECT token_hash FROM worker_enrolment_tokens WHERE id='wet-a'").fetchone()
+        assert row["token_hash"] == hash_session_token(token)
+        full = dict(store._conn.execute(
+            "SELECT * FROM worker_enrolment_tokens WHERE id='wet-a'").fetchone())
+        assert token not in json.dumps(full)
+    finally:
+        store.close()
+
+
+def test_create_worker_enrolment_token_pool_scope_has_no_org():
+    store = Store(_tmp())
+    try:
+        rec, _ = _mint(store, "wet-pool", scope_kind="pool", org_id=None)
+        assert rec["scopeKind"] == "pool"
+        assert rec["orgId"] is None
+    finally:
+        store.close()
+
+
+def test_create_worker_enrolment_token_rejects_org_without_org_id():
+    store = Store(_tmp())
+    try:
+        with pytest.raises(ValueError):
+            _mint(store, scope_kind="org", org_id=None)
+    finally:
+        store.close()
+
+
+def test_create_worker_enrolment_token_rejects_pool_with_org_id():
+    store = Store(_tmp())
+    try:
+        with pytest.raises(ValueError):
+            _mint(store, scope_kind="pool", org_id=1)
+    finally:
+        store.close()
+
+
+def test_redeem_worker_enrolment_token_success_sets_redemption_fields():
+    store = Store(_tmp())
+    try:
+        org_id = store.create_organization(name="Acme")
+        _, token = _mint(store, "wet-r", scope_kind="org", org_id=org_id, now=1000.0)
+        redemption = store.redeem_worker_enrolment_token(
+            token=token, worker_id="w-new", now=1500.0)
+        assert redemption is not None
+        assert redemption["scopeKind"] == "org"
+        assert redemption["orgId"] == org_id
+        assert redemption["redeemedAt"] == 1500.0
+        assert redemption["redeemedByWorkerId"] == "w-new"
+        row = store._conn.execute(
+            "SELECT redeemed_at, redeemed_by_worker_id FROM worker_enrolment_tokens "
+            "WHERE id='wet-r'").fetchone()
+        assert row["redeemed_at"] == 1500.0
+        assert row["redeemed_by_worker_id"] == "w-new"
+    finally:
+        store.close()
+
+
+def test_redeem_worker_enrolment_token_none_for_unknown_token():
+    store = Store(_tmp())
+    try:
+        assert store.redeem_worker_enrolment_token(
+            token="not-a-real-token", worker_id="w-1") is None
+    finally:
+        store.close()
+
+
+def test_redeem_worker_enrolment_token_none_when_expired():
+    store = Store(_tmp())
+    try:
+        _, token = _mint(store, "wet-exp", now=1000.0, ttl=10.0)  # expires at 1010
+        assert store.redeem_worker_enrolment_token(
+            token=token, worker_id="w-1", now=2000.0) is None
+    finally:
+        store.close()
+
+
+def test_redeem_worker_enrolment_token_none_when_revoked():
+    store = Store(_tmp())
+    try:
+        _, token = _mint(store, "wet-rev", now=1000.0)
+        assert store.revoke_worker_enrolment_token("wet-rev", by_admin_id=None) is True
+        assert store.redeem_worker_enrolment_token(
+            token=token, worker_id="w-1", now=1100.0) is None
+    finally:
+        store.close()
+
+
+def test_redeem_worker_enrolment_token_none_when_already_redeemed():
+    store = Store(_tmp())
+    try:
+        _, token = _mint(store, "wet-once", now=1000.0)
+        first = store.redeem_worker_enrolment_token(
+            token=token, worker_id="w-1", now=1100.0)
+        assert first is not None
+        second = store.redeem_worker_enrolment_token(
+            token=token, worker_id="w-2", now=1200.0)
+        assert second is None
+        # Still only the FIRST worker recorded as the redeemer.
+        row = store._conn.execute(
+            "SELECT redeemed_by_worker_id FROM worker_enrolment_tokens "
+            "WHERE id='wet-once'").fetchone()
+        assert row["redeemed_by_worker_id"] == "w-1"
+    finally:
+        store.close()
+
+
+def test_concurrent_redeem_has_exactly_one_winner():
+    """N threads racing to redeem the SAME enrolment token → exactly one winner
+    (mirrors test_jobs_store.test_concurrent_lease_has_exactly_one_winner — SQLite
+    has no SELECT … FOR UPDATE SKIP LOCKED, D5; _tx_immediate + rowcount is the
+    equivalent for this table's single-use claim)."""
+    fd_dir = tempfile.mkdtemp()
+    db_path = os.path.join(fd_dir, "enrol-race.db")
+    seed = Store(db_path)
+    token = new_session_token()
+    seed.create_worker_enrolment_token(
+        token_id="wet-race", token=token, scope_kind="pool", org_id=None,
+        label=None, created_by_admin_id=None, expires_at=_time.time() + 3600.0)
+    seed.close()
+
+    n = 12
+    results: list = [None] * n
+    barrier = threading.Barrier(n)
+
+    def worker(i: int) -> None:
+        s = Store(db_path)  # its OWN connection — that is the real race
+        try:
+            barrier.wait()
+            results[i] = s.redeem_worker_enrolment_token(
+                token=token, worker_id=f"w{i}")
+        finally:
+            s.close()
+
+    threads = [threading.Thread(target=worker, args=(i,)) for i in range(n)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+
+    winners = [r for r in results if r is not None]
+    assert len(winners) == 1, f"expected exactly one winner, got {len(winners)}"
+
+
+def test_list_worker_enrolment_tokens_never_includes_hash_and_is_newest_first():
+    store = Store(_tmp())
+    try:
+        _mint(store, "wet-old", now=1000.0)
+        _mint(store, "wet-new", now=2000.0)
+        tokens = store.list_worker_enrolment_tokens()
+        assert [t["id"] for t in tokens] == ["wet-new", "wet-old"]
+        for t in tokens:
+            assert "token" not in t and "tokenHash" not in t and "token_hash" not in t
+    finally:
+        store.close()
+
+
+def test_revoke_worker_enrolment_token_true_then_false():
+    store = Store(_tmp())
+    try:
+        _mint(store, "wet-rv", now=1000.0)
+        assert store.revoke_worker_enrolment_token("wet-rv", by_admin_id=None) is True
+        assert store.revoke_worker_enrolment_token("wet-rv", by_admin_id=None) is False
+        assert store.revoke_worker_enrolment_token("unknown", by_admin_id=None) is False
+    finally:
+        store.close()
+
+
+def test_revoke_worker_enrolment_token_false_against_already_redeemed():
+    store = Store(_tmp())
+    try:
+        _, token = _mint(store, "wet-red", now=1000.0)
+        assert store.redeem_worker_enrolment_token(
+            token=token, worker_id="w-1", now=1100.0) is not None
+        assert store.revoke_worker_enrolment_token("wet-red", by_admin_id=None) is False
     finally:
         store.close()

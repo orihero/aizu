@@ -232,6 +232,8 @@ def check_readiness(cdp_url: str, *, timeout: float = _LOGIN_PROBE_TIMEOUT_SEC,
       ``force_refresh`` (the panel's `?refresh=1`); else both probes run fresh and
       the result is cached for the next caller.
     """
+    global _cache   # declared up front: the write below is guarded by _lock, but a
+                    # `global` after the read on the next line is a SyntaxError.
     is_active = bool(run_active()) if run_active is not None else False
     with _lock:
         cached = dict(_cache) if _cache is not None else None
@@ -260,6 +262,34 @@ def check_readiness(cdp_url: str, *, timeout: float = _LOGIN_PROBE_TIMEOUT_SEC,
     result = {"ready": ready, "cdp": cdp_state, "instagram": instagram_state,
               "checkedAt": now, "cdpUrl": cdp_url, "detail": detail}
     with _lock:
-        global _cache
         _cache = dict(result)
     return result
+
+
+# ---- the same contract, derived from the worker fleet ----
+
+def fleet_readiness(workers: Iterable[dict], *, now: Optional[float] = None) -> dict:
+    """The readiness contract for the DISTRIBUTED backend, where the cloud control
+    plane has no browser of its own (distributed-workers PRD §2: PULL, never remote
+    CDP). Probing this process's CDP would then always answer 'unreachable' and say
+    nothing true about whether a live run can start — what actually gates a run here
+    is whether any worker PC is online to lease the job.
+
+    Ready iff at least one non-revoked worker is 'online'. ``instagram`` stays
+    'unknown' on purpose: each box's login state lives on that box and is never
+    reported up the presence heartbeat (``_validate_worker_heartbeat`` accepts
+    ``chromeHealth`` and drops it), so claiming 'logged_in' here would be a guess.
+    Callers read ``ready``; ``detail`` carries the human explanation.
+    """
+    online = [w for w in workers
+              if w.get("status") == "online" and not w.get("revokedAt")]
+    checked_at = now if now is not None else time.time()
+    if online:
+        detail = (f"{len(online)} worker(s) online — live runs are dispatched to the "
+                  "fleet, which drives Chrome on the worker PC")
+    else:
+        detail = ("no worker is online — a live run would be queued with nothing to "
+                  "pick it up. Start a worker (aizu-worker) on a warmed box.")
+    return {"ready": bool(online), "cdp": "ok" if online else "unreachable",
+            "instagram": "unknown", "checkedAt": checked_at,
+            "cdpUrl": "", "detail": detail}

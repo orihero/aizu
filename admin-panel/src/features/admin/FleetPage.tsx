@@ -8,6 +8,7 @@ import { useControlFlags, useFleet } from './adminHooks';
 import { WorkerTable } from './WorkerTable';
 import { ControlFlagsCard } from './ControlFlagsCard';
 import { EnqueueJobModal } from './EnqueueJobModal';
+import { EnrolmentTokensCard } from './EnrolmentTokensCard';
 import { ExecutionBackendCard } from './ExecutionBackendCard';
 
 /** The fleet console — worker presence + lifecycle controls (§5e). */
@@ -53,6 +54,8 @@ export function FleetPage() {
       >
         <ControlFlagsCard flags={flags.data ?? []} />
       </AsyncBoundary>
+
+      <EnrolmentTokensCard />
 
       <EnqueueJobModal isOpen={enqueuing} onClose={() => { setEnqueuing(false); }} />
     </>

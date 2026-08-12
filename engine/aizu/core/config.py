@@ -24,6 +24,23 @@ from typing import Any, Optional
 SUPPORTED_PLATFORMS = ("instagram", "youtube", "telegram", "reddit",
                        "linkedin", "x")
 
+# The subset driven through the warmed-Chrome / CDP browser rather than a platform
+# API. Two things hang off this split: a genuine account-level halt on one of these
+# poisons the SHARED browser session (cli._POISON_HALT_KINDS), and only a run that
+# touches one of them needs the agent-readiness gate — an API-only campaign runs
+# fine with no browser anywhere. Mirrored by the panel's CDP_PLATFORMS
+# (admin-panel/src/features/campaigns/CampaignForm.tsx); keep the two in lockstep.
+CDP_PLATFORMS = frozenset({"instagram", "linkedin", "x"})
+
+# Platforms whose creds are connected per-org in the panel (encrypted secret
+# store, Store.get_integration_secret) rather than read from worker-box env.
+# Instagram (and the other CDP_PLATFORMS) stay single-tenant (warmed-Chrome /
+# CDP from .env), so they have no per-org secret and resolve to env instead.
+# Lives here (not cli.py) so server._dispatch_run_to_fleet can bake the org's
+# secret into the job spec at enqueue time (mirrors campaign_brief/soul_text,
+# BUILD-PLAN C5/B4) without importing the CLI module.
+PER_ORG_CREDENTIAL_PLATFORMS = frozenset({"youtube", "telegram", "reddit"})
+
 # How a run drives the account (warming PRD §4.2). 'harvest' is the read-only
 # lead-discovery loop (every existing engine); 'warming' ramps/sustains a managed
 # account via the warming engine. Distinct from `mode` (dry/live) on purpose.
@@ -374,6 +391,13 @@ def load_campaign(path: str | Path) -> Campaign:
         engine_mode=_resolve_engine_mode(knobs),
         share_target=_norm_share_target(knobs.get("share_target")),
     )
+
+
+# Fleet-dispatch (B4) bakes the resolved brief into the job spec, mirroring the
+# soul_text pattern (BUILD-PLAN C5). A real-world brief (engine/config/campaign.md,
+# through campaign_to_brief) measures ~12.5KB — this is a generous backstop against a
+# pathological/tampered brief, not a working ceiling to design campaigns against.
+MAX_CAMPAIGN_BRIEF_BYTES = 512 * 1024
 
 
 def campaign_from_brief(campaign_id: str, brief: dict[str, Any]) -> Campaign:

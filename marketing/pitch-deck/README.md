@@ -11,10 +11,11 @@ the real dashboard capture on slide 05 is dark and sits on the ground rather tha
 a card. Build it with `tools/embed_assets.py`, **not** `embed_fonts.py` — it inlines
 the screenshot as well as the type.
 
-Five **variant** slides follow the nine, badged in lime and excluded from the slide
-counter: two alternative problem framings, two alternative solution framings, and a
-screenshot-free version of slide 05. They exist to be chosen between and then
-deleted.
+It is exactly nine slides. Alternative framings for slides 02, 03 and 05 were carried
+alongside them for a while, badged and excluded from the counter, so a choice could be
+made by looking; the choice has been made and they are gone. Do not re-add variants
+without deleting them again — a deck that ships with its own alternatives in it is a
+deck nobody finished.
 
 Every statistic on it survived an adversarial fact-check — each was re-fetched from
 its source and dropped unless the page actually stated it. What that pass threw out
@@ -70,6 +71,7 @@ dist/artifact/*.html the same decks as fragments, for publishing as an Artifact
 ```bash
 cd marketing/pitch-deck
 python tools/embed_assets.py src/deck-pitch.html          # 9-slide pitch (+ screenshot)
+python tools/build_pptx.py   dist/deck-pitch.html         # optional: dist/deck-pitch.pptx
 python tools/embed_fonts.py  src/deck-scholarship.html
 python tools/embed_fonts.py src/deck-signal.html src/deck-paper.html src/deck-narrative.html
 ```
@@ -81,6 +83,13 @@ Each source carries the literal marker `/*__AIZU_FONTS__*/` inside its first
 zero external requests by design — a published Artifact runs under a CSP that
 blocks every external host, and a deck that loses its type on a plane is worse
 than one that never had it.
+
+`build_pptx.py` is a separate, optional step: it renders each slide in a headless
+browser at 2x and lays the images into a 13.333×7.5in PowerPoint, carrying the speaker
+notes across so presenter view still works. The slides arrive as images — the layouts
+lean on CSS the format has no notion of, so text is not editable there. Edit `src/` and
+rebuild. It needs `playwright` and `python-pptx`, which are deliberately not project
+dependencies.
 
 Two outputs come out of one source because the destinations want opposite things:
 `dist/` is doctype-wrapped so a locally-opened file is not in quirks mode, and

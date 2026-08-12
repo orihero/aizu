@@ -7,6 +7,7 @@ import type {
   AdminSession,
   AuditEntry,
   ControlFlag,
+  EnrolmentToken,
   FleetWorker,
 } from '@/shared/schemas/admin';
 import { AdminAuthProvider } from './useAdminAuth';
@@ -94,6 +95,23 @@ export function buildControlFlag(overrides: Partial<ControlFlag> = {}): ControlF
     reason: 'incident',
     setBy: 'ops@aizu.test',
     updatedAt: 1_700_000_200,
+    ...overrides,
+  };
+}
+
+export function buildEnrolmentToken(overrides: Partial<EnrolmentToken> = {}): EnrolmentToken {
+  return {
+    id: 'wet-abc123',
+    scopeKind: 'org',
+    orgId: 7,
+    label: 'studio-mac',
+    createdAt: 1_700_000_000,
+    createdByAdminId: 1,
+    expiresAt: 1_700_604_800,
+    redeemedAt: null,
+    redeemedByWorkerId: null,
+    revokedAt: null,
+    revokedByAdminId: null,
     ...overrides,
   };
 }

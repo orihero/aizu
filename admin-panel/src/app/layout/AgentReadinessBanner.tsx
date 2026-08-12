@@ -12,6 +12,12 @@ function errorMessage(error: unknown): string {
 /** Name the exact problem from cdp/instagram, falling back to the server's own
  * `detail` for anything the two known states don't already explain. */
 function describeAgentProblem(readiness: AgentReadiness): string {
+  // On the distributed backend there is no browser on this server at all — the
+  // cdp/instagram fields carry worker-fleet presence, so naming Chrome here would
+  // point an admin at the wrong machine. The server's `detail` is the true sentence.
+  if (readiness.backend === 'distributed') {
+    return readiness.detail ?? 'no worker is online to run this';
+  }
   if (readiness.cdp !== 'ok') return 'Chrome (CDP) unreachable';
   if (readiness.instagram !== 'logged_in') return 'Instagram session logged out';
   return readiness.detail ?? 'The Instagram agent is not ready';
@@ -34,6 +40,10 @@ export function AgentReadinessBanner() {
   const [launchFeedback, setLaunchFeedback] = useState<string | null>(null);
 
   if (!readiness || readiness.ready) return null;
+
+  // Nothing to launch on a control plane that holds no browser: in distributed mode
+  // the warmed Chrome lives on the worker PC and is signed in from that box.
+  const isDistributed = readiness.backend === 'distributed';
 
   const onLaunch = async () => {
     setLaunchFeedback(null);
@@ -59,19 +69,23 @@ export function AgentReadinessBanner() {
       {canFix ? (
         <>
           <span className="grow">
-            <strong className="font-bold text-warn">Instagram agent not ready</strong>
+            <strong className="font-bold text-warn">
+              {isDistributed ? 'Agent not ready' : 'Instagram agent not ready'}
+            </strong>
             {' — '}
             {describeAgentProblem(readiness)}. Live runs can’t start until this is fixed.
           </span>
-          <button
-            type="button"
-            onClick={() => { void onLaunch(); }}
-            disabled={launchLogin.isPending}
-            className="inline-flex shrink-0 items-center gap-1.5 rounded-full border border-warn/40 bg-surface px-3 py-1.5 text-xs font-semibold text-warn transition-colors hover:bg-warn hover:text-white disabled:opacity-50"
-          >
-            {launchLogin.isPending ? <Loader2 className="size-3.5 animate-spin" aria-hidden /> : null}
-            Launch login browser
-          </button>
+          {isDistributed ? null : (
+            <button
+              type="button"
+              onClick={() => { void onLaunch(); }}
+              disabled={launchLogin.isPending}
+              className="inline-flex shrink-0 items-center gap-1.5 rounded-full border border-warn/40 bg-surface px-3 py-1.5 text-xs font-semibold text-warn transition-colors hover:bg-warn hover:text-white disabled:opacity-50"
+            >
+              {launchLogin.isPending ? <Loader2 className="size-3.5 animate-spin" aria-hidden /> : null}
+              Launch login browser
+            </button>
+          )}
           <button
             type="button"
             onClick={() => { void recheck(); }}

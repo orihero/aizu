@@ -8,6 +8,7 @@ import type {
   EnqueueJobInput,
   ExecutionBackend,
   ImpersonateInput,
+  MintEnrolmentTokenInput,
 } from '@/shared/schemas/admin';
 
 const MODEL_COMPARISON_STATS_POLL_MS = 15_000;
@@ -34,6 +35,15 @@ export function useControlFlags() {
   return useQuery({
     queryKey: queryKeys.adminControlFlags,
     queryFn: async () => unwrap(await repository.fetchControlFlags()),
+    staleTime: 5_000,
+  });
+}
+
+export function useEnrolmentTokens() {
+  const repository = usePanelRepository();
+  return useQuery({
+    queryKey: queryKeys.adminEnrolmentTokens,
+    queryFn: async () => unwrap(await repository.fetchEnrolmentTokens()),
     staleTime: 5_000,
   });
 }
@@ -129,6 +139,33 @@ export function useRevokeWorker() {
     },
     onSettled: () => {
       void queryClient.invalidateQueries({ queryKey: queryKeys.adminFleet });
+    },
+  });
+}
+
+export function useMintEnrolmentToken() {
+  const repository = usePanelRepository();
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async (input: MintEnrolmentTokenInput) =>
+      unwrap(await repository.mintEnrolmentToken(input)),
+    // The token isn't redeemed yet — no worker exists from this alone, so the
+    // fleet view is untouched; only the enrolment-tokens list grew by one.
+    onSettled: () => {
+      void queryClient.invalidateQueries({ queryKey: queryKeys.adminEnrolmentTokens });
+    },
+  });
+}
+
+export function useRevokeEnrolmentToken() {
+  const repository = usePanelRepository();
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async (tokenId: string) => {
+      unwrap(await repository.revokeEnrolmentToken(tokenId));
+    },
+    onSettled: () => {
+      void queryClient.invalidateQueries({ queryKey: queryKeys.adminEnrolmentTokens });
     },
   });
 }

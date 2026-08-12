@@ -13,12 +13,14 @@ from pathlib import Path
 
 import pytest
 
-from aizu.core.config import load_campaign, load_soul
+from aizu.core.config import (MAX_CAMPAIGN_BRIEF_BYTES, campaign_to_brief, load_campaign,
+                              load_soul, resolve_campaign)
 from aizu.core.feed import Comment, FakeFeed, Reel
 from aizu.core.mock_router import MockRouter
 from aizu.core.pacing import PacingConfig, Pacer
 from aizu.runner import RunManager
 from aizu import server
+from aizu.secrets import SecretCipher
 from aizu.server import serve
 from aizu.engines.instagram.session import Session, SessionConfig
 from aizu.core.store import Store
@@ -76,6 +78,12 @@ class _FakeSpawner:
         return _FakeProc(self.next_returncode, self.next_gate)
 
 
+def _ready_probe(cdp_url: str, **_kwargs) -> dict:
+    """Stand-in for readiness.check_readiness: a reachable, logged-in agent."""
+    return {"ready": True, "cdp": "ok", "instagram": "logged_in",
+            "checkedAt": 0.0, "cdpUrl": cdp_url, "detail": None}
+
+
 def _register_and_seed(db_path: str) -> None:
     """Register the file campaign to the (already-created) Default org, then seed a
     session — so the owner's org owns the campaign and its matches carry org_id."""
@@ -116,7 +124,12 @@ def panel():
     manager = RunManager(db_path=db_path, config_dir=str(CONFIG),
                          engine_root=panel_dir, log_dir=Path(panel_dir) / "run-logs",
                          spawner=spawner, python_exe="py")
-    httpd = serve(db_path, panel_dir, str(CONFIG), port=0, run_manager=manager)
+    # A ready agent: these tests exercise the run control plane, not the readiness
+    # gate POST /api/run puts in front of a LIVE run (that gate has its own file,
+    # test_agent_readiness.py). Without the stub every live-run case here would be
+    # answered 409 agent_not_ready, since CI has no warmed Chrome on :9222.
+    httpd = serve(db_path, panel_dir, str(CONFIG), port=0, run_manager=manager,
+                  readiness_probe=_ready_probe)
     port = httpd.server_address[1]
     thread = threading.Thread(target=httpd.serve_forever, daemon=True)
     thread.start()
@@ -1824,6 +1837,12 @@ def test_run_live_routes_to_fleet_when_backend_is_distributed(panel):
         try:
             job = store.get_job(resp["data"]["jobs"][0])
             assert job["status"] == "queued" and job["campaignId"] == _campaign_id()
+            # B4: the resolved brief is baked into the spec at enqueue time (mirrors
+            # soul_text) so a remote worker with no shared DB row can still resolve
+            # the campaign — see job_runner._resolve_campaign.
+            expected_brief = campaign_to_brief(
+                resolve_campaign(store, CONFIG, _campaign_id()))
+            assert job["spec"]["campaign_brief"] == expected_brief
         finally:
             store.close()
     finally:
@@ -1936,6 +1955,109 @@ def test_run_all_distributed_enqueues_live_campaigns(panel):
         finally:
             store.close()
         assert cid in campaigns  # the live file campaign was dispatched to the fleet
+    finally:
+        store = Store(panel["db"])
+        try:
+            store.set_execution_backend("in_process")
+        finally:
+            store.close()
+
+
+def test_fleet_dispatch_skips_campaign_whose_brief_exceeds_the_cap(panel):
+    """A campaign whose resolved brief serializes past MAX_CAMPAIGN_BRIEF_BYTES must
+    be skipped (reason 'brief too large'), never crash the dispatch or ship a
+    truncated/missing brief. scope='all' alongside the normal file campaign proves a
+    single oversized campaign doesn't 409 the whole batch."""
+    _reset_runner(panel)
+    cid = _campaign_id()
+    oversized_cid = "fix-oversized-brief"
+    store = Store(panel["db"])
+    try:
+        org_id = store._conn.execute(
+            "SELECT id FROM organizations ORDER BY id LIMIT 1").fetchone()[0]
+        store.register_worker(worker_id="w-oversize", token="tok-oversize", org_id=org_id,
+                              capabilities=[[org_id, "instagram", "acme"]])
+        store.upsert_campaign_meta(cid, status="live")
+        with store._tx() as c:
+            c.execute("UPDATE campaign_meta SET archived_at=NULL WHERE campaign_id=?", (cid,))
+        # A brief whose one seed field alone pushes the JSON encoding past the cap.
+        huge_brief = {"platform": "instagram", "goal": "lead",
+                      "seed_direction": "x" * (MAX_CAMPAIGN_BRIEF_BYTES + 1)}
+        store.upsert_campaign_brief(oversized_cid, huge_brief, org_id=org_id)
+        store.upsert_campaign_meta(oversized_cid, org_id=org_id, status="live")
+        store.set_execution_backend("distributed")
+    finally:
+        store.close()
+    try:
+        code, resp = _post(panel["base"] + "/api/run",
+                           json.dumps({"all": True, "mode": "live"}).encode())
+        assert code == 202, resp
+        skip = next(s for s in resp["data"]["skipped"] if s["campaignId"] == oversized_cid)
+        assert skip["reason"] == "brief too large"
+        store = Store(panel["db"])
+        try:
+            campaigns = {store.get_job(j)["campaignId"] for j in resp["data"]["jobs"]}
+        finally:
+            store.close()
+        assert oversized_cid not in campaigns
+        assert cid in campaigns  # the normal campaign still ran
+    finally:
+        store = Store(panel["db"])
+        try:
+            store.set_execution_backend("in_process")
+        finally:
+            store.close()
+
+
+def test_fleet_dispatch_never_bakes_the_orgs_platform_credentials(panel, monkeypatch):
+    """SECURITY REVIEW CRITICAL — the regression test for the fix. `_dispatch_run_to_fleet`
+    used to call store.get_integration_secret (decrypting the org's Fernet-at-rest secret)
+    and write the plaintext into the enqueued job's `spec`, which JSON-serializes
+    UNENCRYPTED into the `jobs.spec` TEXT column — and nothing ever scrubs it back out
+    (ack_job only touches status/result/session_id/leased_by; no DELETE/prune of `jobs`
+    exists anywhere in store.py), so it would sit there in the cloud DB forever, undoing
+    core/secrets.py's Fernet-at-rest protection.
+
+    Asserted on the RAW DB column (not store.get_job's decoded dict) so this fails loud
+    even if a future change reintroduces the key under a different name, a nested shape,
+    or via some other decode path this test doesn't anticipate — the connected secret's
+    live value must never appear in that column's text at all."""
+    monkeypatch.setenv("AIZU_SECRET_KEY", SecretCipher.generate_key())
+    _reset_runner(panel)
+    cid = "sec-yt-creds"
+    store = Store(panel["db"])
+    try:
+        org_id = store._conn.execute(
+            "SELECT id FROM organizations ORDER BY id LIMIT 1").fetchone()[0]
+        store.upsert_campaign_brief(
+            cid, {"platform": "youtube", "goal": "lead", "seed_channels": ["UC_abc"]},
+            org_id=org_id)
+        store.upsert_campaign_meta(cid, org_id=org_id, status="live")
+        store.set_integration_secret(org_id, "youtube", {"api_key": "ORG-KEY-PLAINTEXT"})
+        store.register_worker(worker_id="w-yt-creds", token="tok-yt-creds", org_id=org_id,
+                              capabilities=[[org_id, "youtube", None]])
+        store.set_execution_backend("distributed")
+    finally:
+        store.close()
+    try:
+        code, resp = _post(panel["base"] + "/api/run",
+                           json.dumps({"campaignId": cid, "mode": "live"}).encode())
+        assert code == 202, resp
+        job_id = resp["data"]["jobs"][0]
+        store = Store(panel["db"])
+        try:
+            raw_spec = store._conn.execute(
+                "SELECT spec FROM jobs WHERE id=?", (job_id,)).fetchone()[0]
+        finally:
+            store.close()
+        # The negative assertion IS the point of this test: neither the key nor the
+        # decrypted value may appear anywhere in the raw column text.
+        assert "platform_credentials" not in raw_spec
+        assert "platformCredentials" not in raw_spec
+        assert "ORG-KEY-PLAINTEXT" not in raw_spec
+        # campaign_brief (the actual B4 fix) must still be there — this test must fail
+        # if a future edit removes baking entirely rather than just the credential.
+        assert "campaign_brief" in raw_spec
     finally:
         store = Store(panel["db"])
         try:

@@ -72,7 +72,7 @@ function WorkerRow({ worker }: { readonly worker: FleetWorker }) {
           message={
             <>
               <span className="font-semibold text-text">{label}</span> will be signed out and
-              must re-register with the bootstrap secret before it can lease jobs again.
+              must be re-enrolled with a new enrolment token before it can lease jobs again.
             </>
           }
           onConfirm={() => {

@@ -25,6 +25,7 @@ from typing import Callable, Optional
 
 import httpx
 
+from ..core.config import PER_ORG_CREDENTIAL_PLATFORMS
 from ..core.logsetup import get_logger
 from ..core.store import MAX_SYNC_LEADS, Store
 from ..secrets import SecretCipherError
@@ -48,6 +49,17 @@ _HEARTBEAT_MIN_SEC = 5.0
 
 # Halt reasons that mean "don't bother retrying this job soon" (poison) vs. transient.
 _POISON_HALTS = ("needs reconnect", "unsupported", "not yet implemented")
+
+# Distinct nack reason for a failed credential fetch (SECURITY REVIEW CRITICAL/HIGH —
+# the worker now pulls its per-org credential fresh instead of the server baking it into
+# the job spec). Deliberately NOT one of _POISON_HALTS: the fetch can fail for a
+# transient reason (a lease that expired in the gap since leasing, a dispatch blip), so
+# this nacks like any other transient failure (requeue with backoff) rather than
+# poisoning the job. Named explicitly so a failure here surfaces as ITS OWN, diagnosable
+# halt kind instead of falling through to cli.py's generic "needs YOUTUBE_API_KEY in the
+# environment" error, which matches no known halt kind and would silently retry to
+# dead-letter.
+CREDENTIAL_FETCH_FAILED_REASON = "credential_fetch_failed"
 
 # How long a finished/crashed job's supervisor rendezvous files (spec/result/per-job
 # log) are kept before the startup sweep reclaims them — long enough for an operator to
@@ -524,6 +536,10 @@ class Sidecar:
         return (controls.drain.is_set(), True)
 
     def _run_and_report(self, job: JobSpec, controls: Controls) -> None:
+        job, cred_err = self._fetch_job_credential(job)
+        if cred_err is not None:
+            self._nack(job, cred_err)
+            return
         try:
             # Thread the ALREADY-EXISTING halt Event into the supervisor so a heartbeat/
             # operator halt terminates the child mid-run (the post-call halt branch below
@@ -565,6 +581,44 @@ class Sidecar:
                        retry_after_at=summary.get("retry_after_at"))
             return
         self._ack(job, summary)
+
+    def _fetch_job_credential(self, job: JobSpec) -> tuple[JobSpec, Optional[str]]:
+        """Decrypt-on-demand credential fetch at job start (SECURITY REVIEW CRITICAL/
+        HIGH): the server no longer bakes a decrypted per-org secret into the job spec
+        or lease response, so a job on a per-org-credentialed platform must pull its own
+        fresh here, scoped to the lease this box currently holds (POST
+        /api/worker/jobs/{id}/credential — 404s for anyone but the lease holder).
+
+        A CDP platform (instagram/linkedin/x) needs no API key — it drives the warmed
+        browser instead — so it's excluded from PER_ORG_CREDENTIAL_PLATFORMS and this
+        never even makes the call, mirroring cli._resolve_platform_credentials' own
+        platform gate.
+
+        Returns ``(job, None)`` on success — `job` unchanged for a platform that needs no
+        credential, or `dataclasses.replace`d with the fetched value (which may itself be
+        None: the org simply hasn't connected this platform yet, a legitimate case
+        cli.py's baked→local-store→env fallback chain already handles, NOT an error).
+        Returns ``(job, CREDENTIAL_FETCH_FAILED_REASON)`` ONLY when the fetch ITSELF
+        failed (bad bearer, lease lost/expired, transport/500, or a malformed envelope)
+        for a platform that DOES need a credential — the caller nacks with that distinct,
+        diagnosable reason rather than silently proceeding into a confusing downstream
+        'needs YOUTUBE_API_KEY in the environment' error that matches no known halt kind
+        and would otherwise dead-letter after a few blind retries."""
+        if job.platform not in PER_ORG_CREDENTIAL_PLATFORMS:
+            return job, None
+        res = self._client.credential(job.id)
+        if not res.ok:
+            log.error("credential fetch failed for job %s (platform=%s): %s",
+                      job.id, job.platform, res.error)
+            return job, CREDENTIAL_FETCH_FAILED_REASON
+        data = res.data if isinstance(res.data, dict) else {}
+        credential = data.get("credential")
+        if credential is not None and not isinstance(credential, dict):
+            log.error("credential fetch for job %s returned a non-object credential "
+                      "(%s) — treating as a failed fetch", job.id,
+                      type(credential).__name__)
+            return job, CREDENTIAL_FETCH_FAILED_REASON
+        return replace(job, platform_credentials=credential), None
 
     # --- result posting --------------------------------------------------------
 

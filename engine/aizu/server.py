@@ -30,7 +30,7 @@ from datetime import datetime, timezone
 from http.cookies import CookieError, SimpleCookie
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Callable, Optional
 from urllib.parse import parse_qs, unquote, urlparse
 
 from . import campaign_gen, connections, rbac
@@ -39,8 +39,9 @@ from .auth import (LoginThrottle, MAX_PASSWORD_LENGTH, MIN_PASSWORD_LENGTH,
                    SESSION_TTL_SECONDS, hash_password, new_session_token,
                    session_expiry, verify_password)
 from . import admin_auth
-from .core.config import (SUPPORTED_PLATFORMS, Campaign, campaign_from_brief,
-                     campaign_to_brief, load_campaign, load_soul, resolve_campaign)
+from .core.config import (CDP_PLATFORMS, MAX_CAMPAIGN_BRIEF_BYTES, PER_ORG_CREDENTIAL_PLATFORMS,
+                     SUPPORTED_PLATFORMS, Campaign, campaign_from_brief, campaign_to_brief,
+                     load_campaign, load_soul, resolve_campaign)
 from . import billing
 from .panel import build_empty_raw, build_raw
 from .panel_org import (LEADS_PAGE_SIZE_DEFAULT, build_admin_org_campaigns,
@@ -48,6 +49,7 @@ from .panel_org import (LEADS_PAGE_SIZE_DEFAULT, build_admin_org_campaigns,
                         build_dashboard_org, build_leads_org, build_reports_org,
                         build_settings_org)
 from .runner import RunManager, RunSpec, VALID_RUN_MODES
+from . import readiness
 from .secrets import SecretCipherError
 from .engines.telegram.login import TelegramLoginError, TelegramLoginManager
 from .core.logsetup import configure_logging, get_logger
@@ -92,6 +94,12 @@ RUN_ACTIVITY_PATH = "/api/run/activity"
 RUN_STOP_PATH = "/api/run/stop"
 RUN_PAUSE_PATH = "/api/run/pause"
 RUN_RESUME_PATH = "/api/run/resume"
+# "Can a live run start right now?" — the readiness contract the panel's global
+# AgentReadinessBanner polls, and the same check POST /api/run gates on (409
+# agent_not_ready). What it measures depends on the execution backend: the local
+# warmed Chrome in_process, or worker-fleet presence when distributed.
+AGENT_READINESS_PATH = "/api/agent/readiness"
+AGENT_LAUNCH_LOGIN_PATH = "/api/agent/launch-login"
 AUTH_SIGNUP_PATH = "/api/auth/signup"
 AUTH_LOGIN_PATH = "/api/auth/login"
 AUTH_LOGOUT_PATH = "/api/auth/logout"
@@ -100,13 +108,19 @@ AUTH_ME_PATH = "/api/auth/me"
 WORKER_REGISTER_PATH = "/api/worker/register"
 WORKER_HEARTBEAT_PATH = "/api/worker/heartbeat"   # WORKER-level presence (NOT job-scoped)
 WORKER_LEASE_PATH = "/api/worker/lease"           # v14 Phase 3: pull one job
-# Job-scoped worker routes: /api/worker/jobs/{id}/{heartbeat|ack|nack} (v14 Phase 3).
+# Job-scoped worker routes: /api/worker/jobs/{id}/{heartbeat|ack|nack|credential}
+# (v14 Phase 3; `credential` added by the SECURITY REVIEW CRITICAL/HIGH fix — see
+# Handler._handle_job_credential — replacing the server-side credential bake).
 WORKER_JOBS_PREFIX = "/api/worker/jobs/"
-_WORKER_JOB_ACTIONS = ("heartbeat", "ack", "nack")
+_WORKER_JOB_ACTIONS = ("heartbeat", "ack", "nack", "credential")
 ADMIN_FLEET_PATH = "/api/admin/fleet"
 ADMIN_ENQUEUE_PATH = "/api/admin/jobs/enqueue"    # v14 Phase 3: operator enqueue
 ADMIN_CONTROL_FLAGS_PATH = "/api/admin/control-flags"  # v14 Phase 4: set/clear/list flags
 ADMIN_WORKER_REVOKE_PATH = "/api/admin/workers/revoke"  # v14 Phase 4: revoke a worker token
+# v22 (BUILD-PLAN B8 fix): per-worker, single-use, admin-minted enrolment tokens —
+# POST mints, GET lists (never the plaintext/hash); revoke is a separate POST.
+ADMIN_WORKER_ENROLMENT_TOKENS_PATH = "/api/admin/worker-enrolment-tokens"
+ADMIN_WORKER_ENROLMENT_TOKEN_REVOKE_PATH = "/api/admin/worker-enrolment-tokens/revoke"
 ADMIN_EXECUTION_BACKEND_PATH = "/api/admin/execution-backend"  # v16: run routing switch
 ADMIN_MODEL_COMPARISON_PATH = "/api/admin/model-comparison"     # v17: fan-out on/off switch
 ADMIN_MODEL_COMPARISON_STATS_PATH = "/api/admin/model-comparison/stats"  # v17: Model Performance page
@@ -140,6 +154,14 @@ PLATFORM_ADMINS_ENV = "AIZU_PLATFORM_ADMINS"
 # Phase-2 first-register bootstrap secret. A brand-new box with no token yet must
 # present this in `Authorization: Bearer <secret>`; unset ⇒ first-register is closed.
 WORKER_BOOTSTRAP_ENV = "AIZU_WORKER_BOOTSTRAP_TOKEN"
+# v22 (BUILD-PLAN B8 fix): the shared bootstrap secret is now a FALLBACK, tried only
+# after a per-worker enrolment token fails to redeem. Defaults ON (unset/'1'/'true' =
+# enabled; only '0'/'false'/'no' disables it) so every existing/in-flight box keeps
+# registering with zero operator action on upgrade day — the operator flips this off
+# only once every box has been re-enrolled with its own token.
+WORKER_LEGACY_BOOTSTRAP_ENV = "AIZU_WORKER_LEGACY_BOOTSTRAP_ENABLED"
+DEFAULT_ENROLMENT_TTL_HOURS = 168   # 7 days
+MAX_ENROLMENT_TTL_HOURS = 720       # 30 days — a bounded standing-risk window
 # Phase 4: minimum acceptable agent version. A worker below it keeps running its current
 # job but every heartbeat carries updateRequired:true so the desktop app can update. Unset
 # ⇒ no gate. Compared as a dotted numeric tuple (see _agent_version_below).
@@ -202,6 +224,7 @@ _ROUTE_ACTIONS = {
     RUN_STOP_PATH: "run_campaigns",
     RUN_PAUSE_PATH: "run_campaigns",
     RUN_RESUME_PATH: "run_campaigns",
+    AGENT_LAUNCH_LOGIN_PATH: "fix_agent",   # owner/admin: open a Chrome login tab
 }
 # Company profile field caps (defensive, on top of the 64 KB body cap).
 _MAX_COMPANY_NAME = 200
@@ -1132,6 +1155,53 @@ def _validate_worker_revoke(payload: Any) -> tuple[Optional[dict], Optional[str]
     return {"workerId": worker_id.strip()}, None
 
 
+def _validate_worker_enrolment_mint(payload: Any) -> tuple[Optional[dict], Optional[str]]:
+    """Validate an admin mint-enrolment-token body (v22, BUILD-PLAN B8 fix). `scope`
+    is required, one of 'org'/'pool'; 'org' REQUIRES a non-bool integer `orgId` (400
+    otherwise) and 'pool' must NOT carry one (400 if supplied — a pool grant is a
+    deliberate admin decision, so a stray orgId must not be silently dropped). `label`
+    is optional, trimmed, capped. `ttlHours` is optional (default
+    DEFAULT_ENROLMENT_TTL_HOURS), and OUT OF RANGE is rejected, never clamped — this
+    is a security-relevant control (the token's standing-risk window), not a UX
+    nicety."""
+    if not isinstance(payload, dict):
+        return None, "body must be a JSON object"
+    scope = payload.get("scope")
+    if scope not in ("org", "pool"):
+        return None, "scope must be 'org' or 'pool'"
+    org_id = payload.get("orgId")
+    if scope == "org":
+        if org_id is None or isinstance(org_id, bool) or not isinstance(org_id, int):
+            return None, "orgId is required (integer) when scope='org'"
+    else:
+        if org_id is not None:
+            return None, "orgId must not be supplied when scope='pool'"
+    label = payload.get("label")
+    if label is not None:
+        if not isinstance(label, str):
+            return None, "label must be a string"
+        label = label.strip()[:200] or None
+    ttl_hours = payload.get("ttlHours")
+    if ttl_hours is None:
+        ttl_hours = DEFAULT_ENROLMENT_TTL_HOURS
+    elif not isinstance(ttl_hours, int) or isinstance(ttl_hours, bool):
+        return None, "ttlHours must be an integer"
+    elif not (1 <= ttl_hours <= MAX_ENROLMENT_TTL_HOURS):
+        return None, f"ttlHours must be between 1 and {MAX_ENROLMENT_TTL_HOURS}"
+    return {"scope": scope, "orgId": org_id, "label": label, "ttlHours": ttl_hours}, None
+
+
+def _validate_worker_enrolment_revoke(payload: Any) -> tuple[Optional[dict], Optional[str]]:
+    """Validate an admin revoke-enrolment-token body. `tokenId` (non-empty string)
+    required — same shape as `_validate_worker_revoke`."""
+    if not isinstance(payload, dict):
+        return None, "body must be a JSON object"
+    token_id = payload.get("tokenId")
+    if not isinstance(token_id, str) or not token_id.strip():
+        return None, "tokenId is required"
+    return {"tokenId": token_id.strip()}, None
+
+
 def _match_worker_job_route(path: str) -> Optional[tuple[str, str]]:
     """Parse ``/api/worker/jobs/{id}/{action}`` → ``(job_id, action)`` for a known
     action, else None. Exactly two path segments after the prefix; the id is URL-
@@ -1305,6 +1375,16 @@ def _split_lead_budget(total: int, n: int) -> list[int]:
         return []
     base, extra = divmod(max(0, total), n)
     return [base + (1 if i < extra else 0) for i in range(n)]
+
+
+def _campaign_platforms(campaign: Campaign) -> set[str]:
+    """Every platform one campaign actually discovers on. A multi-platform brief lists
+    them as `channels`; the legacy single-platform brief collapses to the flat
+    `platform` scalar (core.config.campaign_to_brief's collapse rule), so an empty
+    `channels` is not "no platforms" — it means "just this one"."""
+    if campaign.channels:
+        return {channel.platform for channel in campaign.channels}
+    return {campaign.platform}
 
 
 def _validate_run(payload: Any) -> tuple[Optional[dict], Optional[str]]:
@@ -1492,6 +1572,11 @@ class PanelHandler(SimpleHTTPRequestHandler):
     # name → BillingProvider. None/empty = billing not configured (checkout/portal
     # 503, webhook 503). Populated by serve() from env, or injected by tests.
     billing_providers: Optional[dict[str, "billing.BillingProvider"]] = None
+    # Agent-readiness seams. None = the real probes (readiness.check_readiness /
+    # readiness.open_login_tab). Injected by tests so a suite with no warmed Chrome
+    # can exercise both sides of the gate without a 5s Playwright timeout per call.
+    readiness_probe: Optional[Callable[..., dict]] = None
+    login_opener: Optional[Callable[[], bool]] = None
 
     # NOTE (FIX 3): protocol_version stays HTTP/1.0 (no keep-alive). Every response
     # path DOES set Content-Length (JSON via _send_json_body, the SPA shell via
@@ -1734,6 +1819,21 @@ class PanelHandler(SimpleHTTPRequestHandler):
                 return
             self._handle_admin_worker_revoke(payload)
             return
+        # v22 (BUILD-PLAN B8 fix): per-worker enrolment token mint/revoke.
+        if path == ADMIN_WORKER_ENROLMENT_TOKENS_PATH:
+            payload, err = self._read_json_body(WORKER_MAX_BODY_BYTES)
+            if err is not None:
+                self._send_json(400, False, error=err)
+                return
+            self._handle_admin_worker_enrolment_mint(payload)
+            return
+        if path == ADMIN_WORKER_ENROLMENT_TOKEN_REVOKE_PATH:
+            payload, err = self._read_json_body(WORKER_MAX_BODY_BYTES)
+            if err is not None:
+                self._send_json(400, False, error=err)
+                return
+            self._handle_admin_worker_enrolment_revoke(payload)
+            return
         # v16 execution-backend switch: route EVERY run to the in-process RunManager
         # or the distributed worker fleet (real admin plane gate, handler-side).
         if path == ADMIN_EXECUTION_BACKEND_PATH:
@@ -1778,6 +1878,7 @@ class PanelHandler(SimpleHTTPRequestHandler):
             RUN_STOP_PATH: self._handle_run_stop,
             RUN_PAUSE_PATH: self._handle_run_pause,
             RUN_RESUME_PATH: self._handle_run_resume,
+            AGENT_LAUNCH_LOGIN_PATH: self._handle_agent_launch_login,
         }
         handler = auth_routes.get(path)
         if handler is None:
@@ -2891,6 +2992,89 @@ class PanelHandler(SimpleHTTPRequestHandler):
                  event.event_type, event.org_id, event.tier, event.status, applied)
         self._send_json(200, True, data={"received": True})
 
+    def _readiness_snapshot(self, *, force_refresh: bool = False) -> dict:
+        """The agent-readiness contract dict, measured against whichever backend will
+        actually execute a live run. in_process => probe THIS box's warmed Chrome;
+        distributed => the cloud has no browser at all, so presence in the worker
+        fleet is the real gate (readiness.fleet_readiness). The extra `backend` key
+        is additive — the panel's Zod schema ignores keys it doesn't declare, and the
+        banner uses it to hide the "launch a login browser" action on a cloud host
+        where there is no browser to launch."""
+        store = Store(self.db_path)
+        try:
+            backend = store.execution_backend()
+            workers = store.list_workers() if backend == EXECUTION_DISTRIBUTED else []
+        finally:
+            store.close()
+        if backend == EXECUTION_DISTRIBUTED:
+            snapshot = readiness.fleet_readiness(workers)
+        else:
+            # A live run owns the ONE CDP connection this architecture allows;
+            # check_readiness serves its last-known result instead of attaching a
+            # second Playwright client while one is in flight.
+            run_active = self.run_manager.is_active if self.run_manager is not None else None
+            probe = self.readiness_probe or readiness.check_readiness
+            snapshot = probe(readiness.default_cdp_url(),
+                             force_refresh=force_refresh, run_active=run_active)
+        return {**snapshot, "backend": backend}
+
+    def _handle_agent_readiness(self, query: str) -> None:
+        """`GET /api/agent/readiness`: can a live run start right now? Raw dict (no
+        {ok,data,error} envelope) — the panel's global banner polls it every 60s and
+        `?refresh=1` forces a live probe past the <=60s server-side cache."""
+        if self._current_user() is None:
+            self._send_json(401, False, error="authentication required")
+            return
+        refresh = parse_qs(query).get("refresh", ["0"])[0].strip().lower()
+        force = refresh not in ("", "0", "false", "no")
+        try:
+            snapshot = self._readiness_snapshot(force_refresh=force)
+        except Exception:  # noqa: BLE001 — a probe/DB failure must not 500 the banner
+            log.error("agent readiness check failed", exc_info=True)
+            self._send_json(500, False, error="internal server error")
+            return
+        self._send_json_body(200, json.dumps(snapshot, ensure_ascii=False).encode("utf-8"))
+
+    def _handle_agent_launch_login(self, payload: Any) -> None:
+        """`POST /api/agent/launch-login`: open (or focus) a Chrome tab on instagram.com
+        so a human can sign the warmed browser back in. RBAC `fix_agent` (owner/admin)
+        is already enforced by the protected-route gate. Raw {launched, readiness} —
+        `launched` is best-effort, so a false with a still-unready readiness is a normal
+        answer, not an error."""
+        del payload  # the body is an empty object; nothing to read from it
+        # Attaching Playwright mid-run would open a SECOND connection to the one
+        # browser this architecture allows — refuse instead, in the {error, detail}
+        # shape the panel already parses off a non-200.
+        if self.run_manager is not None and self.run_manager.is_active():
+            self._send_json_body(409, json.dumps({
+                "error": "run_active",
+                "detail": "a run is active — stop it before opening a login browser "
+                          "(only one Chrome connection is allowed at a time)",
+            }).encode("utf-8"))
+            return
+        try:
+            before = self._readiness_snapshot(force_refresh=True)
+            if before.get("backend") == EXECUTION_DISTRIBUTED:
+                # No browser lives on the control plane in distributed mode — the
+                # warmed Chrome is on the worker PC, and its login tab is opened from
+                # that box's own desktop app.
+                self._send_json_body(200, json.dumps({
+                    "launched": False, "readiness": before}).encode("utf-8"))
+                return
+            launched = readiness.open_login_tab(readiness.default_cdp_url(),
+                                                opener=self.login_opener)
+            # The tab changes what a probe would see, so re-check rather than echo the
+            # pre-launch snapshot back at a panel that is about to render it.
+            after = self._readiness_snapshot(force_refresh=True)
+        except Exception as e:  # noqa: BLE001 — Chrome itself failed to start
+            log.error("agent launch-login failed", exc_info=True)
+            self._send_json_body(500, json.dumps({
+                "error": "launch_failed",
+                "detail": f"could not open a login browser: {e}"}).encode("utf-8"))
+            return
+        self._send_json_body(200, json.dumps(
+            {"launched": launched, "readiness": after}, ensure_ascii=False).encode("utf-8"))
+
     def _handle_run(self, payload: Any) -> None:
         fields, err = _validate_run(payload)
         if err is not None:
@@ -2903,6 +3087,11 @@ class PanelHandler(SimpleHTTPRequestHandler):
         # file campaign). 'all' resolves its own live set when it runs.
         user = self._current_user()
         org_id = user["orgId"]
+        # Which channels this run needs the shared warmed browser for (readiness gate
+        # below). Left False for scope='all', which resolves its live set inside the
+        # engine — pre-resolving every brief here just to classify it would put a
+        # whole campaign set's parsing on the request path.
+        needs_browser = needs_instagram = False
         if fields["scope"] == "campaign":
             store = Store(self.db_path)
             try:
@@ -2922,6 +3111,9 @@ class PanelHandler(SimpleHTTPRequestHandler):
                                 error=f"campaign {fields['campaignId']!r} is not runnable "
                                       "(unknown, not yours, or no brief)")
                 return
+            platforms = _campaign_platforms(campaign)
+            needs_browser = bool(platforms & CDP_PLATFORMS)
+            needs_instagram = "instagram" in platforms
         # v13 billing soft-enforcement. get_subscription is the single choke point
         # (never None). A non-active plan or an exhausted period lead cap blocks
         # STARTING a run with 402 — reads/leads/exports stay open. The remaining cap
@@ -2964,6 +3156,30 @@ class PanelHandler(SimpleHTTPRequestHandler):
         if self.run_manager is None:
             self._send_json(503, False, error="run control is not enabled on this server")
             return
+        # Agent-readiness gate. An in-process LIVE run drives the warmed Chrome on THIS
+        # box, so launching against an unreachable or logged-out browser buys nothing
+        # but a run that dies minutes later inside the engine, with the failure buried
+        # in a run log. Answer 409 agent_not_ready up front instead, carrying the whole
+        # snapshot so the panel names the exact problem without a second round-trip.
+        # Narrowly scoped: dry runs use a fake feed and need no browser, and an
+        # API-only campaign (youtube/reddit/telegram) never touches CDP.
+        if spec.mode == "live" and needs_browser:
+            try:
+                snapshot = self._readiness_snapshot()
+            except Exception:  # noqa: BLE001 — never let a probe failure block a run
+                log.error("readiness gate check failed — allowing the run", exc_info=True)
+                snapshot = None
+            if snapshot is not None and (
+                    snapshot["cdp"] != "ok"
+                    or (needs_instagram and snapshot["instagram"] != "logged_in")):
+                log.info("Run blocked by readiness gate · campaign=%s org=%s detail=%s",
+                         fields["campaignId"], org_id, snapshot.get("detail"))
+                self._send_json_body(409, json.dumps({
+                    "error": "agent_not_ready",
+                    "detail": snapshot.get("detail") or "the agent is not ready",
+                    "readiness": snapshot,
+                }, ensure_ascii=False).encode("utf-8"))
+                return
         active, err = self.run_manager.launch(spec)
         if err == "a run is already active":
             self._send_json(409, False, error=err)
@@ -2997,7 +3213,7 @@ class PanelHandler(SimpleHTTPRequestHandler):
             skipped: list[dict] = []
             # Pass 1: resolve + capability-check to find the dispatchable set, so the
             # billing budget can be split across exactly those jobs (pass 2).
-            dispatchable: list[tuple[str, str]] = []  # (campaign_id, platform)
+            dispatchable: list[tuple[str, str, Campaign]] = []  # (campaign_id, platform, campaign)
             for cid in targets:
                 try:
                     campaign = resolve_campaign(store, self.config_dir, cid)
@@ -3010,7 +3226,7 @@ class PanelHandler(SimpleHTTPRequestHandler):
                                                account_handle=None) == 0:
                     skipped.append({"campaignId": cid, "reason": "no capable worker"})
                     continue
-                dispatchable.append((cid, campaign.platform))
+                dispatchable.append((cid, campaign.platform, campaign))
             # Pass 2: split the billing-clamped lead budget across the dispatchable jobs so
             # the fleet total can NEVER exceed the period cap (the slices sum to exactly the
             # clamp — no N× multiplication). A single-campaign run gets the full remainder;
@@ -3020,7 +3236,9 @@ class PanelHandler(SimpleHTTPRequestHandler):
             # soul.md on disk, so the cloud must ship it at enqueue time (the admin
             # enqueue path already does). Best-effort from the server's config dir; None
             # if absent → the worker falls back to a box-local soul.md, else nacks
-            # soul_missing. Loaded once (soul is campaign-agnostic).
+            # soul_missing. Loaded once (soul is campaign-agnostic) — UNLIKE the campaign
+            # brief below, which is the opposite: NOT campaign-agnostic, so it is
+            # computed per-job inside this loop from the already-resolved Campaign.
             try:
                 soul_text: Optional[str] = load_soul(
                     Path(self.config_dir) / "soul.md").text
@@ -3028,10 +3246,36 @@ class PanelHandler(SimpleHTTPRequestHandler):
                 soul_text = None
             enqueued: list[str] = []
             run_ids: list[str] = []
-            for (cid, platform), tgt in zip(dispatchable, budgets):
+            for (cid, platform, campaign), tgt in zip(dispatchable, budgets):
                 if tgt <= 0:
                     skipped.append({"campaignId": cid, "reason": "period lead cap reached"})
                     continue
+                # Bake the campaign brief into the job spec (B4/mirrors soul_text, C5's
+                # sibling): a REMOTE worker has no shared DB row for this campaign_id, so
+                # the server must ship the already-resolved brief at enqueue time — see
+                # job_runner._resolve_campaign. Enforced against MAX_CAMPAIGN_BRIEF_BYTES
+                # here (skip, not crash/truncate) mirroring the 'no runnable brief' /
+                # 'no capable worker' skip reasons above.
+                brief = campaign_to_brief(campaign)
+                brief_bytes = len(json.dumps(brief, ensure_ascii=False).encode("utf-8"))
+                if brief_bytes > MAX_CAMPAIGN_BRIEF_BYTES:
+                    log.error(
+                        "campaign %s brief is %d bytes, exceeds the %d-byte fleet-dispatch "
+                        "cap -- skipping", cid, brief_bytes, MAX_CAMPAIGN_BRIEF_BYTES)
+                    skipped.append({"campaignId": cid, "reason": "brief too large"})
+                    continue
+                # SECURITY REVIEW (CRITICAL): this used to also bake the org's DECRYPTED
+                # per-platform credential (store.get_integration_secret) into the job spec
+                # here, mirroring brief/soul above. That put a plaintext tenant secret into
+                # the `jobs.spec` TEXT column, which nothing ever scrubs (ack_job only
+                # touches status/result/session_id/leased_by — see store.py) — a durable
+                # cloud-side copy that undoes the Fernet-at-rest protection in
+                # core/secrets.py for as long as the row exists (forever). Credentials are
+                # now decrypt-on-demand instead: the worker fetches its OWN job's credential
+                # fresh, at job start, via POST /api/worker/jobs/{id}/credential, gated on
+                # actually holding that job's lease right now (see
+                # Handler._handle_job_credential / Store.get_leased_job_for_worker) — never
+                # baked into anything that gets JSON-serialized to disk here.
                 # Assign the run_id HERE (not on the worker) so the org's activity drawer
                 # can poll this run live and the worker emits run_events under it.
                 run_id = uuid.uuid4().hex[:12]
@@ -3043,7 +3287,8 @@ class PanelHandler(SimpleHTTPRequestHandler):
                         # stays in-process above; warming has its own scheduler path).
                         spec={"engine_mode": "harvest", "target_leads": tgt,
                               "duration_minutes": spec.duration_minutes,
-                              "run_id": run_id, "soul_text": soul_text})
+                              "run_id": run_id, "soul_text": soul_text,
+                              "campaign_brief": brief})
                 except Exception:  # noqa: BLE001 — one campaign's failure just skips it,
                     # never aborting the batch and stranding the already-enqueued jobs.
                     log.error("enqueue failed for campaign %s (continuing)", cid,
@@ -3125,11 +3370,25 @@ class PanelHandler(SimpleHTTPRequestHandler):
 
     # ----- v14 distributed-workers plane -----
     def _handle_worker_register(self, payload: Any) -> None:
-        """Register / re-register a worker box (LOCKED #4, #8). Bootstrap trust model
-        (Phase-2 interim): a re-register presents its current bearer token; a brand
-        new box presents the shared AIZU_WORKER_BOOTSTRAP_TOKEN. Either way the
-        server mints a fresh plaintext token, persists ONLY its hash, and returns the
-        plaintext EXACTLY ONCE. Never logs the token.
+        """Register / re-register a worker box (LOCKED #4, #8). Trust model: a
+        re-register presents its current bearer token, and the worker row's OWN
+        `enrolment_scope_kind` (stamped once, at whichever call first enrolled it —
+        see below) re-clamps org_id/capabilities on THIS call too, exactly as it did
+        at enrolment (v22.1, BUILD-PLAN B8 follow-up: a re-register used to trust the
+        box's freshly self-declared orgId/capabilities verbatim, which let any
+        already-enrolled box silently walk itself into another org's scope using
+        nothing but its own bearer token — see memory/known-issues.md B8). A brand
+        new box's first register (v22, BUILD-PLAN B8 fix) presents, through that SAME
+        bearer slot, either a per-worker, single-use, admin-minted ENROLMENT token
+        (tried first — its scope is SERVER-ASSIGNED and clamps what gets written, see
+        below) or, only if that fails to redeem, the shared AIZU_WORKER_BOOTSTRAP_TOKEN
+        as a deprecated fallback (gated by AIZU_WORKER_LEGACY_BOOTSTRAP_ENABLED,
+        default ON so upgrade day is a no-op for every already-provisioned box) — a
+        legacy-fallback enrolment stores enrolment_scope_kind=NULL, so THAT box's
+        later re-registers stay fully self-declared (unchanged, pre-v22.1 behaviour),
+        same as any worker that already existed before this column did. Either way
+        the server mints a fresh plaintext token, persists ONLY its hash, and returns
+        the plaintext EXACTLY ONCE. Never logs the token.
 
         OPS NOTE: the one-time token rides in the response body. Body suppression for
         this path lives only in the application layer (see _send_json_body), so NEVER
@@ -3139,33 +3398,93 @@ class PanelHandler(SimpleHTTPRequestHandler):
         if err is not None:
             self._send_json(400, False, error=err)
             return
-        # Auth: re-register (existing token) OR first-register (bootstrap secret).
+        # Auth: re-register (existing token) OR first-register (enrolment token,
+        # falling back to the legacy shared bootstrap secret).
         worker = self._current_worker()
+        enrolment_scope: Optional[tuple[str, Optional[int]]] = None
+        fresh_scope_kind: Optional[str] = None  # only set when THIS call redeemed a
+        # token — passed to register_worker so a plain re-register (None) leaves the
+        # worker's already-stored scope kind untouched (COALESCE, store.py).
         if worker is not None:
             worker_id = worker["id"]  # rotate the token for this same box
+            # v22.1: re-derive the clamp from the worker's OWN stored scope kind
+            # (stamped at whichever call first enrolled it), not from anything in
+            # THIS request body — closes the re-register self-escalation gap above.
+            stored_scope_kind = worker.get("enrolmentScopeKind")
+            if stored_scope_kind in ("org", "pool"):
+                enrolment_scope = (stored_scope_kind, worker.get("orgId"))
         else:
-            bearer = self._request_bearer_token()
-            secret = os.environ.get(WORKER_BOOTSTRAP_ENV, "")
-            if not secret or not bearer or not hmac.compare_digest(bearer, secret):
-                self._send_json(401, False,
-                                error="worker registration requires a valid token")
-                return
             if not fields["machineId"]:
                 self._send_json(400, False,
                                 error="machineId is required on first registration")
                 return
             worker_id = fields["machineId"]
+            bearer = self._request_bearer_token()
+            redemption = None
+            if bearer:
+                # Try the per-worker enrolment token FIRST — a valid one always wins,
+                # even while the legacy fallback below is still enabled. Its own
+                # short-lived Store, closed immediately, mirroring _current_worker.
+                token_store = Store(self.db_path)
+                try:
+                    redemption = token_store.redeem_worker_enrolment_token(
+                        token=bearer, worker_id=worker_id)
+                except Exception:  # noqa: BLE001 — a DB hiccup reads as "no token"
+                    log.error("enrolment-token redemption failed", exc_info=True)
+                    redemption = None
+                finally:
+                    token_store.close()
+            if redemption is not None:
+                enrolment_scope = (redemption["scopeKind"], redemption["orgId"])
+                fresh_scope_kind = redemption["scopeKind"]  # persist: stamps the row
+                # so every FUTURE re-register on this box's own bearer re-derives the
+                # same clamp from `worker.enrolmentScopeKind` above, instead of
+                # trusting that later call's self-declared orgId/capabilities.
+            else:
+                secret = os.environ.get(WORKER_BOOTSTRAP_ENV, "")
+                legacy_enabled = os.environ.get(
+                    WORKER_LEGACY_BOOTSTRAP_ENV, "1").strip().lower() not in (
+                        "0", "false", "no", "")
+                if (not legacy_enabled or not secret or not bearer
+                        or not hmac.compare_digest(bearer, secret)):
+                    self._send_json(401, False,
+                                    error="worker registration requires a valid token")
+                    return
+                log.warning(
+                    "Worker registered via DEPRECATED shared bootstrap token — "
+                    "migrate to per-worker enrolment tokens · id=%s host=%s",
+                    worker_id, fields["host"])
         token = new_session_token()  # plaintext minted at the HTTP boundary
         # Phase 4: long-lived token (1 year) — revocation, not expiry, is the off-switch
         # (PRD §7). A re-register rotates the token and refreshes this window.
         token_expires_at = time.time() + WORKER_TOKEN_TTL_SEC
+        # v22/v22.1: an enrolment scope CLAMPS what gets written — overriding
+        # whatever the box self-declared — rather than trusting the box's own
+        # orgId/capabilities (the B8 gap). This applies BOTH on the call that redeems
+        # a fresh enrolment token AND on every later re-register of that same worker
+        # (enrolment_scope re-derived above from the worker's own stored
+        # enrolment_scope_kind — the v22.1 fix). 'org' forces org_id AND every
+        # capability's cap_org to the token's org; 'pool' is the deliberate
+        # multi-org grant (PRD: one managed box serving ~10 companies) and leaves
+        # capabilities UNCLAMPED (cap_org=None or whatever the box declared passes
+        # through), org_id=None. No enrolment scope at all (a worker that was itself
+        # enrolled via the legacy bootstrap fallback, or that pre-dates this column)
+        # ⇒ completely unchanged self-declared behaviour, every call.
+        org_id, capabilities = fields["orgId"], fields["capabilities"]
+        if enrolment_scope is not None:
+            scope_kind, scope_org_id = enrolment_scope
+            org_id = scope_org_id if scope_kind == "org" else None
+            if scope_kind == "org":
+                capabilities = [[scope_org_id, plat, handle]
+                                for (_cap_org, plat, handle) in capabilities]
         store = Store(self.db_path)
         try:
             store.register_worker(
-                worker_id=worker_id, token=token, org_id=fields["orgId"],
+                worker_id=worker_id, token=token, org_id=org_id,
                 display_name=fields["displayName"], host=fields["host"],
                 os=fields["os"], agent_version=fields["agentVersion"],
-                max_sessions=fields["maxSessions"], capabilities=fields["capabilities"],
+                enrolment_scope_kind=fresh_scope_kind,
+                max_sessions=fields["maxSessions"], capabilities=capabilities,
                 token_expires_at=token_expires_at)
         except Exception:  # noqa: BLE001 — off-cloud caller: detail stays server-side
             log.error("worker register failed", exc_info=True)
@@ -3585,7 +3904,8 @@ class PanelHandler(SimpleHTTPRequestHandler):
                                   payload: Any) -> None:
         """Dispatch the bearer-gated job-scoped routes. The token (not the body) is the
         authoritative worker identity, and the URL job_id (not the body) the
-        authoritative job — so one worker can never heartbeat/ack/nack another's job."""
+        authoritative job — so one worker can never heartbeat/ack/nack/credential
+        another's job."""
         worker = self._current_worker()
         if worker is None:
             self._send_json(401, False, error="invalid or revoked worker token")
@@ -3594,8 +3914,10 @@ class PanelHandler(SimpleHTTPRequestHandler):
             self._handle_job_heartbeat(worker["id"], job_id, payload)
         elif action == "ack":
             self._handle_job_ack(worker["id"], job_id, payload)
-        else:  # "nack" — the only remaining allowed action (matcher guarantees this)
+        elif action == "nack":
             self._handle_job_nack(worker["id"], job_id, payload)
+        else:  # "credential" — the only remaining allowed action (matcher guarantees this)
+            self._handle_job_credential(worker["id"], job_id)
 
     def _handle_job_heartbeat(self, worker_id: str, job_id: str,
                               payload: Any = None) -> None:
@@ -3706,6 +4028,55 @@ class PanelHandler(SimpleHTTPRequestHandler):
             "recorded": result["outcome"] != "ignored",
             "outcome": result["outcome"], "retryAfterAt": result["retryAfterAt"]})
 
+    def _handle_job_credential(self, worker_id: str, job_id: str) -> None:
+        """Decrypt-on-demand credential fetch (SECURITY REVIEW CRITICAL/HIGH — closes
+        the durable-plaintext-in-jobs.spec hole that server._dispatch_run_to_fleet used
+        to open by baking the org's decrypted secret at enqueue time). Nothing decrypted
+        is ever written to any DB column or lease response; it is decrypted fresh, on
+        this request, and handed straight to the caller.
+
+        AUTHORIZATION is the load-bearing part, and it is deliberately TIGHTER than the
+        pool-wide capability matching `_job_capability_covers` does for leasing: the
+        requesting worker must be the worker that CURRENTLY HOLDS THE LEASE on THIS
+        job (store.get_leased_job_for_worker checks `leased_by` + status, not just
+        platform/org capability), and the org/platform used to decrypt come from the
+        JOB ROW, never from anything the client could send. A worker that doesn't hold
+        this lease — including a same-capability worker that could lease a similar job,
+        or one whose lease already expired — gets a 404, matching the existing cross-org
+        'unknown campaign'/'unknown run' convention elsewhere in this file: the 404
+        neither confirms the job exists nor discloses whether it once did (BOLA-safe;
+        NOT 403, which would leak existence)."""
+        store = Store(self.db_path)
+        try:
+            job = store.get_leased_job_for_worker(job_id, worker_id)
+            if job is None:
+                self._send_json(404, False, error="unknown job")
+                return
+            credential = None
+            if job["platform"] in PER_ORG_CREDENTIAL_PLATFORMS and job["orgId"] is not None:
+                try:
+                    credential = store.get_integration_secret(job["orgId"], job["platform"])
+                except Exception:  # noqa: BLE001 — never leak a decrypt failure's detail
+                    log.error("integration secret decrypt failed for job=%s org=%s "
+                              "platform=%s", job_id, job["orgId"], job["platform"],
+                              exc_info=True)
+                    self._send_json(500, False, error="internal server error")
+                    return
+        except Exception:  # noqa: BLE001
+            log.error("job credential fetch failed", exc_info=True)
+            self._send_json(500, False, error="internal server error")
+            return
+        finally:
+            store.close()
+        # credential is None both for a CDP platform (instagram/linkedin/x — no per-org
+        # secret exists) and for a per-org-credentialed platform the org simply hasn't
+        # connected yet; the worker's own PER_ORG_CREDENTIAL_PLATFORMS gate means it
+        # should never even ask for the former, but this endpoint answers either the
+        # same tolerant way rather than distinguishing "wrong platform" from "not
+        # connected" — both fall back to cli._resolve_platform_credentials' existing
+        # env/local-store fallback on the worker side.
+        self._send_json(200, True, data={"credential": credential})
+
     def _handle_admin_enqueue(self, payload: Any) -> None:
         """Operator enqueue (v15 real platform-admin gate). Rejects (400) a job no
         registered worker can ever serve so it never idles forever (BUILD-PLAN Phase 3
@@ -3804,6 +4175,93 @@ class PanelHandler(SimpleHTTPRequestHandler):
             revoked = store.revoke_worker(fields["workerId"])
         except Exception:  # noqa: BLE001
             log.error("worker revoke failed", exc_info=True)
+            self._send_json(500, False, error="internal server error")
+            return
+        finally:
+            store.close()
+        self._send_json(200, True, data={"revoked": revoked})
+
+    # ----- v22 worker enrolment tokens (real platform-admin gate; BUILD-PLAN B8 fix) -----
+    def _handle_admin_worker_enrolment_mint(self, payload: Any) -> None:
+        """Mint a per-worker, single-use enrolment token with an admin-chosen,
+        server-assigned scope ('org'+org_id, or explicit 'pool'). Mirrors
+        _handle_worker_register's mint-plaintext-at-the-HTTP-boundary discipline: the
+        plaintext token is generated HERE, persisted ONLY as a hash, and returned in
+        THIS response exactly once — never stored, never logged, never returned by
+        the list endpoint."""
+        admin = self._require_admin()
+        if admin is None:
+            return
+        fields, err = _validate_worker_enrolment_mint(payload)
+        if err is not None:
+            self._send_json(400, False, error=err)
+            return
+        token_id = f"wet-{uuid.uuid4().hex[:12]}"
+        token = new_session_token()  # plaintext minted at the HTTP boundary
+        expires_at = time.time() + fields["ttlHours"] * 3600
+        store = Store(self.db_path)
+        try:
+            rec = store.create_worker_enrolment_token(
+                token_id=token_id, token=token, scope_kind=fields["scope"],
+                org_id=fields["orgId"], label=fields["label"],
+                created_by_admin_id=admin["adminId"], expires_at=expires_at)
+            store.append_admin_audit(
+                acting_admin_id=admin["adminId"], action="worker_enrolment_token.mint",
+                target_org_id=fields["orgId"], target_resource=token_id,
+                ip=self._client_ip(), user_agent=self.headers.get("User-Agent"))
+        except Exception:  # noqa: BLE001
+            log.error("worker enrolment-token mint failed", exc_info=True)
+            self._send_json(500, False, error="internal server error")
+            return
+        finally:
+            store.close()
+        # `id` only — never log the plaintext (kept out of our own log line entirely,
+        # same discipline as _handle_worker_register).
+        log.info("Worker enrolment token minted · id=%s scope=%s org=%s by=%s",
+                 token_id, fields["scope"], fields["orgId"], admin["email"])
+        self._send_json(200, True, data={**rec, "token": token})
+
+    def _handle_admin_worker_enrolment_list(self) -> None:
+        """List all enrolment tokens (pending/redeemed/revoked) for the admin
+        console. Never returns the plaintext or the hash."""
+        if self._require_admin() is None:
+            return
+        store = Store(self.db_path)
+        try:
+            tokens = store.list_worker_enrolment_tokens()
+        except Exception:  # noqa: BLE001
+            log.error("worker enrolment-token listing failed", exc_info=True)
+            self._send_json(500, False, error="internal server error")
+            return
+        finally:
+            store.close()
+        self._send_json(200, True, data={"tokens": tokens})
+
+    def _handle_admin_worker_enrolment_revoke(self, payload: Any) -> None:
+        """Cancel a still-pending enrolment token. Idempotent: {revoked:false} for an
+        unknown/already-redeemed/already-revoked token. Audited UNCONDITIONALLY, even
+        on a no-op — an attempted revoke is itself security-relevant (mirrors the
+        execution-backend precedent's unconditional audit, not
+        _handle_admin_worker_revoke's no-audit gap)."""
+        admin = self._require_admin()
+        if admin is None:
+            return
+        fields, err = _validate_worker_enrolment_revoke(payload)
+        if err is not None:
+            self._send_json(400, False, error=err)
+            return
+        store = Store(self.db_path)
+        try:
+            revoked = store.revoke_worker_enrolment_token(
+                fields["tokenId"], by_admin_id=admin["adminId"])
+            store.append_admin_audit(
+                acting_admin_id=admin["adminId"], action="worker_enrolment_token.revoke",
+                target_resource=fields["tokenId"], ip=self._client_ip(),
+                user_agent=self.headers.get("User-Agent"),
+                reason=None if revoked else
+                       "no-op: token already redeemed or already revoked")
+        except Exception:  # noqa: BLE001
+            log.error("worker enrolment-token revoke failed", exc_info=True)
             self._send_json(500, False, error="internal server error")
             return
         finally:
@@ -3977,6 +4435,9 @@ class PanelHandler(SimpleHTTPRequestHandler):
         if parsed.path == ADMIN_FLEET_PATH:
             self._handle_admin_fleet()
             return
+        if parsed.path == ADMIN_WORKER_ENROLMENT_TOKENS_PATH:
+            self._handle_admin_worker_enrolment_list()
+            return
         if parsed.path == ADMIN_CONTROL_FLAGS_PATH:
             self._handle_admin_control_flags_list()
             return
@@ -3988,6 +4449,9 @@ class PanelHandler(SimpleHTTPRequestHandler):
             return
         if parsed.path == ADMIN_MODEL_COMPARISON_PATH:
             self._handle_admin_model_comparison_get()
+            return
+        if parsed.path == AGENT_READINESS_PATH:
+            self._handle_agent_readiness(parsed.query)
             return
         if parsed.path == STATE_PATH:
             if self._current_user() is None:
@@ -4274,7 +4738,9 @@ def serve(db_path: str, panel_dir: str, config_dir: str,
           schedule_manager: Optional["ScheduleManager"] = None,
           reclaim_manager: Optional["ReclaimManager"] = None,
           session_watchdog: Optional["SessionWatchdog"] = None,
-          billing_providers: Optional[dict] = None) -> ThreadingHTTPServer:
+          billing_providers: Optional[dict] = None,
+          readiness_probe: Optional[Callable[..., dict]] = None,
+          login_opener: Optional[Callable[[], bool]] = None) -> ThreadingHTTPServer:
     configure_logging()  # idempotent: a no-op if the CLI already configured it
     PanelHandler.panel_dir = str(Path(panel_dir).resolve())
     PanelHandler.db_path = str(Path(db_path).resolve())
@@ -4337,6 +4803,13 @@ def serve(db_path: str, panel_dir: str, config_dir: str,
             db_path=PanelHandler.db_path, run_manager=run_manager)
     if session_watchdog is not None:
         session_watchdog.start()
+    # staticmethod(): a plain function parked on the handler CLASS would be bound on
+    # attribute access and get `self` as its first positional argument. The other
+    # injected collaborators are instances, so this trap is unique to these two.
+    PanelHandler.readiness_probe = (
+        staticmethod(readiness_probe) if readiness_probe is not None else None)
+    PanelHandler.login_opener = (
+        staticmethod(login_opener) if login_opener is not None else None)
     if PanelHandler.telegram_login is None:
         PanelHandler.telegram_login = TelegramLoginManager()
     # Billing providers: injected (tests) or built from env. A missing/invalid

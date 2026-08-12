@@ -159,6 +159,120 @@ def test_lease_returns_an_enqueued_job_then_empties(srv):
     assert code == 200 and resp["data"] is None
 
 
+def test_lease_surfaces_campaign_brief_but_never_platform_credentials(srv):
+    """B4 regression (campaign_brief half): the ACTUAL cross-machine path a remote
+    worker uses is POST /api/worker/lease -> store._job_row_to_lease, which used to
+    whitelist only id/orgId/campaignId/platform/requiredAccountHandle/targetLeads/
+    durationMinutes/engineMode/soulText/runId -- silently dropping campaignBrief from
+    the wire response even though it round-trips fine through the raw spec column
+    (store.get_job). A remote worker's JobSpec.from_payload would then see no
+    campaignBrief, campaign_brief would end up None, and the worker would fall back to
+    its own (empty) local DB — exactly the bug B4 was meant to fix. campaignBrief MUST
+    still ride the lease.
+
+    SECURITY REVIEW CRITICAL/HIGH (the other half, now the opposite requirement): even
+    when a job's raw `spec` DB row carries a `platform_credentials` key — simulating a
+    stale/legacy/tampered row, since a fresh enqueue never writes one anymore — the
+    lease response must NEVER surface it under either key spelling. A worker gets its
+    credential exclusively from the lease-holder-gated
+    POST /api/worker/jobs/{id}/credential, never for free on the lease."""
+    token, account = _isolated(srv, "brief")
+    store = Store(srv["db"])
+    try:
+        store.enqueue_job(
+            job_id="job-brief-1", campaign_id="c-acme", platform="instagram",
+            org_id=1, required_account_handle=account,
+            spec={"target_leads": 1, "engine_mode": "harvest",
+                  "campaign_brief": {"platform": "instagram", "goal": "lead"},
+                  "platform_credentials": {"api_key": "ORG-KEY"}})
+    finally:
+        store.close()
+    code, resp, _ = _post(srv["base"], "/api/worker/lease", {}, bearer=token)
+    assert code == 200, resp
+    assert resp["data"]["job"]["campaignBrief"] == {"platform": "instagram", "goal": "lead"}
+    assert "platformCredentials" not in resp["data"]["job"]
+    assert "platform_credentials" not in resp["data"]["job"]
+
+
+# ----- job credential (SECURITY REVIEW CRITICAL/HIGH) ----------------------------
+
+def test_credential_endpoint_returns_the_orgs_secret_to_the_lease_holder(srv):
+    """The happy path: the worker that actually leased a youtube job asks for its
+    credential and gets the org's connected (decrypted) secret back."""
+    account = None  # youtube is per-org-credentialed, not account-pinned
+    token = _register(srv["base"], machine_id="m-cred-holder",
+                      caps=[[1, "youtube", account]])
+    store = Store(srv["db"])
+    try:
+        store.set_integration_secret(1, "youtube", {"api_key": "ORG-YT-KEY"})
+    finally:
+        store.close()
+    code, enq, _ = _enqueue(srv, platform="youtube", account="", job_id="job-cred-1")
+    assert code == 200, enq
+    code, lease, _ = _post(srv["base"], "/api/worker/lease", {}, bearer=token)
+    assert code == 200 and lease["data"]["job"]["id"] == "job-cred-1"
+
+    code, resp, _ = _post(srv["base"], "/api/worker/jobs/job-cred-1/credential", {},
+                          bearer=token)
+    assert code == 200, resp
+    assert resp["data"]["credential"] == {"api_key": "ORG-YT-KEY"}
+
+
+def test_credential_endpoint_404s_for_a_worker_that_does_not_hold_the_lease(srv):
+    """An actual breach attempt: a SECOND, validly-registered, capability-matching
+    worker tries to pull the credential for a job the FIRST worker leased. Capability
+    matching alone (the pool-wide `[null, platform, null]` wildcard both workers share)
+    would let it lease a similar job — but the credential endpoint's gate is the
+    per-job lease-holder check, strictly tighter, so this must 404, not 403 (BOLA-safe:
+    a 404 discloses neither that the job exists nor who holds it — mirrors the
+    'unknown campaign'/'unknown run' convention used elsewhere in server.py)."""
+    holder = _register(srv["base"], machine_id="m-cred-owner",
+                       caps=[[1, "youtube", None]])
+    attacker = _register(srv["base"], machine_id="m-cred-attacker",
+                         caps=[[1, "youtube", None]])
+    store = Store(srv["db"])
+    try:
+        store.set_integration_secret(1, "youtube", {"api_key": "ORG-YT-KEY-2"})
+    finally:
+        store.close()
+    _enqueue(srv, platform="youtube", account="", job_id="job-cred-2")
+    code, lease, _ = _post(srv["base"], "/api/worker/lease", {}, bearer=holder)
+    assert code == 200 and lease["data"]["job"]["id"] == "job-cred-2"
+
+    code, resp, _ = _post(srv["base"], "/api/worker/jobs/job-cred-2/credential", {},
+                          bearer=attacker)
+    assert code == 404, resp
+    assert "credential" not in json.dumps(resp)  # the secret never left the server
+
+
+def test_credential_endpoint_requires_a_worker_bearer_token(srv):
+    # No bearer at all.
+    code, resp, _ = _post(srv["base"], "/api/worker/jobs/whatever/credential", {})
+    assert code == 401, resp
+    assert resp["error"] == "invalid or revoked worker token"
+    # A garbage/unregistered bearer is rejected exactly the same way (no distinction
+    # that would let a caller tell "no token" from "wrong token").
+    code, resp, _ = _post(srv["base"], "/api/worker/jobs/whatever/credential", {},
+                          bearer="garbage-not-a-real-token")
+    assert code == 401, resp
+    assert resp["error"] == "invalid or revoked worker token"
+
+
+def test_credential_endpoint_is_none_when_nothing_is_connected(srv):
+    """A per-org-credentialed platform the org simply hasn't connected yet is NOT an
+    error — {ok:true, data:{credential:null}} — the worker's cli.py fallback chain
+    (baked -> local store -> env) already treats a legitimate None this way. Uses
+    'reddit' (not 'youtube') so it can't collide with a sibling test's org-1 youtube
+    secret on this module-scoped shared DB."""
+    token = _register(srv["base"], machine_id="m-cred-none", caps=[[1, "reddit", None]])
+    _enqueue(srv, platform="reddit", account="", job_id="job-cred-none")
+    _post(srv["base"], "/api/worker/lease", {}, bearer=token)
+    code, resp, _ = _post(srv["base"], "/api/worker/jobs/job-cred-none/credential", {},
+                          bearer=token)
+    assert code == 200, resp
+    assert resp["data"]["credential"] is None
+
+
 # ----- job heartbeat / ack / nack ------------------------------------------------
 
 def test_full_lease_heartbeat_ack_round_trip(srv):
@@ -246,7 +360,7 @@ def test_nack_requires_a_reason(srv):
 
 def test_job_routes_require_a_worker_token(srv):
     for action, body in (("heartbeat", {}), ("ack", {"summary": {}}),
-                         ("nack", {"reason": "x"})):
+                         ("nack", {"reason": "x"}), ("credential", {})):
         code, resp, _ = _post(srv["base"], f"/api/worker/jobs/jX/{action}", body)
         assert code == 401, (action, resp)
 

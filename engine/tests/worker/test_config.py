@@ -149,6 +149,99 @@ def test_rejects_non_positive_duration_and_target():
     assert js.target_leads == 25 and js.duration_minutes == 30
 
 
+def test_from_payload_round_trips_campaign_brief():
+    brief = {"platform": "instagram", "goal": "lead"}
+    job = JobSpec.from_payload({
+        "id": "j", "campaignId": "c", "platform": "instagram",
+        "campaignBrief": brief})
+    assert job.campaign_brief == brief
+    # snake_case is accepted too (same pick() convention as every other field).
+    job2 = JobSpec.from_payload({
+        "id": "j", "campaignId": "c", "platform": "instagram",
+        "campaign_brief": brief})
+    assert job2.campaign_brief == brief
+    # Absent → None (legacy job; the worker falls back to the box-local DB lookup).
+    assert JobSpec.from_payload({
+        "id": "j", "campaignId": "c", "platform": "instagram"}).campaign_brief is None
+
+
+def test_from_payload_rejects_non_dict_campaign_brief():
+    for bad in ("not-a-dict", ["nope"], 5):
+        with pytest.raises(JobSpecError):
+            JobSpec.from_payload({"id": "j", "campaignId": "c", "platform": "instagram",
+                                  "campaignBrief": bad})
+
+
+def test_from_payload_rejects_oversized_campaign_brief():
+    from aizu.core.config import MAX_CAMPAIGN_BRIEF_BYTES
+    huge = {"platform": "instagram", "seed_direction": "x" * (MAX_CAMPAIGN_BRIEF_BYTES + 1)}
+    with pytest.raises(JobSpecError):
+        JobSpec.from_payload({"id": "j", "campaignId": "c", "platform": "instagram",
+                              "campaignBrief": huge})
+
+
+def test_to_payload_omits_campaign_brief_unless_baked():
+    job = JobSpec(id="j", org_id=1, campaign_id="c", platform="instagram")
+    assert "campaignBrief" not in job.to_payload()
+    baked = JobSpec(id="j", org_id=1, campaign_id="c", platform="instagram",
+                    campaign_brief={"platform": "instagram", "goal": "lead"})
+    assert baked.to_payload()["campaignBrief"] == {"platform": "instagram", "goal": "lead"}
+    assert JobSpec.from_payload(baked.to_payload()) == baked
+
+
+def test_from_payload_round_trips_platform_credentials():
+    """B4 fix review finding #2: platform_credentials (the org's per-platform secret)
+    is baked exactly like campaign_brief so a remote worker's JobSpec carries it."""
+    creds = {"api_key": "ORG-KEY"}
+    job = JobSpec.from_payload({
+        "id": "j", "campaignId": "c", "platform": "youtube",
+        "platformCredentials": creds})
+    assert job.platform_credentials == creds
+    # snake_case is accepted too (same pick() convention as every other field).
+    job2 = JobSpec.from_payload({
+        "id": "j", "campaignId": "c", "platform": "youtube",
+        "platform_credentials": creds})
+    assert job2.platform_credentials == creds
+    # Absent → None (legacy job / not a per-org-credentialed platform; cli.py falls
+    # back to the box-local store lookup).
+    assert JobSpec.from_payload({
+        "id": "j", "campaignId": "c", "platform": "youtube"}).platform_credentials is None
+
+
+def test_from_payload_rejects_non_dict_platform_credentials():
+    for bad in ("not-a-dict", ["nope"], 5):
+        with pytest.raises(JobSpecError):
+            JobSpec.from_payload({"id": "j", "campaignId": "c", "platform": "youtube",
+                                  "platformCredentials": bad})
+
+
+def test_to_payload_omits_platform_credentials_unless_baked():
+    job = JobSpec(id="j", org_id=1, campaign_id="c", platform="youtube")
+    assert "platformCredentials" not in job.to_payload()
+    baked = JobSpec(id="j", org_id=1, campaign_id="c", platform="youtube",
+                    platform_credentials={"api_key": "ORG-KEY"})
+    assert baked.to_payload()["platformCredentials"] == {"api_key": "ORG-KEY"}
+    assert JobSpec.from_payload(baked.to_payload()) == baked
+
+
+def test_run_args_threads_baked_platform_credentials():
+    """The last hop: WorkerConfig.run_args must carry job.platform_credentials onto
+    the argparse.Namespace so cli._build_run_io/_build_warming_io can read it via
+    getattr(args, 'platform_credentials', None) and prefer it over the box-local
+    store lookup (B4 fix review finding #2)."""
+    from pathlib import Path
+    cfg = WorkerConfig(dispatch_base_url="http://x", cfg_dir=Path("cfg"),
+                       db_path="d.db", state_dir=Path("st"))
+    job = JobSpec.from_payload({
+        "id": "j", "campaignId": "c", "platform": "youtube",
+        "platformCredentials": {"api_key": "ORG-KEY"}})
+    args = cfg.run_args(job)
+    assert args.platform_credentials == {"api_key": "ORG-KEY"}
+    # A legacy/unbaked job → None, so the fallback path (local store lookup) runs.
+    bare_job = JobSpec.from_payload({"id": "j", "campaignId": "c", "platform": "youtube"})
+    assert cfg.run_args(bare_job).platform_credentials is None
+
+
 def test_child_dict_round_trips():
     from aizu.worker.config import WorkerConfig
     from pathlib import Path

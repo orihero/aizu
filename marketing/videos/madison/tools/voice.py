@@ -116,7 +116,9 @@ def check(only=None):
 
         print(f"{row['id']:<10}{dur:>7.2f}s  {heard}")
         if missing:
-            print(f"{'':<10}{'':>8}  ⚠ not heard: {' '.join(missing)}")
+            # ASCII marker on purpose: this console is cp1251 on Windows and a
+            # non-latin glyph raises UnicodeEncodeError mid-report.
+            print(f"{'':<10}{'':>8}  !! not heard: {' '.join(missing)}")
         print()
 
 

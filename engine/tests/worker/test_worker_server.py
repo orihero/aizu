@@ -9,13 +9,15 @@ import logging
 import os
 import tempfile
 import threading
+import time
 import urllib.error
 import urllib.request
 from pathlib import Path
 
 import pytest
 
-from aizu.server import (WORKER_BOOTSTRAP_ENV, serve)
+from aizu.auth import new_session_token
+from aizu.server import (WORKER_BOOTSTRAP_ENV, WORKER_LEGACY_BOOTSTRAP_ENV, serve)
 from aizu.admin_auth import ADMIN_IP_ALLOWLIST_ENV
 from aizu.core.store import Store, hash_session_token
 from ._admin import admin_cookie, set_admin_env
@@ -238,6 +240,213 @@ def test_register_first_requires_machine_id(srv, monkeypatch):
     monkeypatch.setenv(WORKER_BOOTSTRAP_ENV, BOOTSTRAP)
     code, resp, _ = _post(srv["base"], "/api/worker/register", {}, bearer=BOOTSTRAP)
     assert code == 400, resp
+
+
+# ----- v22 enrolment tokens (BUILD-PLAN B8 fix) — real HTTP routes, not a unit test
+# of the clamp function (§B4 lesson: a fix that never rides the served route is
+# inert). Tokens are minted directly via the Store (the mint HTTP endpoint gets its
+# own admin-plane tests in test_lifecycle_controls_server.py); everything AFTER the
+# mint — register, the clamp, and (for the security-core case) a real lease — goes
+# through the live ThreadingHTTPServer exactly as a real worker box would hit it. --
+
+def _mint_enrolment_token(db_path, *, scope_kind, org_id=None, worker_id_hint="wet"):
+    token = new_session_token()
+    store = Store(db_path)
+    try:
+        store.create_worker_enrolment_token(
+            token_id=f"wet-{worker_id_hint}", token=token, scope_kind=scope_kind,
+            org_id=org_id, label=None, created_by_admin_id=None,
+            expires_at=time.time() + 3600.0)
+    finally:
+        store.close()
+    return token
+
+
+def test_register_enrolment_token_clamps_org_scope_overriding_self_declaration(srv):
+    """The security core of B8: an org-scoped enrolment token CLAMPS org_id and every
+    capability's cap_org to the token's org, even when the request body declares a
+    DIFFERENT orgId and pool-wide (cap_org=None) capabilities."""
+    token = _mint_enrolment_token(srv["db"], scope_kind="org", org_id=1,
+                                  worker_id_hint="clampA")
+    code, resp, _ = _post(
+        srv["base"], "/api/worker/register",
+        {"machineId": "m-clamp-org", "orgId": 999,  # self-declared — must be overridden
+         "capabilities": [[None, "instagram", None], [999, "youtube", None]]},
+        bearer=token)
+    assert code == 200, resp
+    row = _worker_row(srv["db"], "m-clamp-org")
+    assert row["orgId"] == 1
+    assert row["capabilities"] == [[1, "instagram", None], [1, "youtube", None]]
+
+
+def test_register_enrolment_token_pool_scope_leaves_capabilities_unclamped(srv):
+    """A 'pool' enrolment token is the deliberate multi-org grant (PRD: one managed
+    box serving ~10 companies) — org_id is set to None and capabilities pass through
+    exactly as the box declared, unclamped."""
+    token = _mint_enrolment_token(srv["db"], scope_kind="pool", org_id=None,
+                                  worker_id_hint="poolB")
+    code, resp, _ = _post(
+        srv["base"], "/api/worker/register",
+        {"machineId": "m-clamp-pool", "orgId": 42,
+         "capabilities": [[7, "instagram", "acct"], [None, "youtube", None]]},
+        bearer=token)
+    assert code == 200, resp
+    row = _worker_row(srv["db"], "m-clamp-pool")
+    assert row["orgId"] is None
+    assert row["capabilities"] == [[7, "instagram", "acct"], [None, "youtube", None]]
+
+
+def test_register_reregister_cannot_escalate_org_scoped_worker(srv):
+    """v22.1 regression (BUILD-PLAN B8 follow-up, memory/known-issues.md B8): the
+    org-scoped enrolment token's clamp must hold on EVERY subsequent re-register of
+    that same worker's OWN bearer token, not just the redemption call. Before this
+    fix, a re-register trusted the request body's orgId/capabilities verbatim
+    (worker is not None ⇒ enrolment_scope stayed None), so a box enrolled for org 1
+    could immediately re-register itself into org 999's scope — and, via a real
+    lease, receive org 999's decrypted platform credential — using nothing but its
+    own already-issued bearer token. No shared secret, no second enrolment token."""
+    token = _mint_enrolment_token(srv["db"], scope_kind="org", org_id=1,
+                                  worker_id_hint="reesc")
+    code, resp, _ = _post(
+        srv["base"], "/api/worker/register",
+        {"machineId": "m-reesc", "orgId": 1, "capabilities": [[1, "instagram", None]]},
+        bearer=token)
+    assert code == 200, resp
+    worker_token = resp["data"]["token"]
+    # Attacker/box re-registers with its OWN bearer, self-declaring a DIFFERENT org
+    # and pool-wide (cap_org=None) capabilities — must be clamped right back to the
+    # token's original org, exactly as the first register was.
+    code2, resp2, _ = _post(
+        srv["base"], "/api/worker/register",
+        {"machineId": "ignored", "orgId": 999,
+         "capabilities": [[None, "youtube", None]]},
+        bearer=worker_token)
+    assert code2 == 200, resp2
+    row = _worker_row(srv["db"], "m-reesc")
+    assert row["orgId"] == 1
+    assert row["capabilities"] == [[1, "youtube", None]]
+
+
+def test_register_reregister_pool_scoped_worker_org_id_stays_none(srv):
+    """A pool-scoped worker's org_id (deliberately None — the multi-org grant)
+    stays None on re-register too, instead of adopting a self-declared orgId;
+    capabilities remain unclamped on re-register, exactly as at enrolment."""
+    token = _mint_enrolment_token(srv["db"], scope_kind="pool", worker_id_hint="repool")
+    code, resp, _ = _post(srv["base"], "/api/worker/register",
+                          {"machineId": "m-repool"}, bearer=token)
+    assert code == 200, resp
+    worker_token = resp["data"]["token"]
+    code2, resp2, _ = _post(
+        srv["base"], "/api/worker/register",
+        {"machineId": "ignored", "orgId": 42,
+         "capabilities": [[7, "instagram", "acct"]]},
+        bearer=worker_token)
+    assert code2 == 200, resp2
+    row = _worker_row(srv["db"], "m-repool")
+    assert row["orgId"] is None
+    assert row["capabilities"] == [[7, "instagram", "acct"]]
+
+
+def test_register_enrolment_token_is_single_use(srv, monkeypatch):
+    """A redeemed token cannot register a second box; a second attempt bearing the
+    SAME (already-used) token is not a valid bootstrap secret either, so it 401s."""
+    monkeypatch.delenv(WORKER_BOOTSTRAP_ENV, raising=False)
+    token = _mint_enrolment_token(srv["db"], scope_kind="pool", worker_id_hint="once")
+    first = _post(srv["base"], "/api/worker/register",
+                  {"machineId": "m-once-a"}, bearer=token)
+    assert first[0] == 200, first[1]
+    second = _post(srv["base"], "/api/worker/register",
+                   {"machineId": "m-once-b"}, bearer=token)
+    assert second[0] == 401, second[1]
+
+
+def test_register_enrolment_token_failure_falls_back_to_legacy_bootstrap(srv, monkeypatch):
+    """An unredeemable bearer (garbage, or an already-used enrolment token) is not
+    fatal by itself — the legacy shared-secret check still runs as a fallback while
+    AIZU_WORKER_LEGACY_BOOTSTRAP_ENABLED is on (the default)."""
+    monkeypatch.setenv(WORKER_BOOTSTRAP_ENV, BOOTSTRAP)
+    monkeypatch.delenv(WORKER_LEGACY_BOOTSTRAP_ENV, raising=False)  # default = on
+    code, resp, _ = _post(srv["base"], "/api/worker/register",
+                          {"machineId": "m-legacy-fallback"}, bearer=BOOTSTRAP)
+    assert code == 200, resp
+
+
+def test_register_legacy_bootstrap_disabled_rejects_shared_secret(srv, monkeypatch):
+    """(d) With the legacy flag OFF, the correct shared secret alone (no enrolment
+    token) is no longer sufficient — 401. The identical request with the flag
+    unset/'1' still succeeds (regression guard for the default-on migration
+    promise)."""
+    monkeypatch.setenv(WORKER_BOOTSTRAP_ENV, BOOTSTRAP)
+    monkeypatch.setenv(WORKER_LEGACY_BOOTSTRAP_ENV, "0")
+    code, resp, _ = _post(srv["base"], "/api/worker/register",
+                          {"machineId": "m-legacy-off"}, bearer=BOOTSTRAP)
+    assert code == 401, resp
+
+    monkeypatch.setenv(WORKER_LEGACY_BOOTSTRAP_ENV, "1")
+    code, resp, _ = _post(srv["base"], "/api/worker/register",
+                          {"machineId": "m-legacy-on"}, bearer=BOOTSTRAP)
+    assert code == 200, resp
+
+    monkeypatch.delenv(WORKER_LEGACY_BOOTSTRAP_ENV, raising=False)  # unset = on
+    code, resp, _ = _post(srv["base"], "/api/worker/register",
+                          {"machineId": "m-legacy-unset"}, bearer=BOOTSTRAP)
+    assert code == 200, resp
+
+
+def test_register_existing_bearer_reregister_unaffected_by_enrolment_state(srv, monkeypatch):
+    """(e) The steady-state re-register path (worker's OWN bearer) is untouched by
+    ANY of this for a worker that was ITSELF enrolled via the deprecated legacy
+    bootstrap fallback (no enrolment token ⇒ enrolment_scope_kind stays NULL) — it
+    still overwrites org_id/capabilities from the request body verbatim, exactly as
+    before. This is deliberately narrower than it used to be: an enrolment-token-
+    scoped worker's re-register IS now re-clamped every time — see
+    test_register_reregister_cannot_escalate_org_scoped_worker (v22.1, the fix for
+    the self-escalation gap this test's old, blanket docstring used to paper over).
+    Locks in the hard constraint so a future change can't silently regress it toward
+    the C4 widening bug left deliberately alone."""
+    monkeypatch.setenv(WORKER_BOOTSTRAP_ENV, BOOTSTRAP)
+    _, resp, _ = _post(srv["base"], "/api/worker/register",
+                       {"machineId": "m-steady", "orgId": 1,
+                        "capabilities": [[1, "instagram", "h"]]},
+                       bearer=BOOTSTRAP)
+    token = resp["data"]["token"]
+    code, resp2, _ = _post(
+        srv["base"], "/api/worker/register",
+        {"machineId": "ignored", "orgId": 2,
+         "capabilities": [[None, "youtube", None]]},
+        bearer=token)
+    assert code == 200, resp2
+    row = _worker_row(srv["db"], "m-steady")
+    assert row["orgId"] == 2
+    assert row["capabilities"] == [[None, "youtube", None]]
+
+
+def test_register_deprecation_warning_fires_only_on_legacy_path(srv, monkeypatch):
+    """(f) The deprecation WARNING fires exactly when the legacy shared-secret
+    fallback is actually used, and NOT when a valid enrolment token redeems."""
+    monkeypatch.setenv(WORKER_BOOTSTRAP_ENV, BOOTSTRAP)
+    logger = logging.getLogger("aizu.server")
+    buf = io.StringIO()
+    handler = logging.StreamHandler(buf)
+    handler.setLevel(logging.WARNING)
+    prev_level = logger.level
+    logger.setLevel(logging.WARNING)
+    logger.addHandler(handler)
+    try:
+        # Enrolment-token path: no warning.
+        token = _mint_enrolment_token(srv["db"], scope_kind="pool", worker_id_hint="nowarn")
+        code, resp, _ = _post(srv["base"], "/api/worker/register",
+                              {"machineId": "m-no-warn"}, bearer=token)
+        assert code == 200, resp
+        assert "DEPRECATED" not in buf.getvalue()
+        # Legacy fallback path: warning fires.
+        code, resp, _ = _post(srv["base"], "/api/worker/register",
+                              {"machineId": "m-warn"}, bearer=BOOTSTRAP)
+        assert code == 200, resp
+        assert "DEPRECATED" in buf.getvalue()
+    finally:
+        logger.removeHandler(handler)
+        logger.setLevel(prev_level)
 
 
 # ----- heartbeat -------------------------------------------------------------

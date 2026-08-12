@@ -21,8 +21,8 @@ from typing import Optional
 from . import dispatch
 from . import warming_control
 from .core import accounts as accounts_lib
-from .core.config import (Campaign, ChannelSpec, load_campaign, load_soul,
-                          resolve_campaign)
+from .core.config import (CDP_PLATFORMS, PER_ORG_CREDENTIAL_PLATFORMS, Campaign,
+                          ChannelSpec, load_campaign, load_soul, resolve_campaign)
 from .core.feed import Comment, FakeFeed, Reel
 from .core.logsetup import configure_logging, get_logger
 from .core.mock_router import MockRouter
@@ -125,7 +125,8 @@ def _build_run_io(campaign: Campaign, store: Store, dry_run: bool,
                           vision_model=args.vision_model,
                           enable_comparison=comparison_enabled,
                           compare_models=_parse_csv_env("MODEL_COMPARISON_MODELS"))
-    credentials = _resolve_platform_credentials(campaign, store)
+    credentials = _resolve_platform_credentials(
+        campaign, store, baked=getattr(args, "platform_credentials", None))
     feed = build_feed(campaign.platform, cdp_url=args.cdp_url,
                       seed_hashtags=campaign.seed_hashtags,
                       seed_accounts=campaign.seed_accounts,
@@ -152,7 +153,8 @@ def _build_warming_io(campaign: Campaign, store: Store, args: argparse.Namespace
     """
     from .dispatch import build_feed
     account = store.resolve_account_for_campaign(campaign.campaign_id, campaign.platform)
-    credentials = _resolve_platform_credentials(campaign, store)
+    credentials = _resolve_platform_credentials(
+        campaign, store, baked=getattr(args, "platform_credentials", None))
     feed = build_feed(campaign.platform, cdp_url=args.cdp_url,
                       seed_hashtags=(), seed_accounts=(), seed_channels=(),
                       include_home_feed=True, credentials=credentials)
@@ -180,15 +182,19 @@ def _warming_pacer(account: Optional[dict]) -> Pacer:
 
 # Platforms whose creds are connected per-org in the panel (encrypted secret
 # store). Instagram stays single-tenant (warmed-Chrome / CDP from .env), so it
-# has no per-org secret and resolves to None → build_feed reads env.
-_PER_ORG_CREDENTIAL_PLATFORMS = {"youtube", "telegram", "reddit"}
+# has no per-org secret and resolves to None → build_feed reads env. Now lives
+# in core.config (PER_ORG_CREDENTIAL_PLATFORMS) so server._dispatch_run_to_fleet
+# can share it without importing this module; aliased here to keep this file's
+# existing references unchanged.
+_PER_ORG_CREDENTIAL_PLATFORMS = PER_ORG_CREDENTIAL_PLATFORMS
 
 # Platforms driven through the warmed-Chrome / CDP browser (multi-platform plan
 # C4). A genuine account-level halt on one of these poisons the SHARED browser
 # session, so the fan-out skips the remaining CDP channels; API platforms are
-# unaffected. Kept in sync with the engine's HaltKind poison set + the panel's
-# CDP_PLATFORMS (admin-panel).
-_CDP_PLATFORMS = frozenset({"instagram", "linkedin", "x"})
+# unaffected. The set itself now lives in core.config beside SUPPORTED_PLATFORMS —
+# the bridge's readiness gate needs the same split, and one copy per caller was
+# already one copy too many.
+_CDP_PLATFORMS = CDP_PLATFORMS
 
 # HaltKinds that POISON the shared CDP browser/account: after one of these, the
 # remaining CDP channels in a fan-out can't be trusted to run cleanly. A
@@ -198,13 +204,36 @@ _CDP_PLATFORMS = frozenset({"instagram", "linkedin", "x"})
 _POISON_HALT_KINDS = frozenset({"action_block", "checkpoint", "login", "canary"})
 
 
-def _resolve_platform_credentials(campaign: Campaign, store: Store) -> Optional[dict]:
+def _resolve_platform_credentials(campaign: Campaign, store: Store,
+                                  baked: Optional[dict] = None) -> Optional[dict]:
     """Per-org stored secret for this campaign's platform, or None to fall back
-    to env. Returns None for Instagram, an unregistered campaign, or no stored
-    secret — keeping local single-tenant runs working. A decryption failure
+    to env.
+
+    `baked` is the credential dict the worker sidecar fetched fresh for THIS job
+    (Sidecar._fetch_job_credential → POST /api/worker/jobs/{id}/credential, lease-
+    holder-gated) and threaded onto the JobSpec before spawning the child — SECURITY
+    REVIEW CRITICAL/HIGH retired the prior mechanism (server._dispatch_run_to_fleet
+    baking the decrypted secret straight into the job spec, a durable cloud-side
+    plaintext copy) in favor of this decrypt-on-demand pull, but this function's own
+    contract is UNCHANGED: a genuinely remote worker still has no `campaign_meta`/
+    `integration_secrets` row for this org on its own local DB, so
+    `store.org_for_campaign` would still resolve None there even though the org really
+    did connect this platform. A non-None `baked` wins outright — no local lookup — so
+    the remote-worker path never depends on a DB row that can't exist on that box. A
+    None `baked` (no fetch was attempted — a direct CLI run or a same-box/dev job — OR
+    the fetch ran and found nothing connected for this org/platform) falls back to the
+    local per-org store lookup: on the same box that still finds the real secret
+    (unchanged single-tenant behavior); on a truly remote box the local lookup also
+    resolves nothing, so the two None cases converge to the same (correct) answer
+    either way.
+
+    Returns None for Instagram, an unregistered campaign, or no stored secret
+    anywhere — keeping local single-tenant runs working. A decryption failure
     (SecretCipherError, a RuntimeError) propagates and is folded per-campaign."""
     if campaign.platform not in _PER_ORG_CREDENTIAL_PLATFORMS:
         return None
+    if baked is not None:
+        return baked
     org_id = store.org_for_campaign(campaign.campaign_id)
     if org_id is None:
         return None

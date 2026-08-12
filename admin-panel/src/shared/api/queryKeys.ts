@@ -28,6 +28,8 @@ export const queryKeys = {
   adminWhoami: ['admin', 'whoami'] as const,
   /** GET /api/admin/fleet — polled worker snapshot. */
   adminFleet: ['admin', 'fleet'] as const,
+  /** GET /api/admin/worker-enrolment-tokens. */
+  adminEnrolmentTokens: ['admin', 'enrolment-tokens'] as const,
   /** GET /api/admin/control-flags. */
   adminControlFlags: ['admin', 'control-flags'] as const,
   /** GET /api/admin/orgs — cross-org index. */

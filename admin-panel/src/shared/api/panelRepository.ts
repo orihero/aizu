@@ -12,10 +12,13 @@ import type {
   ControlFlagSetInput,
   EnqueueJobInput,
   EnqueuedJob,
+  EnrolmentToken,
   ExecutionBackend,
   ExecutionBackendState,
   FleetWorker,
   ImpersonateInput,
+  MintEnrolmentTokenInput,
+  MintEnrolmentTokenResult,
   ModelComparisonSettings,
   ModelComparisonStatsPage,
 } from '@/shared/schemas/admin';
@@ -188,6 +191,14 @@ export interface PanelRepository {
   setControlFlag(input: ControlFlagSetInput): Promise<Result<void>>;
   /** POST /api/admin/workers/revoke — revoke a worker's token (fails it next request). */
   revokeWorker(workerId: string): Promise<Result<{ revoked: boolean }>>;
+  /** POST /api/admin/worker-enrolment-tokens — mint a per-worker enrolment token; the
+   * plaintext token is returned ONLY in this response. */
+  mintEnrolmentToken(input: MintEnrolmentTokenInput): Promise<Result<MintEnrolmentTokenResult>>;
+  /** GET /api/admin/worker-enrolment-tokens — list enrolment tokens (never the
+   * plaintext or hash). */
+  fetchEnrolmentTokens(): Promise<Result<EnrolmentToken[]>>;
+  /** POST /api/admin/worker-enrolment-tokens/revoke — cancel an unredeemed token. */
+  revokeEnrolmentToken(tokenId: string): Promise<Result<{ revoked: boolean }>>;
   /** POST /api/admin/jobs/enqueue — queue a job for a capable worker. */
   enqueueJob(input: EnqueueJobInput): Promise<Result<EnqueuedJob>>;
   /** GET /api/admin/orgs — cross-org index (member + campaign counts). */

@@ -139,7 +139,8 @@ table.g tr.us td:first-child{ color: var(--lime); }
   display: flex; gap: 56px; border-top: 1px solid var(--line); padding-top: 18px;
   font-family: var(--mono); font-size: 11px; letter-spacing: .1em; text-transform: uppercase; color: var(--muted);
 }
-.meta b{ display: block; color: var(--paper); font-weight: 500; margin-top: 6px; letter-spacing: .05em; }
+.meta b{ display: block; color: var(--paper); font-weight: 500; margin-top: 6px; letter-spacing: .05em; text-transform: none; }
+/* labels stay uppercase, values do not — an all-caps email address reads as a typo */
 
 /* ---- screenshot ---- */
 .shot{
@@ -170,21 +171,14 @@ table.g tr.us td:first-child{ color: var(--lime); }
 /* ---- team ---- */
 .person{ text-align: left; }
 .person .av{
-  width: 88px; height: 88px; border-radius: 50%; background: var(--raise);
-  border: 1px solid var(--line-2); margin-bottom: 16px;
+  width: 104px; height: 104px; border-radius: 50%; background: var(--raise);
+  border: 1px solid var(--line-2); margin-bottom: 16px; overflow: hidden;
   display: grid; place-items: center; font-family: var(--mono); font-size: 11px; color: var(--faint);
 }
+.person .av img{ width: 100%; height: 100%; object-fit: cover; display: block; }
 .person .nm{ font-size: 19px; font-weight: 600; letter-spacing: -.01em; }
 .person .ro{ font-family: var(--mono); font-size: 11px; letter-spacing: .1em; text-transform: uppercase; color: var(--lime); margin: 7px 0 10px; }
 .person p{ margin: 0; font-size: 14.5px; line-height: 1.45; color: var(--muted); }
-
-/* ---- variant badge ---- */
-.slide.alt{ background: #0c0c10; }
-.vbadge{
-  position: absolute; top: 26px; right: var(--pad);
-  font-family: var(--mono); font-size: 10px; letter-spacing: .18em; text-transform: uppercase;
-  color: var(--ink); background: var(--lime); padding: 5px 11px; border-radius: 2px;
-}
 
 /* ---- shell ---- */
 #bar{ position: fixed; left:0; top:0; height: 2px; background: var(--lime); z-index: 45; width: 0; transition: width .28s cubic-bezier(.16,1,.3,1); }
@@ -248,9 +242,9 @@ table.g tr.us td:first-child{ color: var(--lime); }
       </p>
     </div>
     <div class="meta">
-      <div>Applicant<b>IT Park Uzbekistan</b></div>
-      <div>Built in<b>Tashkent</b></div>
-      <div>Stage<b>Pre-revenue · product shipped</b></div>
+      <div>Website<b>aizu.uz</b></div>
+      <div>Phone<b>+998 99 448 05 00</b></div>
+      <div>Email<b>info@aizu.uz</b></div>
     </div>
   </div>
 </section>
@@ -316,30 +310,30 @@ table.g tr.us td:first-child{ color: var(--lime); }
 
 <!-- ══ 05 · APP (screenshot) ════════════════════════════════ -->
 <section class="slide" data-t="App overview"
-  data-n="This is the real panel, captured from the running application with seeded demo data. Say 'demo data' out loud — the caption says it, and saying it too is what buys you trust for everything else in the deck. Offer to open it live.">
+  data-n="This is the real panel, captured from the running application with seeded demo data. Say 'demo data' out loud — the caption says it, and saying it too is what buys you trust for everything else in the deck. Then walk the three cards: they are the whole product in the order a customer meets it — write the brief, watch the run, work the leads. Offer to open it live.">
   <div class="eyebrow">The product</div>
   <h1 class="t w">Shipped, and running today</h1>
   <div class="body" style="margin-top:30px;display:grid;grid-template-columns:1.9fr 1fr;gap:38px;align-items:center">
     <div class="shot"><img src="__ASSET:dashboard__" alt="The AIZU dashboard: leads this week, cost per lead, leads by channel across six platforms, and the capture funnel."></div>
-    <div style="display:grid;gap:24px">
+    <div style="display:grid;gap:20px">
       <div class="card" style="padding:18px 18px">
-        <div class="h">Built</div>
-        <div class="k">6 platforms</div>
-        <p>One inbox for all of them.</p>
+        <div class="h">Campaigns</div>
+        <div class="k">Describe it once</div>
+        <p>One AI interview turns what you sell into the brief every check runs against.</p>
       </div>
       <div class="card" style="padding:18px 18px">
-        <div class="h">Built</div>
-        <div class="k">26 screens</div>
-        <p>Campaigns, leads, reports, spend, team, billing.</p>
+        <div class="h">Runs</div>
+        <div class="k">Watch it work</div>
+        <p>Start it, pause it, cap what it spends. It paces itself to working hours.</p>
       </div>
       <div class="card" style="padding:18px 18px">
-        <div class="h">Built</div>
-        <div class="k">1,661 tests</div>
-        <p>Passing on every change.</p>
+        <div class="h">Leads &amp; reports</div>
+        <div class="k">Answer, and see the cost</div>
+        <p>Six sources in one inbox, with what each person said — and what they cost.</p>
       </div>
     </div>
   </div>
-  <div class="foot"><span class="src">Real capture of the shipped admin panel, running with seeded demo data — not live customer numbers.</span><span>05</span></div>
+  <div class="foot"><span class="src">Real capture of the shipped admin panel, running with seeded demo data — not live customer numbers. 1,661 automated tests pass on every change.</span><span>05</span></div>
 </section>
 
 <!-- ══ 06 · BUSINESS MODEL ══════════════════════════════════ -->
@@ -394,35 +388,35 @@ table.g tr.us td:first-child{ color: var(--lime); }
 
 <!-- ══ 08 · TEAM ════════════════════════════════════════════ -->
 <section class="slide" data-t="Team"
-  data-n="Placeholder — replace with the real team. Keep one line each; the committee reads faces and roles, not biographies.">
+  data-n="Three people, one line each — the committee reads faces and roles, not biographies. Name them in order and move on; the only sentence worth adding out loud is that the product on slide 05 was built by the first of them.">
   <div class="eyebrow">Team</div>
   <h1 class="t w">Who is building it</h1>
   <div class="body three" style="margin-top:38px">
     <div class="person">
-      <div class="av">PHOTO</div>
-      <div class="nm">[Full name]</div>
-      <div class="ro">Founder · Engineering</div>
-      <p>[One line: the thing they built before this.]</p>
+      <div class="av"><img src="__ASSET:team_abdumutal__" alt="Abdumutal Abdusamatov"></div>
+      <div class="nm">Abdumutal Abdusamatov</div>
+      <div class="ro">Founder · Software engineer</div>
+      <p>Built AIZU end to end — the six platform engines, the operator panel and the desktop app.</p>
     </div>
     <div class="person">
-      <div class="av">PHOTO</div>
-      <div class="nm">[Full name]</div>
-      <div class="ro">[Role]</div>
-      <p>[One line: the credential that matters here.]</p>
+      <div class="av"><img src="__ASSET:team_sevinch__" alt="Sevinch Samandarova"></div>
+      <div class="nm">Sevinch Samandarova</div>
+      <div class="ro">Marketing specialist</div>
+      <p>Positioning, launch and the customer story — who AIZU is for, and how they hear about it.</p>
     </div>
     <div class="person">
-      <div class="av">PHOTO</div>
-      <div class="nm">[Full name]</div>
-      <div class="ro">[Role]</div>
-      <p>[One line: the credential that matters here.]</p>
+      <div class="av"><img src="__ASSET:team_nurulloh__" alt="Nurulloh Turdimurodov"></div>
+      <div class="nm">Nurulloh Turdimurodov</div>
+      <div class="ro">Full-stack engineer</div>
+      <p>Across the stack — platform engines, the bridge API and the screens operators work in.</p>
     </div>
   </div>
-  <div class="foot"><span class="src">Placeholder — replace with real names, photographs and one line each.</span><span>08</span></div>
+  <div class="foot"><span class="src">Tashkent. Three people; the product on slide 05 is what they have shipped so far.</span><span>08</span></div>
 </section>
 
 <!-- ══ 09 · THANKS ══════════════════════════════════════════ -->
 <section class="slide" data-t="Thank you"
-  data-n="Stop. Offer the live demonstration — it runs on this laptop and takes under two minutes.">
+  data-n="Stop. The product is live at aizu.uz — invite them to open it themselves, and leave the contact line on screen while you take questions.">
   <div class="titlegrid">
     <div class="wordmark">
       <svg class="mark" viewBox="0 0 100 100" aria-hidden="true"><use href="#aizu-mark"/></svg>
@@ -433,150 +427,22 @@ table.g tr.us td:first-child{ color: var(--lime); }
         Thank you.<br><span style="color:var(--lime)">Questions?</span>
       </p>
       <p style="font-size:19px;color:var(--dim);margin:32px 0 0;max-width:44ch;line-height:1.5">
-        A live run can be demonstrated on this laptop in under two minutes.
+        AIZU is live at aizu.uz. Open it and start with the free plan.
       </p>
     </div>
     <div class="meta">
-      <div>Contact<b>[NAME] · [EMAIL]</b></div>
-      <div>Phone<b>[PHONE]</b></div>
-      <div>Product<b>aizu.uz</b></div>
+      <div>Website<b>aizu.uz</b></div>
+      <div>Phone<b>+998 99 448 05 00</b></div>
+      <div>Email<b>info@aizu.uz</b></div>
     </div>
   </div>
-</section>
-
-<!-- ══════════ VARIANTS — not part of the nine ══════════════ -->
-
-<!-- ── 02 · variant A ── -->
-<section class="slide alt" data-t="Problem · variant A" data-v="1"
-  data-n="VARIANT for slide 02. Framing: outbound is broken. Strongest if the committee has heard many marketing pitches — it attacks the incumbent method rather than describing a trend.">
-  <div class="vbadge">Variant · slide 02</div>
-  <div class="eyebrow">The problem</div>
-  <h1 class="t w">Cold outreach barely works anymore</h1>
-  <div class="body two">
-    <div>
-      <div class="fig lime">0.45<span class="u">%</span></div>
-      <div class="cap">reply rate on cold email, measured across <b>7.5 million</b> sent messages</div>
-    </div>
-    <div>
-      <div class="fig">59<span class="u">%</span></div>
-      <div class="cap">of marketing leaders say their <b>budget cannot cover</b> their own strategy</div>
-    </div>
-  </div>
-  <p class="kicker">Paying to interrupt strangers stopped working.</p>
-  <div class="foot"><span class="src">Belkins B2B cold email study, 2025 (n=7.5M emails) · Gartner 2025 CMO Spend Survey</span><span>02·A</span></div>
-</section>
-
-<!-- ── 02 · variant B ── -->
-<section class="slide alt" data-t="Problem · variant B" data-v="1"
-  data-n="VARIANT for slide 02. Framing: the audience moved. Strongest if you want the deck to feel forward-looking rather than pain-focused. Weaker on urgency.">
-  <div class="vbadge">Variant · slide 02</div>
-  <div class="eyebrow">The problem</div>
-  <h1 class="t w">Your buyers search social, not Google</h1>
-  <div class="body two">
-    <div>
-      <div class="fig lime">90<span class="u">%</span></div>
-      <div class="cap">of Gen&nbsp;Z say social content <b>shaped a purchase</b> they made in the last six months</div>
-    </div>
-    <div>
-      <div class="fig">41<span class="u">%</span></div>
-      <div class="cap">now <b>search social first</b> for information — Google trails at 32%</div>
-    </div>
-  </div>
-  <p class="kicker">Demand became public. Nobody is reading it.</p>
-  <div class="foot"><span class="src">Sprout Social / Glimpse consumer survey, 2025 (n=2,280)</span><span>02·B</span></div>
-</section>
-
-<!-- ── 03 · variant A ── -->
-<section class="slide alt" data-t="Solution · variant A" data-v="1"
-  data-n="VARIANT for slide 03. Framing: positioning by contrast. Use this if slide 02 is the cold-outreach variant, because it answers it directly.">
-  <div class="vbadge">Variant · slide 03</div>
-  <div class="eyebrow">The solution</div>
-  <h1 class="t w">Answer. Don't interrupt.</h1>
-  <div class="body three">
-    <div class="card">
-      <div class="h">Advertising</div>
-      <div class="k">Interrupts</div>
-      <p>Pays to reach people who were doing something else.</p>
-    </div>
-    <div class="card">
-      <div class="h">Cold outreach</div>
-      <div class="k">Guesses</div>
-      <p>Messages strangers from a bought list, and hopes.</p>
-    </div>
-    <div class="card" style="border-color:var(--lime)">
-      <div class="h" style="color:var(--lime)">AIZU</div>
-      <div class="k">Answers</div>
-      <p>Replies to a person who publicly asked, in their own words.</p>
-    </div>
-  </div>
-  <p class="kicker">You are not interrupting anyone. You are answering.</p>
-  <div class="foot"><span class="src"></span><span>03·A</span></div>
-</section>
-
-<!-- ── 03 · variant B ── -->
-<section class="slide alt" data-t="Solution · variant B" data-v="1"
-  data-n="VARIANT for slide 03. Framing: the mechanism, drawn. Use this if the committee is technical and wants to see the funnel rather than read claims.">
-  <div class="vbadge">Variant · slide 03</div>
-  <div class="eyebrow">The solution</div>
-  <h1 class="t w">Six feeds in. One short list out.</h1>
-  <div class="body" style="display:grid;grid-template-columns:1fr auto 1fr auto 1fr;gap:26px;align-items:center;align-content:center">
-    <div class="six" style="grid-template-columns:1fr 1fr">
-      <div class="card" style="padding:13px 14px"><div class="k" style="font-size:15px;margin:0">Instagram</div></div>
-      <div class="card" style="padding:13px 14px"><div class="k" style="font-size:15px;margin:0">LinkedIn</div></div>
-      <div class="card" style="padding:13px 14px"><div class="k" style="font-size:15px;margin:0">X</div></div>
-      <div class="card" style="padding:13px 14px"><div class="k" style="font-size:15px;margin:0">Reddit</div></div>
-      <div class="card" style="padding:13px 14px"><div class="k" style="font-size:15px;margin:0">YouTube</div></div>
-      <div class="card" style="padding:13px 14px"><div class="k" style="font-size:15px;margin:0">Telegram</div></div>
-    </div>
-    <div style="font-family:var(--mono);font-size:22px;color:var(--faint)">→</div>
-    <div class="card" style="border-color:var(--line-2)">
-      <div class="h">Two-stage AI</div>
-      <div class="k">Score the post.<br>Then the comment.</div>
-      <p>Is this on topic — and is this commenter a buyer, not a seller?</p>
-    </div>
-    <div style="font-family:var(--mono);font-size:22px;color:var(--faint)">→</div>
-    <div class="card" style="border-color:var(--lime)">
-      <div class="h" style="color:var(--lime)">Delivered</div>
-      <div class="k">Qualified leads</div>
-      <p>Handle, what they said, when, and the fields you asked for.</p>
-    </div>
-  </div>
-  <div class="foot"><span class="src">All six engines shipped. Five of six are read-only.</span><span>03·B</span></div>
-</section>
-
-<!-- ── 05 · variant (no screenshot) ── -->
-<section class="slide alt" data-t="App · variant (no shot)" data-v="1"
-  data-n="VARIANT for slide 05. Use if you would rather not show demo data, or if the room's projector will crush the dark screenshot. Same claim, no image.">
-  <div class="vbadge">Variant · slide 05</div>
-  <div class="eyebrow">The product</div>
-  <h1 class="t w">Shipped, and running today</h1>
-  <div class="body four">
-    <div>
-      <div class="fig">6</div>
-      <div class="cap">platform engines, all running end to end</div>
-    </div>
-    <div>
-      <div class="fig">26</div>
-      <div class="cap">screens: campaigns, leads, reports, spend, team, billing</div>
-    </div>
-    <div>
-      <div class="fig lime">1,661</div>
-      <div class="cap">automated tests, passing on every change</div>
-    </div>
-    <div>
-      <div class="fig">4</div>
-      <div class="cap">applications — panel, engine, worker fleet, desktop</div>
-    </div>
-  </div>
-  <p class="kicker">Not a prototype. Every number here is counted from the codebase.</p>
-  <div class="foot"><span class="src">Counted from the repository, August 2026. Live demonstration available on request.</span><span>05·B</span></div>
 </section>
 
 </div></div>
 
 <div id="notes"></div>
 <div id="hud"></div>
-<div id="ov"><h4>Overview — click to jump · dashed = variant · Esc to close</h4><div id="ovg"></div></div>
+<div id="ov"><h4>Overview — click to jump · Esc to close</h4><div id="ovg"></div></div>
 <div id="help"><div>
   <div><kbd>→ / ␣</kbd> next</div>
   <div><kbd>←</kbd> previous</div>
