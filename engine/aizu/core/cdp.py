@@ -27,6 +27,7 @@ current endpoints in DevTools once and expect drift (every CDP PRD §12/§13).
 from __future__ import annotations
 
 import base64
+import threading
 import time
 from dataclasses import dataclass
 from typing import Callable, Iterator, Optional
@@ -34,6 +35,10 @@ from typing import Callable, Iterator, Optional
 from .feed import Comment, FeedSource, Reel
 from .human import HumanSim
 from .logsetup import get_logger
+# PlaywrightTimeout is DEFINED in pw_owner (so core/human.py can raise the same
+# class without importing this module) and re-exported here: engines and tests
+# import it from aizu.core.cdp, and that must keep resolving to one class.
+from .pw_owner import OwnedPW, PlaywrightOwner, PlaywrightTimeout  # noqa: F401
 # HaltSession is defined in engines/base.py (not any one engine) so every
 # engine + the control plane share one exception type; core imports it ONLY
 # for this one raise site (walk()'s login/challenge-wall detection below) —
@@ -45,26 +50,20 @@ log = get_logger(__name__)
 
 try:
     from playwright.sync_api import sync_playwright
-    from playwright.sync_api import TimeoutError as PlaywrightTimeout
     PLAYWRIGHT_AVAILABLE = True
 except Exception:  # pragma: no cover - playwright optional at import time
     sync_playwright = None  # type: ignore
     PLAYWRIGHT_AVAILABLE = False
-
-    class PlaywrightTimeout(Exception):  # type: ignore
-        """Fallback when Playwright is not importable. The real
-        ``playwright.sync_api.TimeoutError`` subclasses ``Exception``, so an
-        explicit ``except PlaywrightTimeout`` behaves identically to the generic
-        ``except Exception`` fallback that already guards these blocks — the
-        named catch is load-bearing for LOG VISIBILITY (a silent CDP hang was the
-        confirmed root cause of a wedged harvest) and for future-proofing."""
 
 
 @dataclass
 class CDPBaseConfig:
     """Platform-agnostic CDP knobs. Engine configs subclass this to add their own
     URL hints (and any platform-specific tuning)."""
-    cdp_url: str = "http://127.0.0.1:9222"
+    # 9333 is the canonical warmed-Chrome port repo-wide (ledger F10). The literal is
+    # duplicated from readiness.DEFAULT_CDP_URL on purpose: importing `readiness` from
+    # `core/` would invert the dependency direction (readiness already reaches INTO core).
+    cdp_url: str = "http://127.0.0.1:9333"
     scroll_delta: int = 900
     settle_seconds: float = 1.5          # wait for interception after a scroll
     empty_scrolls_before_stop: int = 4   # no new items after N scrolls => source end
@@ -79,28 +78,43 @@ class CDPBaseConfig:
     # Per-call Playwright timeouts. GENEROUS defaults tuned for a slow worker PC on
     # real Instagram — a frozen CDP command must degrade, not wedge forever, but a
     # merely-slow one must not false-timeout. js_timeout_ms is the PAGE default
-    # AND the hard wall-clock bound `_call_bounded` (core/bounded.py) enforces
-    # around the specific call sites that turn out NOT to honor it.
+    # AND the hard wall-clock bound the Playwright owner thread
+    # (`core/pw_owner.py`) enforces around every call that reaches it.
     #
     # CORRECTION (was wrong here before): js_timeout_ms does NOT actually bound
     # every evaluate/query_selector/screenshot/mouse.* call. Confirmed live
-    # against a wedged CDP session (Playwright 1.61): `page.mouse.move` /
+    # against a wedged CDP session (Playwright 1.61/1.62): `page.mouse.move` /
     # `mouse.wheel` / `mouse.click` take no `timeout=` argument and do not honor
     # the page default either, and once the CDP pipe goes quiet (e.g. the tab
     # got redirected to a login wall) even an `evaluate` call can hang with NO
     # exception ever raised — set_default_timeout has zero effect on that case.
     # This was the confirmed root cause of a session wedged forever with no
     # exception to trigger any except-guard, per-source budget, or crash guard.
-    # The known-unbounded call sites (`core/human.py` mouse_move's evaluate +
-    # mouse.move; `_wheel_once`'s mouse.wheel + its evaluate fallback;
-    # `_click_centermost`'s mouse.click; instagram/cdp.py's context.cookies) are
-    # each wrapped in `_call_bounded(..., self.cfg.js_timeout_ms / 1000.0)` below
-    # so they get a REAL deadline regardless of what Playwright itself does.
-    js_timeout_ms: int = 15000           # page-default cap; also the _call_bounded deadline
+    # The real deadline now comes from `core/pw_owner.py`: Playwright is created
+    # and driven on ONE owner thread, callers submit closures and wait with a
+    # bound, so the call never changes threads (the mistake that silently zeroed
+    # every harvest — ledger D6) and only the WAIT crosses the boundary. It
+    # reaches BOTH the explicitly wrapped call sites (`_call_bounded`:
+    # `_wheel_once`'s mouse.wheel + evaluate fallback, `_click_centermost`'s
+    # mouse.click, instagram/cdp.py's context.cookies, core/human.py's
+    # mouse_move) AND — via the `OwnedPW` proxy that `attach()` installs on
+    # self._pw/_browser/_page — every other attribute read and call on a live
+    # Playwright object, including `_shoot`'s query_selector/screenshot, which
+    # were never actually bounded before despite comments here claiming so.
+    js_timeout_ms: int = 15000           # page-default cap; also the owner-thread deadline
     per_reel_seconds: float = 90.0       # session-level per-reel wall-clock backstop
     # Hard per-source wall-clock ceiling: no single source can hold the walk longer
     # than this, regardless of scroll/interception behavior (the anti-wedge guarantee).
     max_source_seconds: float = 45.0
+    # How many CONSECUTIVE bounded Playwright calls may fail to come back before
+    # walk() halts the whole session. The owner-thread deadline turns "hangs
+    # forever" into "every call degrades", and every degrade path here is written
+    # as skip-and-continue — so without this the walk finishes normally, yields
+    # nothing, and the run is recorded as a clean, successful, zero-lead session
+    # (indistinguishable from "the seed hashtags were dry") while Chrome was dead
+    # the whole time. That is ledger B6's exact complaint and D6's failure shape.
+    # 0 disables the halt. See CDPFeedBase._halt_if_owner_wedged.
+    max_consecutive_wedged_calls: int = 3
     # Engagement timing (human-like pause before a click). Read-only engines unused.
     action_delay_min: float = 0.8
     action_delay_max: float = 2.5
@@ -132,6 +146,28 @@ class CDPFeedBase(FeedSource):
         # unbounded call sites (mouse_move's evaluate + mouse.move) — one knob
         # (cfg.js_timeout_ms) governs every otherwise-unbounded Playwright call.
         self.human.call_timeout_s = self.cfg.js_timeout_ms / 1000.0
+        # The single thread that owns this feed's Playwright world (see
+        # core/pw_owner.py). Lazily started on the first bounded call; a feed
+        # that never attaches never spawns a thread. HumanSim must share it —
+        # a HumanSim handed this feed's page but NOT this feed's owner would
+        # submit work to a second thread and hit greenlet.error, so the
+        # injection below is load-bearing, not tidiness.
+        self._owner = PlaywrightOwner()
+        self.human.owner = self._owner
+        # Guards EVERY interception accumulator below, not just the reel queue:
+        # `page.on("response")` handlers dispatch on the PLAYWRIGHT OWNER thread
+        # now, so `_classify` writes there while `walk()`/`fetch_comments()` read
+        # on the caller's. Before the owner thread there was one thread and the
+        # reads were atomic by construction; the window is real but narrow —
+        # events only dispatch while the caller is inside a Playwright call, or
+        # after it has ABANDONED one (a deadline expiry: the caller walks away
+        # and the owner keeps pumping the dispatcher). That second case is the
+        # dangerous one, because it is exactly when `fetch_comments` runs a
+        # non-atomic "slice the list, then read its length" and can return N
+        # comments while persisting a watermark of N+k — the k in between are
+        # never scored and never re-read. Engine `_classify`/`fetch_comments`
+        # take this same lock; keep any new interception state under it too.
+        self._queue_lock = threading.Lock()
         self._pw = None
         self._browser = None
         self._page = None
@@ -183,87 +219,201 @@ class CDPFeedBase(FeedSource):
                 "Playwright is not installed. `pip install playwright` (the "
                 "engine attaches over CDP; it does not download a browser).")
         log.info("CDP attaching to warmed Chrome · url=%s", self.cfg.cdp_url)
-        self._pw = sync_playwright().start()
-        # Attach to the already-running, warmed Chrome. Never launch vanilla.
-        # no_defaults=True makes Playwright SKIP its on-connect Browser.setDownloadBehavior
-        # call (driver: acceptDownloads→"internal-browser-default"). That single CDP command
-        # is what Chrome for Testing 148 rejects — "Browser context management is not
-        # supported" — once the browser has been up a few minutes / a couple of
-        # connect+disconnect cycles, killing every attach. We never download anything (this
-        # is a read-only observer), so skipping it is free and sidesteps the failure entirely
-        # — no kill/relaunch dance, works even against an already-"degraded" instance.
-        # Verified live 2026-07-01. See microsoft/playwright#30383.
-        self._browser = self._pw.chromium.connect_over_cdp(self.cfg.cdp_url, no_defaults=True)
-        contexts = self._browser.contexts
-        if not contexts:
-            raise RuntimeError("No browser context over CDP — is the warmed "
-                               "Chrome running with --remote-debugging-port?")
-        ctx = contexts[0]
-        self._page = ctx.pages[0] if ctx.pages else ctx.new_page()
-        self._page.on("response", self._on_response)
-        # Per-call timeout so a frozen CDP command degrades instead of blocking the
-        # main greenlet forever. Covers evaluate/query_selector/screenshot — but NOT
-        # mouse.* (no timeout= arg, and not honored via the page default either) and
-        # not reliably every evaluate once the CDP pipe itself goes quiet; those call
-        # sites get an actual hard deadline from `_call_bounded` instead (see the
-        # CORRECTION note on CDPBaseConfig.js_timeout_ms above).
-        self._page.set_default_timeout(self.cfg.js_timeout_ms)
-        self._page.set_default_navigation_timeout(self.cfg.nav_timeout_ms)
-        log.success("CDP attached · %d context(s), interception wired", len(contexts))
+
+        def _do():
+            """EVERYTHING Playwright runs on the owner thread — including the
+            driver start itself. That is what makes the owner the *owning*
+            thread for the driver, browser, context, page and every handle they
+            later hand out, instead of merely a thread we shove calls at (which
+            is `greenlet.error` 100% of the time — ledger D6)."""
+            pw = sync_playwright().start()
+            # PUBLISH THE DRIVER HANDLE BEFORE ANYTHING CAN FAIL. `start()` has
+            # already spawned a node subprocess; if `pw` stays a local, then the
+            # explicitly-expected "No browser context" error (or any connect
+            # failure) drops the only reference to it while `self._pw` is still
+            # None, so `close()` stops nothing and every failed attach in a
+            # `run-all` loop leaves an orphaned driver behind.
+            self._pw = self._wrap_pw(pw)
+            try:
+                return _connect(pw)
+            except BaseException:
+                # Release the driver HERE — we are on its owning thread, which
+                # is the only place `stop()` is legal — instead of leaving it to
+                # a `close()` that may never be reached.
+                try:
+                    pw.stop()
+                except BaseException:  # noqa: BLE001 — teardown must not mask the real error
+                    log.debug("CDP attach cleanup: pw.stop() did not complete cleanly")
+                self._pw = None
+                raise
+
+        def _connect(pw):
+            # Attach to the already-running, warmed Chrome. Never launch vanilla.
+            # no_defaults=True makes Playwright SKIP its on-connect Browser.setDownloadBehavior
+            # call (driver: acceptDownloads→"internal-browser-default"). That single CDP command
+            # is what Chrome for Testing 148 rejects — "Browser context management is not
+            # supported" — once the browser has been up a few minutes / a couple of
+            # connect+disconnect cycles, killing every attach. We never download anything (this
+            # is a read-only observer), so skipping it is free and sidesteps the failure entirely
+            # — no kill/relaunch dance, works even against an already-"degraded" instance.
+            # Verified live 2026-07-01. See microsoft/playwright#30383.
+            browser = pw.chromium.connect_over_cdp(self.cfg.cdp_url, no_defaults=True)
+            contexts = browser.contexts
+            if not contexts:
+                raise RuntimeError("No browser context over CDP — is the warmed "
+                                   "Chrome running with --remote-debugging-port?")
+            ctx = contexts[0]
+            page = ctx.pages[0] if ctx.pages else ctx.new_page()
+            page.on("response", self._on_response)
+            # Per-call timeout so a frozen CDP command degrades instead of blocking the
+            # main greenlet forever. Covers evaluate/query_selector/screenshot — but NOT
+            # mouse.* (no timeout= arg, and not honored via the page default either) and
+            # not reliably every evaluate once the CDP pipe itself goes quiet. Those are
+            # covered instead by the owner thread's own wall-clock deadline, which the
+            # OwnedPW wrapping below applies to every call on these objects.
+            page.set_default_timeout(self.cfg.js_timeout_ms)
+            page.set_default_navigation_timeout(self.cfg.nav_timeout_ms)
+            return browser, page, len(contexts)
+
+        # Attach gets nav_timeout + slack: starting the node driver and the CDP
+        # handshake are both slower than any ordinary page call.
+        browser, page, n_ctx = self._owner.call(
+            _do, self.cfg.nav_timeout_ms / 1000.0 + 10.0, PlaywrightTimeout)
+        # INVARIANT: no RAW Playwright object may ever be stored on self. Every
+        # one of them is thread-affine to the owner; a raw reference that escapes
+        # here is a silent zero-harvest waiting to happen (a missed call raises
+        # greenlet.error straight into an `except Exception: return False/None`).
+        # tests/core/test_cdp.py has a mechanical regression test for this.
+        # (self._pw was already published inside _do, before anything could fail.)
+        self._browser = self._wrap_pw(browser)
+        self._page = self._wrap_pw(page)
+        log.success("CDP attached · %d context(s), interception wired", n_ctx)
         # walk() drives per-source navigation; don't hard-land on the home feed.
+
+    def _wrap_pw(self, obj):
+        """Bind a Playwright object to this feed's owner thread + deadlines."""
+        return OwnedPW(
+            self._owner, obj,
+            {"default": self.cfg.js_timeout_ms / 1000.0,
+             # Navigation calls carry Playwright's OWN timeout internally
+             # (_goto_once passes timeout=nav_timeout_ms), so their queue
+             # deadline must be strictly LARGER or we manufacture the wedges we
+             # then recover from.
+             "nav": self.cfg.nav_timeout_ms / 1000.0 + 5.0},
+            PlaywrightTimeout)
 
     def _ensure_ipage(self):
         """Lazily open the interaction page (a second tab) and wire interception
-        so comment responses on the opened item are captured too."""
+        so comment responses on the opened item are captured too.
+
+        No owner plumbing here on purpose: ``self._browser`` is already an
+        ``OwnedPW``, so ``contexts``/``new_page()`` dispatch to the owner thread
+        and hand back an already-wrapped page for free. (Verified by test, not
+        by eye — see test_ensure_ipage_returns_an_owned_proxy_page.)
+
+        RETURNS None INSTEAD OF RAISING, and that is load-bearing. Every caller
+        is ``page = self._ensure_ipage(); if page is None: return False`` on the
+        FIRST line of a bool-returning ``open_reel``, outside its try/except —
+        so anything that escapes here escapes ``open_reel``, then the session's
+        ``for reel in feed.walk()`` loop (which only catches ``HaltSession``),
+        and kills the whole run instead of skipping one reel. Before the owner
+        thread existed that could not happen: ``browser.contexts`` is a plain
+        cached property in Playwright, so this method was infallible. Routing it
+        through the owner made it a real cross-thread call that can time out or
+        fast-fail while the owner is wedged, so the guard has to be here.
+
+        ``PlaywrightThreadAffinityError`` is a ``BaseException`` and still
+        escapes on purpose — an object off its owning thread is a code bug, not
+        a flaky browser."""
         if self._ipage is None and self._browser is not None:
-            ctx = self._browser.contexts[0]
-            self._ipage = ctx.new_page()
-            self._ipage.on("response", self._on_response)
-            # The interaction page is where mouse.wheel/mouse.click run
-            # (comment-dialog scroll, engagement clicks); those take NO timeout=
-            # argument and do NOT honor this page default, so `_call_bounded`
-            # around each such call site is what actually keeps them from
-            # hanging the run indefinitely — this default only covers the
-            # evaluate/query_selector/screenshot calls on this page.
-            self._ipage.set_default_timeout(self.cfg.js_timeout_ms)
-            self._ipage.set_default_navigation_timeout(self.cfg.nav_timeout_ms)
+            try:
+                ctx = self._browser.contexts[0]
+                ipage = ctx.new_page()
+                ipage.on("response", self._on_response)
+                # The interaction page is where mouse.wheel/mouse.click run
+                # (comment-dialog scroll, engagement clicks); those take NO timeout=
+                # argument and do NOT honor this page default. The owner thread's
+                # wall-clock deadline (core/pw_owner.py), applied through the proxy
+                # and through `_call_bounded`, is what actually keeps them from
+                # hanging the run indefinitely — this default only covers the
+                # evaluate/query_selector/screenshot calls on this page.
+                ipage.set_default_timeout(self.cfg.js_timeout_ms)
+                ipage.set_default_navigation_timeout(self.cfg.nav_timeout_ms)
+            except Exception as e:  # noqa: BLE001 — a bool contract, see docstring
+                log.warning("CDP could not open the interaction page (%s) — the "
+                            "item is skipped, not the run", type(e).__name__)
+                return None
+            # Publish only once fully wired: a half-built page on self would be
+            # reused forever with no interception hook and no timeouts.
+            self._ipage = ipage
         return self._ipage
 
     def _call_bounded(self, fn, timeout_s: Optional[float] = None):
-        """Run ``fn`` directly, on the caller's (Playwright-owning) thread.
+        """Run ``fn`` under a REAL wall-clock deadline, on Playwright's OWNING thread.
 
-        This USED to route ``fn`` through ``core.bounded.call_bounded`` to get a
-        real hard deadline for the call sites Playwright's own timeout config
-        does not cover (mouse.*, and evaluate once the CDP pipe has gone quiet).
-        That was wrong and silently broke every CDP walk: ``call_bounded`` runs
-        the callable on a daemon thread, and Playwright's SYNC API is
-        greenlet-based and thread-affine, so every wrapped call raised
-        ``greenlet.error: Cannot switch to a different thread`` — 100% of the
-        time, not intermittently. In ``_wheel_once`` both the wheel AND its JS
-        fallback were wrapped, so every scroll notch was skipped, the feed never
-        advanced, and Instagram/X/LinkedIn harvested nothing. Reproduced live:
-        the same ``page.mouse.wheel`` succeeds called directly and fails through
-        ``call_bounded``.
+        ``fn`` is submitted to this feed's ``PlaywrightOwner`` (``core/pw_owner.py``)
+        — the same thread that ran ``sync_playwright().start()`` in ``attach()``,
+        i.e. the thread every Playwright object here is affine to. The call
+        therefore never changes threads; only the WAIT crosses the boundary. On
+        expiry this raises ``PlaywrightTimeout``, so every existing
+        ``except PlaywrightTimeout:`` / ``except Exception:`` degrade path at the
+        wrapped call sites keeps working unchanged. ``timeout_s=None`` (the
+        default) means ``cfg.js_timeout_ms``.
 
-        The wedge risk the deadline existed to prevent is REAL and is now
-        unguarded again — a hung mouse.* can still block a run. Re-fixing it
-        needs an approach that keeps the call on its owning thread (a dedicated
-        Playwright thread with a queue, or a transport-level kill), NOT one that
-        moves the call. ``timeout_s`` is accepted and ignored so the call sites
-        stay untouched for that follow-up.
+        HISTORY — this is why the trap exists; do not "simplify" it away.
+        This once routed ``fn`` through ``core.bounded.call_bounded``, which
+        gets its deadline by running the callable on a daemon thread. That was
+        catastrophically wrong: Playwright's SYNC API is greenlet-based and
+        thread-AFFINE, so every wrapped call raised ``greenlet.error: Cannot
+        switch to a different thread`` — 100% of the time, not intermittently.
+        In ``_wheel_once`` both the wheel AND its JS fallback were wrapped, and
+        ``greenlet.error`` is an ordinary ``Exception``, so both were swallowed
+        by the surrounding degrade guards: every scroll notch was skipped, the
+        feed never advanced, and Instagram/X/LinkedIn harvested NOTHING with a
+        fully green test suite. Reproduced live: the same ``page.mouse.wheel``
+        succeeds called directly and fails through ``call_bounded``.
+
+        The deadline was then removed entirely (``timeout_s`` accepted and
+        ignored), which left the wedge risk it existed to prevent unguarded —
+        a hung ``mouse.*`` could block a whole run — and five tests asserting
+        the old contract had to be skipped (ledger D6). Both halves are fixed
+        here: the deadline is back, and it is back on the owning thread.
+
+        Any future edit that moves a Playwright call to another thread will
+        surface as ``PlaywrightThreadAffinityError``, which subclasses
+        ``BaseException`` precisely so no ``except Exception:`` below can hide
+        it again.
         """
-        del timeout_s  # no deadline is enforced here any more — see docstring
-        return fn()
+        if timeout_s is None:
+            timeout_s = self.cfg.js_timeout_ms / 1000.0
+        return self._owner.call(fn, timeout_s, PlaywrightTimeout)
 
     def close(self) -> None:
         """Disconnect from the warmed Chrome and release the Playwright driver so the
         NEXT session can attach fresh in the same process. We deliberately do NOT call
         ``browser.close()``: the Chrome was launched and warmed externally
         (warm_chrome.sh) and must outlive the run — ``pw.stop()`` drops only our CDP
-        connection and driver, leaving the browser running."""
+        connection and driver, leaving the browser running.
+
+        ``pw.stop()`` is itself thread-affine (it raises ``greenlet.error`` off
+        the owning thread), so it routes through the owner like everything else
+        — which means it can now TIME OUT if the owner is wedged. It is
+        swallowed: ``close()`` has never been able to raise and callers (run
+        teardown, halt paths) are not written for it. A permanently wedged owner
+        leaks its node driver subprocess and one daemon thread; the run child
+        still exits, which is the same tradeoff ``worker/job_runner.py``'s CDP
+        probe already accepts."""
         try:
             if self._pw is not None:
-                self._pw.stop()
+                try:
+                    self._pw.stop()
+                except Exception:  # noqa: BLE001 — teardown must never raise
+                    log.debug("CDP close: pw.stop() did not complete cleanly")
+            # Retire the owner thread: a multi-session run builds one feed per
+            # session in a single process, so a parked thread per finished
+            # session would accumulate. A wedged owner never sees the sentinel
+            # and stays leaked, which is the documented tradeoff.
+            self._owner.shutdown()
         finally:
             self._pw = None
             self._browser = None
@@ -315,16 +465,24 @@ class CDPFeedBase(FeedSource):
         return "json" in ctype or "javascript" in ctype
 
     def _enqueue_reel(self, reel: Reel) -> None:
-        """Append a freshly intercepted item, deduped by id (subclass `_classify`)."""
-        if reel.reel_id and reel.reel_id not in self._seen_reel_ids:
-            self._seen_reel_ids.add(reel.reel_id)
-            self._reel_queue.append(reel)
+        """Append a freshly intercepted item, deduped by id (subclass `_classify`).
+
+        Locked: this runs on the PLAYWRIGHT OWNER thread now (Playwright
+        dispatches ``page.on("response")`` handlers there) while ``walk()``
+        drains the queue on the caller's. The window is narrow — events only
+        dispatch while the caller is inside a Playwright call, or after it has
+        abandoned one — but it did not exist before the owner thread did."""
+        with self._queue_lock:
+            if reel.reel_id and reel.reel_id not in self._seen_reel_ids:
+                self._seen_reel_ids.add(reel.reel_id)
+                self._reel_queue.append(reel)
 
     # ---- discovery walk (across sources) ----
     def walk(self) -> Iterator[Reel]:
         for url in self._sources():
             log.info("CDP walking source · %s", url)
             self._navigate(url)
+            self._halt_if_owner_wedged()
             # Fast skip: some sources 302 to a page with no reels grid (IG's
             # keyword-search fallback). Detect the landed URL and move on rather
             # than spending the whole empty-scroll budget on an empty page.
@@ -347,8 +505,11 @@ class CDPFeedBase(FeedSource):
             yielded = 0
             empty_scrolls = 0
             while yielded < self.cfg.per_source_reels:
-                if self._reel_queue:
-                    reel = self._reel_queue.pop(0)
+                # Locked pop: _enqueue_reel now fires on the Playwright owner
+                # thread (response interception), not this one.
+                with self._queue_lock:
+                    reel = self._reel_queue.pop(0) if self._reel_queue else None
+                if reel is not None:
                     empty_scrolls = 0
                     yielded += 1
                     yield reel
@@ -358,14 +519,53 @@ class CDPFeedBase(FeedSource):
                 if self._clock() - source_start > self.cfg.max_source_seconds:
                     log.info("CDP source budget exhausted · %s", url)
                     break
-                before = len(self._seen_reel_ids)
+                with self._queue_lock:
+                    before = len(self._seen_reel_ids)
                 self._scroll()
                 time.sleep(self.cfg.settle_seconds)
-                if len(self._seen_reel_ids) == before:
+                # A dead browser must not read as "this source was dry".
+                self._halt_if_owner_wedged()
+                with self._queue_lock:
+                    grew = len(self._seen_reel_ids) != before
+                if not grew:
                     empty_scrolls += 1
                     if empty_scrolls >= self.cfg.empty_scrolls_before_stop:
                         break  # this source dry → move to the next
             log.debug("CDP source done · %s · yielded=%d", url, yielded)
+
+    def _halt_if_owner_wedged(self) -> None:
+        """Halt the session once N consecutive bounded Playwright calls have
+        failed to come back (``cfg.max_consecutive_wedged_calls``).
+
+        THIS IS THE OTHER HALF OF THE DEADLINE, not a nicety. Restoring the
+        wall-clock bound converts "the run hangs forever" into "every call
+        degrades" — and every degrade path here is deliberately
+        skip-and-continue: ``_wheel_once`` skips the notch, ``_goto_once``
+        swallows the nav, ``_landed_url`` returns ``""`` (so ``_login_wall_reason``
+        sees nothing and never halts), ``_shoot`` returns no frame. So a wedged
+        CDP session walks every source, burns its empty-scroll budget, yields
+        zero reels and ends as ``completed`` — a green, successful, zero-lead run
+        that looks exactly like "the seed hashtags were dry". The
+        empty-interception canary cannot catch it either: ``healthy()`` is only
+        consulted from ``_process_comments``, which is never reached when no reel
+        is ever yielded.
+
+        ``kind="canary"`` deliberately reuses the existing SOFT/account-level
+        classification (``engines/base.py``): a wedged pipe is environmental and
+        rate-limit-shaped — it auto-resumes on the exponential cooldown instead of
+        parking the campaign on a human — and it poisons the SHARED warmed Chrome
+        for the rest of a multi-platform fan-out, which is exactly right when the
+        browser itself is the thing that died.
+        """
+        limit = self.cfg.max_consecutive_wedged_calls
+        if limit <= 0:
+            return
+        streak = self._owner.wedge_streak
+        if streak >= limit:
+            log.error("CDP owner wedged · %d consecutive bounded calls did not "
+                      "return (%d total) — halting instead of reporting a clean "
+                      "zero-lead run", streak, self._owner.wedge_total)
+            raise HaltSession("cdp_call_wedged", kind="canary")
 
     def _landed_url(self) -> str:
         """The URL the page actually landed on after `_navigate` (may differ from
@@ -420,7 +620,18 @@ class CDPFeedBase(FeedSource):
         Both calls go through ``_call_bounded``: ``mouse.wheel`` takes no timeout=
         argument at all, and the JS fallback's ``evaluate`` is not reliably bounded
         either once the CDP pipe itself has gone quiet — without the hard deadline
-        either one can hang forever with no exception to trigger the fallback."""
+        either one can hang forever with no exception to trigger the fallback.
+
+        WHAT THE FALLBACK CAN AND CANNOT RESCUE. It rescues a wheel that FAILS
+        FAST — captured by a modal/overlay, or a transient driver hiccup — which
+        is the common case and leaves the pipe healthy enough to evaluate JS.
+        It cannot rescue a wheel that truly HANGS: one thread owns Playwright, it
+        is still stuck inside that wheel, and no JS can be evaluated on it until
+        it returns. Feeding the fallback through anyway would only queue behind
+        the hung call and burn a second full deadline before failing identically,
+        so the owner fast-fails it instead. The log below says which of the two
+        happened — reporting a fast-fail as "fallback failed" reads as "the JS
+        was tried and the page rejected it", which is the opposite of true."""
         try:
             self._call_bounded(lambda: page.mouse.wheel(0, delta))
             return
@@ -431,12 +642,25 @@ class CDPFeedBase(FeedSource):
         try:
             self._call_bounded(lambda: page.evaluate(f"window.scrollBy(0, {delta})"))
         except Exception as e:  # noqa: BLE001 — a scroll must never crash the run
-            log.warning("CDP scroll fallback failed — skipping scroll (%s)",
-                        type(e).__name__)
+            if self._owner.is_wedged():
+                log.warning("CDP scroll fallback SKIPPED — the owner thread is "
+                            "still inside the hung wheel call, so no JS was "
+                            "evaluated; skipping scroll")
+            else:
+                log.warning("CDP scroll fallback failed — skipping scroll (%s)",
+                            type(e).__name__)
 
     # ---- vision frames ----
     def _shoot(self, page) -> Optional[str]:
-        """One base64 JPEG of the page's video frame (or full page fallback)."""
+        """One base64 JPEG of the page's video frame (or full page fallback).
+
+        Neither call below is wrapped in ``_call_bounded``, and until the owner
+        thread landed neither was actually bounded either — ``query_selector``
+        honours the page default only while the CDP pipe is alive, and nothing
+        capped it once the pipe went quiet, despite comments elsewhere claiming
+        otherwise. On a live session ``page`` is an ``OwnedPW``, so both now get
+        the owner's wall-clock deadline for free and a frozen pipe degrades to
+        "no frame" (the vision tier tolerates a None) instead of hanging."""
         if page is None:
             return None
         try:

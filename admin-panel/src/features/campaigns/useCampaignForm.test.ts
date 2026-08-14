@@ -100,3 +100,26 @@ describe('useCampaignForm — multi-platform (Phase 5)', () => {
     expect(result.current.isValid).toBe(false);
   });
 });
+
+describe('useCampaignForm — create vs edit intent', () => {
+  test('a create form names its intent so a colliding slug is refused, not overwritten', () => {
+    // POST /api/campaign is one endpoint for two operations. With no `op` the bridge
+    // has to infer intent from existence, so a second campaign whose name slugs onto
+    // an existing one silently overwrote that campaign's brief — and, `matches` being
+    // keyed on campaign_id, inherited its whole lead history.
+    const { result } = renderHook(() => useCampaignForm());
+    act(() => { result.current.update({ name: 'Q4 Outbound', seedHashtags: 'saas' }); });
+    const input = result.current.toInput();
+    expect(input.op).toBe('create');
+    expect(input.campaignId).toBe('q4-outbound');
+    expect(input.status).toBe('draft');
+  });
+
+  test('an edit form sends op=edit against the existing engine id', () => {
+    const { result } = renderHook(() => useCampaignForm(editSeed()));
+    const input = result.current.toInput();
+    expect(input.op).toBe('edit');
+    expect(input.campaignId).toBe('multi-campaign');
+    expect(input.status).toBe('live');
+  });
+});

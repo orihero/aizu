@@ -49,7 +49,8 @@ export function LeadsTable({
     );
   }
 
-  const pageIds = rows.map((row) => row.commentId);
+  // Composite lead ids — two campaigns can share a commentId.
+  const pageIds = rows.map((row) => row.id);
   const allOnPageSelected = pageIds.every((id) => selected.has(id));
 
   return (
@@ -100,8 +101,8 @@ export function LeadsTable({
                 <input
                   type="checkbox"
                   aria-label={`Select ${lead.username}`}
-                  checked={selected.has(lead.commentId)}
-                  onChange={() => { onToggleSelect(lead.commentId); }}
+                  checked={selected.has(lead.id)}
+                  onChange={() => { onToggleSelect(lead.id); }}
                   className="size-4 cursor-pointer accent-brand"
                 />
               </td>

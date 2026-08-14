@@ -131,7 +131,9 @@ def test_register_worker_returns_row_shape_without_token():
         assert set(row) == {
             "id", "orgId", "displayName", "host", "os", "agentVersion",
             "maxSessions", "currentSessions", "capabilities", "registeredAt",
-            "lastHeartbeatAt", "tokenExpiresAt", "revokedAt"}
+            "lastHeartbeatAt", "tokenExpiresAt", "revokedAt",
+            # v23: the box's own launch self-check summary (ledger F9/F10/F12).
+            "preflight"}
         assert row["orgId"] == 3
         assert row["maxSessions"] == 2
         assert row["currentSessions"] == 0
@@ -379,6 +381,118 @@ def test_list_workers_capabilities_roundtrip_and_tolerant():
         store.close()
 
 
+# ----- v23: launch-preflight summary persistence (ledger F9/F10/F12) -----
+
+def test_schema_v23_adds_preflight_column_to_an_upgrading_workers_table():
+    """D4 additive self-heal: an existing DB whose `workers` table pre-dates v23 gains
+    `preflight_json` on the next open, and existing rows read as "never reported one"
+    rather than as a failure — otherwise upgrade day darks an entire live fleet."""
+    # Arrange: a current DB with a registered worker, then physically drop the v23 column
+    # by rebuilding the table the way a pre-v23 binary would have left it.
+    path = _tmp()
+    store = Store(path)
+    try:
+        _register(store, "legacy")
+        store._conn.execute("ALTER TABLE workers DROP COLUMN preflight_json")
+        store._conn.commit()
+    finally:
+        store.close()
+    # Act: reopen with current code.
+    store = Store(path)
+    try:
+        # Assert: column restored, row intact, preflight reads as None (not an error).
+        cols = {r[1] for r in store._conn.execute("PRAGMA table_info(workers)")}
+        assert "preflight_json" in cols
+        fleet = store.list_workers()
+        assert [w["id"] for w in fleet] == ["legacy"]
+        assert fleet[0]["preflight"] is None
+    finally:
+        store.close()
+
+
+def test_register_worker_roundtrips_preflight_and_defaults_to_none():
+    store = Store(_tmp())
+    try:
+        summary = {"ok": False, "blocking": True, "enforced": True, "ranAt": 12.5,
+                   "failed": [{"id": "capabilities", "severity": "fatal",
+                               "detail": "neither var is set"}]}
+        row, _ = _register(store, "reported", preflight=summary)
+        _register(store, "silent")
+        assert row["preflight"] == summary
+        fleet = {w["id"]: w for w in store.list_workers()}
+        assert fleet["reported"]["preflight"] == summary
+        # A pre-v23 sidecar that never sends one stays NULL — never an empty dict, which
+        # a reader could mistake for "reported and clean".
+        assert fleet["silent"]["preflight"] is None
+    finally:
+        store.close()
+
+
+def test_register_worker_replaces_a_stale_preflight():
+    """Re-register is the heal path: a box that fixed its config must not keep showing
+    yesterday's red report in the fleet console."""
+    store = Store(_tmp())
+    try:
+        _register(store, "w-1", preflight={"ok": False, "blocking": True,
+                                           "enforced": True, "failed": [{"id": "x"}]})
+        _register(store, "w-1", preflight={"ok": True, "blocking": False,
+                                           "enforced": True, "failed": []})
+        assert store.list_workers()[0]["preflight"] == {
+            "ok": True, "blocking": False, "enforced": True, "failed": []}
+    finally:
+        store.close()
+
+
+def test_heartbeat_preflight_coalesces_when_omitted_and_replaces_when_given():
+    """§4.4 cadence: the sidecar only re-sends the summary when it CHANGED (or every
+    10th beat), so an omitted field must leave the stored one alone — otherwise the
+    console blanks the report between changes and reads as "checking…" forever."""
+    store = Store(_tmp())
+    try:
+        stored = {"ok": False, "blocking": True, "enforced": True, "failed": []}
+        _register(store, "w-1", preflight=stored)
+        assert store.record_worker_heartbeat(worker_id="w-1") is True
+        assert store.list_workers()[0]["preflight"] == stored
+        fresh = {"ok": True, "blocking": False, "enforced": True, "failed": []}
+        assert store.record_worker_heartbeat(worker_id="w-1", preflight=fresh) is True
+        assert store.list_workers()[0]["preflight"] == fresh
+    finally:
+        store.close()
+
+
+def test_list_workers_preflight_is_tolerant_of_a_corrupt_blob():
+    """Same external-boundary discipline as capabilities: one bad row must never be able
+    to crash the whole fleet read (a diagnostic field is the last thing that should)."""
+    store = Store(_tmp())
+    try:
+        _register(store, "corrupt", preflight={"ok": True, "blocking": False,
+                                               "enforced": True, "failed": []})
+        store._conn.execute(
+            "UPDATE workers SET preflight_json=? WHERE id='corrupt'", ("{not json",))
+        store._conn.commit()
+        assert store.list_workers()[0]["preflight"] is None
+        # A well-formed but non-dict blob is equally inert.
+        store._conn.execute(
+            "UPDATE workers SET preflight_json=? WHERE id='corrupt'", ("[1, 2]",))
+        store._conn.commit()
+        assert store.list_workers()[0]["preflight"] is None
+    finally:
+        store.close()
+
+
+def test_find_worker_by_token_never_carries_preflight():
+    """The AUTH shape stays minimal on purpose: nothing on the trust path may so much as
+    SEE a worker-authored diagnostic blob."""
+    store = Store(_tmp())
+    try:
+        _, token = _register(store, "w-1", preflight={"ok": True, "blocking": False,
+                                                      "enforced": True, "failed": []})
+        auth_row = store.get_worker_by_token(token)
+        assert auth_row is not None and "preflight" not in auth_row
+    finally:
+        store.close()
+
+
 def test_list_workers_shape_and_order():
     store = Store(_tmp())
     try:
@@ -396,7 +510,9 @@ def test_list_workers_shape_and_order():
         assert keys == {
             "id", "orgId", "displayName", "host", "os", "agentVersion",
             "maxSessions", "currentSessions", "capabilities", "registeredAt",
-            "lastHeartbeatAt", "lastSeenAgeSec", "status", "revokedAt", "currentJob"}
+            "lastHeartbeatAt", "lastSeenAgeSec", "status", "revokedAt", "currentJob",
+            # v23: what the fleet console reads to say WHY an online box cannot work.
+            "preflight"}
     finally:
         store.close()
 

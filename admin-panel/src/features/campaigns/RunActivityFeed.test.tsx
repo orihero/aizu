@@ -144,6 +144,26 @@ describe('FleetJobBanner', () => {
     expect(screen.getByText(/finished on the fleet/i)).toBeInTheDocument();
   });
 
+  test('failed with a known reason → says WHY, not just "finished" (B6)', () => {
+    renderBanner(buildFleetJob({ status: 'failed', reason: 'cdp_unreachable' }));
+    expect(
+      screen.getByText(/failed on the fleet — the worker's chrome could not be attached/i),
+    ).toBeInTheDocument();
+  });
+
+  test('failed with an unknown reason falls back to the raw code', () => {
+    renderBanner(buildFleetJob({ status: 'failed', reason: 'some_new_code' }));
+    expect(screen.getByText(/failed on the fleet — some_new_code/i)).toBeInTheDocument();
+  });
+
+  test('done with a reason is still "finished", never "failed"', () => {
+    // ack overwrites `result` with the engine summary, whose halt_reason can be set on a
+    // perfectly successful run (e.g. a daytime halt) — status is what decides the wording.
+    renderBanner(buildFleetJob({ status: 'done', reason: 'daytime' }));
+    expect(screen.getByText(/finished on the fleet/i)).toBeInTheDocument();
+    expect(screen.queryByText(/failed/i)).not.toBeInTheDocument();
+  });
+
   test('interrupted → finished on the fleet', () => {
     renderBanner(buildFleetJob({ status: 'interrupted' }));
     expect(screen.getByText(/finished on the fleet/i)).toBeInTheDocument();

@@ -143,10 +143,16 @@ class CDPFeed(CDPFeedBase):
                 return  # cannot positively identify the media — drop, never guess
             comments, cursor = parse_comments(body)
             if comments:
-                bucket = self._comments_by_reel.setdefault(rid, [])
-                known = {c.comment_id for c in bucket}
-                bucket.extend(c for c in comments if c.comment_id not in known)
-                self._comment_cursor_by_reel[rid] = cursor
+                # Locked: this runs on the Playwright OWNER thread while
+                # fetch_comments reads on the caller's (core/cdp.py's
+                # _queue_lock). No nesting — the reel branch above already
+                # returned, so _enqueue_reel's own acquisition is unreachable
+                # from here.
+                with self._queue_lock:
+                    bucket = self._comments_by_reel.setdefault(rid, [])
+                    known = {c.comment_id for c in bucket}
+                    bucket.extend(c for c in comments if c.comment_id not in known)
+                    self._comment_cursor_by_reel[rid] = cursor
 
     def _attribute_reel(self, response) -> Optional[str]:
         """The shortcode of the reel a comment response belongs to, from the
@@ -417,13 +423,21 @@ class CDPFeed(CDPFeedBase):
         self._saw_data = False
         self._open_comments_and_paginate()
 
-        all_comments = self._comments_by_reel.get(reel_id, [])
+        # SNAPSHOT under the lock, then slice the copy. The returned comments and
+        # the persisted watermark MUST describe the same list: interception now
+        # runs on the Playwright owner thread, so reading the live list would let
+        # it grow between `all_comments[start:]` and `len(all_comments)` and
+        # persist a cursor past comments this call never returned — those are
+        # never scored and never re-read on a later poll (silent lead loss).
+        with self._queue_lock:
+            all_comments = list(self._comments_by_reel.get(reel_id, []))
+        total = len(all_comments)
         # Count watermark = robust "new since last poll" that survives re-scrapes.
         start = int(since_cursor) if (since_cursor and since_cursor.isdigit()) else 0
         new = all_comments[start:]
         log.debug("CDP fetched comments · reel=%s new=%d total=%d",
-                  reel_id, len(new), len(all_comments))
-        return new, str(len(all_comments))
+                  reel_id, len(new), total)
+        return new, str(total)
 
     def _open_comments_and_paginate(self) -> None:
         """Open the comment view of the centered reel (a read action) and scroll

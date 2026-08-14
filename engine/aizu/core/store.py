@@ -13,9 +13,11 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import os
 import sqlite3
 import time
+import uuid
 from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
@@ -32,7 +34,7 @@ if TYPE_CHECKING:
 
 logger = get_logger(__name__)
 
-SCHEMA_VERSION = 22  # v2: platform dimension; v3: panel ops tables; v4: campaign_briefs; v5: auth; v6: lead Kanban (status set + audit log + notes); v7: multi-tenancy (organizations + memberships role + invites; per-org settings/integrations); v8: encrypted per-(org, platform) integration secrets; v9: security audit log; v10: run_events live activity feed; v11: account warming (accounts + state_changes + campaign_accounts + account_secrets; sessions.engine_mode/account_id, health_flags.account_id, actions.account_id); v12: campaign lifecycle controls (campaign_meta.archived_at/paused_reason + fixed-cadence schedule cols: schedule_enabled/kind/dow/hour/minute/tz, next_run_at, last_scheduled_run_at, schedule_target_leads, schedule_duration_minutes); v13: billing subscriptions (Polar + provider-agnostic, soft run-cap); v14: distributed workers pool (token-based registry + presence; status DERIVED not stored); v15: superadmin plane (platform_admins + platform_admin_sessions with impersonation principal + hash-chained admin_audit_log + DB-backed admin_login_throttle); v16: platform_settings (superadmin execution_backend switch — route runs to in-process RunManager vs distributed worker fleet); v17: model comparison (superadmin-switchable LLM fan-out — matches.found_by_models + model_comparison_log; platform_settings.model_comparison_enabled); v18: Uzbek-only local STT transcript (seen_reels.transcript/transcript_lang/transcript_ms; sessions.transcriptions); v19: video-analysis tier (seen_reels.video_analyzed/video_analysis_summary; sessions.video_analyses); v20: session liveness heartbeat (sessions.last_activity_at/pid) so SessionWatchdog can detect a wedged-but-never-excepting session; v21: self-healing anti-bot cooldown (session_cooldowns: per-(campaign_id, platform) attempt counter + exponential-backoff cooldown_until for a SOFT halt, gap #1); v22: per-worker enrolment tokens (worker_enrolment_tokens: single-use, admin-minted, server-assigned org/pool scope for worker enrolment, closing gap B8 — shared bootstrap token could self-declare pool-wide capability)
+SCHEMA_VERSION = 23  # v2: platform dimension; v3: panel ops tables; v4: campaign_briefs; v5: auth; v6: lead Kanban (status set + audit log + notes); v7: multi-tenancy (organizations + memberships role + invites; per-org settings/integrations); v8: encrypted per-(org, platform) integration secrets; v9: security audit log; v10: run_events live activity feed; v11: account warming (accounts + state_changes + campaign_accounts + account_secrets; sessions.engine_mode/account_id, health_flags.account_id, actions.account_id); v12: campaign lifecycle controls (campaign_meta.archived_at/paused_reason + fixed-cadence schedule cols: schedule_enabled/kind/dow/hour/minute/tz, next_run_at, last_scheduled_run_at, schedule_target_leads, schedule_duration_minutes); v13: billing subscriptions (Polar + provider-agnostic, soft run-cap); v14: distributed workers pool (token-based registry + presence; status DERIVED not stored); v15: superadmin plane (platform_admins + platform_admin_sessions with impersonation principal + hash-chained admin_audit_log + DB-backed admin_login_throttle); v16: platform_settings (superadmin execution_backend switch — route runs to in-process RunManager vs distributed worker fleet); v17: model comparison (superadmin-switchable LLM fan-out — matches.found_by_models + model_comparison_log; platform_settings.model_comparison_enabled); v18: Uzbek-only local STT transcript (seen_reels.transcript/transcript_lang/transcript_ms; sessions.transcriptions); v19: video-analysis tier (seen_reels.video_analyzed/video_analysis_summary; sessions.video_analyses); v20: session liveness heartbeat (sessions.last_activity_at/pid) so SessionWatchdog can detect a wedged-but-never-excepting session; v21: self-healing anti-bot cooldown (session_cooldowns: per-(campaign_id, platform) attempt counter + exponential-backoff cooldown_until for a SOFT halt, gap #1); v22: per-worker enrolment tokens (worker_enrolment_tokens: single-use, admin-minted, server-assigned org/pool scope for worker enrolment, closing gap B8 — shared bootstrap token could self-declare pool-wide capability); v23: worker launch preflight (workers.preflight_json — the box's own self-check summary, carried on register/heartbeat and surfaced in the fleet console so a box that is online-but-cannot-work says WHY, ledger F9/F10/F12)
 
 
 def _now_iso() -> str:
@@ -618,9 +620,15 @@ CREATE TABLE IF NOT EXISTS workers (
     worker_token_hash TEXT NOT NULL,            -- SHA-256 at rest (never plaintext)
     token_expires_at  REAL,                     -- NULL = no expiry (long-lived; rotation is Phase 4)
     revoked_at        REAL,                     -- NULL = active; set = revoked
-    enrolment_scope_kind TEXT                   -- v22: 'org'|'pool' if enrolled via a token, else
+    enrolment_scope_kind TEXT,                  -- v22: 'org'|'pool' if enrolled via a token, else
                                                  -- NULL (legacy/self-declared). Sticky across
                                                  -- re-register — see register_worker.
+    preflight_json    TEXT                      -- v23: the box's own launch self-check summary
+                                                 -- {ok, blocking, enforced, ranAt, failed[]}, carried
+                                                 -- on register/heartbeat. DIAGNOSTIC ONLY — never an
+                                                 -- auth/dispatch input; a blocking box withholds its
+                                                 -- capabilities instead. NULL = a pre-v23 sidecar
+                                                 -- that has never reported one (F9/F10/F12).
 );
 CREATE INDEX IF NOT EXISTS idx_workers_org   ON workers(org_id);
 CREATE INDEX IF NOT EXISTS idx_workers_token ON workers(worker_token_hash);
@@ -861,6 +869,22 @@ DEFAULT_JOB_MAX_ATTEMPTS = 5
 # stops at its lead target (10–100), so this is generous headroom, not a real ceiling.
 MAX_SYNC_LEADS = 500
 
+# Max spend rollup rows synced back to the cloud in a single ack/nack (B9 fleet spend
+# roll-up). The worker GROUPs its delta by (stage, model) before shipping it, so one
+# run's whole spend collapses into a handful of rows — 50 is generous headroom for the
+# stage×model matrix, not a per-call ceiling. Excess is dropped + logged, never silent.
+MAX_SYNC_SPEND_ROWS = 50
+
+# Stable per-database identity (platform_settings key), minted lazily on first read.
+# Its ONLY job is letting the ack/nack spend roll-up tell "the worker wrote its spend
+# rows into a DIFFERENT database from mine" (roll them up) from "the worker's db_path
+# IS my db_path" (skip — the rows are already in this very table). AIZU_DB defaults to
+# the same `aizu.db` filename the bridge uses, and the same-box dev/desktop topology
+# genuinely shares one file, so this case is common, not theoretical — and spend_log
+# has an AUTOINCREMENT PK with no unique key, so a second insert would silently DOUBLE
+# a campaign's spend (halving its effective cap) rather than being idempotent.
+DATABASE_ID_KEY = "db_id"
+
 # v16 platform-wide execution backend (superadmin switch). `in_process` runs the engine
 # on the cloud box via RunManager (the historical default); `distributed` enqueues a job
 # for the worker fleet instead. Stored in platform_settings under EXECUTION_BACKEND_KEY.
@@ -902,12 +926,20 @@ def _lead_str(value: Any) -> Optional[str]:
 
 
 def _lead_float(value: Any, default: Optional[float]) -> Optional[float]:
-    """Coerce an untrusted synced-lead field to a float, or `default` on anything odd."""
+    """Coerce an untrusted synced-lead field to a float, or `default` on anything odd.
+
+    OverflowError is caught alongside TypeError/ValueError and is NOT theoretical: JSON
+    has no integer bound, so a worker (or anything that can reach an ack/nack/sync body)
+    can send an integer literal too large for a C double — `float(10**400)` raises
+    OverflowError, which would escape this coercion and roll back the whole ack/nack
+    transaction it runs inside. Every caller here is best-effort accounting/display
+    (`score`, `capturedAt`, spend `usd`/`at`, run-event `seq`/`createdAt`): a junk value
+    must degrade to `default`, never to a 500 that strands a leased job."""
     if isinstance(value, bool) or value is None:
         return default
     try:
         return float(value)
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
         return default
 
 
@@ -1030,6 +1062,20 @@ def _decode_capabilities(raw: Optional[str]) -> list:
     return decoded if isinstance(decoded, list) else []
 
 
+def _decode_preflight(raw: Optional[str]) -> Optional[dict]:
+    """Tolerantly decode the v23 `preflight_json` blob to a dict, or None. NEVER raises
+    — a corrupt or non-dict blob yields None, which every reader renders as "no
+    preflight reported" (same external-boundary discipline as _decode_capabilities). A
+    diagnostic field must never be able to break a fleet read."""
+    if not raw:
+        return None
+    try:
+        decoded = json.loads(raw)
+    except (json.JSONDecodeError, TypeError):
+        return None
+    return decoded if isinstance(decoded, dict) else None
+
+
 def _decode_job_spec(raw: Optional[str]) -> dict:
     """Tolerantly decode a job's `spec` JSON to a dict (never raises; a corrupt blob
     yields {} so a single bad row can't crash a lease scan)."""
@@ -1086,7 +1132,8 @@ def _enrolment_token_row_to_dict(row) -> dict[str, Any]:
     }
 
 
-def _job_row_to_lease(row, *, lease_expires_at: float) -> dict[str, Any]:
+def _job_row_to_lease(row, *, lease_expires_at: float,
+                      prior_spend_usd: float = 0.0) -> dict[str, Any]:
     """The lease payload the worker plane returns — the JobSpec fields the sidecar's
     ``JobSpec.from_payload`` consumes, flattened from the row + its decoded spec. The
     `spec` blob holds the run knobs (target_leads/duration/engine_mode/soul_text/
@@ -1101,7 +1148,14 @@ def _job_row_to_lease(row, *, lease_expires_at: float) -> dict[str, Any]:
     decrypted per-org secret must never ride the lease response OR the `spec` column it
     is read from (server._dispatch_run_to_fleet no longer bakes one there either) — a
     worker instead pulls its job's credential fresh, per request, via the lease-holder-
-    gated POST /api/worker/jobs/{id}/credential (Handler._handle_job_credential)."""
+    gated POST /api/worker/jobs/{id}/credential (Handler._handle_job_credential).
+
+    `priorSpendUsd` is NOT read from the spec — it is resolved LIVE at lease time from
+    the cloud spend_log (see `lease_one_job`), because a value baked at enqueue would be
+    stale by the time a queued job is picked up. It closes B9: without it a box's spend
+    cap silently resets per machine, since the cap is checked against whichever DB the
+    process opened. It MUST be whitelisted here, not merely computed — this dict is the
+    literal HTTP body a remote worker's POST /api/worker/lease receives (B4)."""
     spec = _decode_job_spec(row["spec"])
     return {
         "id": row["id"],
@@ -1115,6 +1169,7 @@ def _job_row_to_lease(row, *, lease_expires_at: float) -> dict[str, Any]:
         "soulText": spec.get("soul_text"),
         "campaignBrief": spec.get("campaign_brief"),
         "runId": spec.get("run_id"),
+        "priorSpendUsd": prior_spend_usd,
         "leaseExpiresAt": lease_expires_at,
     }
 
@@ -1292,6 +1347,12 @@ class Store:
             # register_worker/the register handler treat as "legacy/self-declared"
             # (BUILD-PLAN B8 fix — see server.py._handle_worker_register).
             self._add_column_if_missing(c, "workers", "enrolment_scope_kind TEXT")
+            # v23: preflight_json on an upgrading `workers` table (fresh DBs get it from
+            # SCHEMA already). Purely additive — existing rows take NULL, which every
+            # reader treats as "this box has never reported a preflight" (a pre-v23
+            # sidecar), NOT as a failure. Self-healing per ledger D4: the ADD COLUMN
+            # runs on every open, so a DB restored from an older backup repairs itself.
+            self._add_column_if_missing(c, "workers", "preflight_json TEXT")
             # org_id indexes — created now (not in SCHEMA) because the columns may be
             # added by the v7 migration above, after executescript ran.
             c.execute("CREATE INDEX IF NOT EXISTS idx_users_org ON users(org_id)")
@@ -2047,6 +2108,67 @@ class Store:
         ).fetchone()
         return float(row["t"])
 
+    def max_spend_id(self, campaign_id: str) -> int:
+        """The high-water mark of `spend_log.id` FOR ONE CAMPAIGN — the cursor a worker
+        takes BEFORE a run so it can ship exactly that run's delta on ack/nack (B9).
+
+        An id cursor, NOT a run_id join: a requeued attempt REUSES the job's run_id
+        (`nack_job` reads it back out of the unchanged spec), so a run-scoped query would
+        re-report attempt 1's rows on a same-box retry.
+
+        SCOPED TO THE CAMPAIGN, matching `spend_since`'s own `WHERE campaign_id=?`, so
+        an unrelated campaign's write can never move this campaign's mark. NOTE that the
+        cursor is NOT what keeps two overlapping attempts on ONE campaign from
+        re-reporting each other's rows — no choice of mark can, since the second
+        attempt's rows land inside the first's window either way. `spend_since`'s
+        `run_id` filter is what does that; see its docstring. The old docstring here
+        claimed `JobSpec.lock_key()` made overlap impossible, which is false: that key is
+        `f"{org_id}-{platform}-{account or '_default'}"` — per (org, PLATFORM), not per
+        campaign."""
+        row = self._conn.execute(
+            "SELECT COALESCE(MAX(id),0) AS m FROM spend_log WHERE campaign_id=?",
+            (campaign_id,)).fetchone()
+        return int(row["m"])
+
+    def spend_since(self, campaign_id: str, after_id: int,
+                    run_id: Optional[str] = None) -> list[dict[str, Any]]:
+        """This campaign's spend rows newer than `after_id`, rolled up per (stage,
+        model) — the compact delta a worker ships back on ack/nack (see
+        `max_spend_id`). `at` is the EARLIEST created_at in each group so the cloud can
+        stamp the rollup row near when the money was actually spent rather than at ack
+        time (otherwise `spend_by_day`, which buckets on created_at, puts a whole run's
+        spend on the ack day and skews a run that spanned midnight).
+
+        `run_id` EXCLUDES rows that provably belong to a DIFFERENT run, and without it
+        the id cursor alone is not enough. Two jobs for the SAME campaign on DIFFERENT
+        platforms take different `JobSpec.lock_key()` single-flight locks (the key is
+        `org-platform-account`, i.e. per platform, NOT per campaign), so on a box running
+        more than one sidecar against one AIZU_DB they overlap — and each attempt's
+        window then contains the other's rows. Narrowing the cursor cannot fix that: B's
+        rows land INSIDE A's window no matter where A's mark is. Since the cloud
+        `spend_log` has an AUTOINCREMENT PK and no unique key, both reports are inserted
+        and the campaign's spend is inflated (its effective cap correspondingly halved).
+
+        Rows with NO session (an LLM call made outside a session) are always KEPT: they
+        cannot be attributed to another run, and dropping them would lose real money from
+        the roll-up. Rows of a PRIOR ATTEMPT of this same run are kept too — a requeue
+        reuses the run_id, and with the sidecar's parked cursor those dollars have not
+        been banked yet and must still be reported."""
+        sql = ["""SELECT stage, model, COALESCE(SUM(usd),0) AS usd, MIN(created_at) AS at
+                    FROM spend_log
+                   WHERE campaign_id=? AND id>?"""]
+        params: list[Any] = [campaign_id, int(after_id)]
+        if run_id:
+            sql.append("""AND (session_id IS NULL
+                               OR session_id NOT IN (
+                                   SELECT session_id FROM sessions
+                                    WHERE run_id IS NOT NULL AND run_id<>?))""")
+            params.append(run_id)
+        sql.append("GROUP BY stage, model HAVING SUM(usd) > 0")
+        rows = self._conn.execute(" ".join(sql), tuple(params)).fetchall()
+        return [{"stage": r["stage"], "model": r["model"],
+                 "usd": float(r["usd"]), "at": r["at"]} for r in rows]
+
     # ----- engagement actions -----
     def log_action(self, campaign_id: str, action_type: str, *,
                    reel_id: Optional[str] = None,
@@ -2694,8 +2816,22 @@ class Store:
 
     def per_campaign_rollup(self, org_id: Optional[int] = None) -> list[dict[str, Any]]:
         """Per-campaign lead/spend rollup, scoped to `org_id` when given (panel use).
-        Filtering matches by org_id yields only this org's campaigns, so the per-cid
-        spend lookups below stay within the org without a second org filter."""
+
+        SPEND IS READ FROM `spend_log`, never inferred from the existence of leads.
+        Building the row set from `matches` alone silently DROPPED every campaign
+        that had burned budget without producing a match, and the panel then
+        defaulted the missing row to `spent: 0` — while `/api/reports`, which sums
+        `spend_by_stage` over the org's campaign ids, reported the same money. Two
+        payloads, one DB, contradicting each other; budget caps looked untouched.
+
+        Org scoping: `matches` carries `org_id` (stamped from the campaign), but
+        `spend_log` does NOT, so a lead-less campaign is attributed to its org
+        through `campaign_meta`. A campaign whose matches are org-stamped is kept
+        even if it has no `campaign_meta` row, preserving the previous behaviour.
+
+        Rows are ordered by campaign id. Callers key them by `campaignId`, so the
+        order is for determinism, not meaning.
+        """
         win_in = ",".join(f"'{s}'" for s in sorted(WIN_STATUS))
         q = (f"SELECT m.campaign_id AS campaign_id, COUNT(*) AS leads, "
              f"SUM(CASE WHEN m.status IN ({win_in}) THEN 1 ELSE 0 END) AS won "
@@ -2705,15 +2841,22 @@ class Store:
             q += " WHERE m.org_id=?"
             args.append(org_id)
         q += " GROUP BY m.campaign_id"
-        rows = self._conn.execute(q, args).fetchall()
+        leads = {r["campaign_id"]: r for r in self._conn.execute(q, args).fetchall()}
+        spend = {r["campaign_id"]: float(r["t"]) for r in self._conn.execute(
+            "SELECT campaign_id, COALESCE(SUM(usd),0) AS t FROM spend_log "
+            "GROUP BY campaign_id").fetchall()}
+        cids = set(leads) | set(spend)
+        if org_id is not None:
+            owned = {r["campaign_id"] for r in self._conn.execute(
+                "SELECT campaign_id FROM campaign_meta WHERE org_id=?", (org_id,)).fetchall()}
+            cids = {cid for cid in cids if cid in leads or cid in owned}
         out = []
-        for r in rows:
-            cid = r["campaign_id"]
-            spend = self._conn.execute(
-                "SELECT COALESCE(SUM(usd),0) AS t FROM spend_log WHERE campaign_id=?",
-                (cid,)).fetchone()["t"]
-            out.append({"campaignId": cid, "leads": int(r["leads"]),
-                        "won": int(r["won"]), "spend": float(spend)})
+        for cid in sorted(cids):
+            r = leads.get(cid)
+            out.append({"campaignId": cid,
+                        "leads": int(r["leads"]) if r else 0,
+                        "won": int(r["won"]) if r else 0,
+                        "spend": spend.get(cid, 0.0)})
         return out
 
     # ----- v3 campaign_meta (panel-editable overlay) -----
@@ -3164,6 +3307,7 @@ class Store:
         capabilities: Optional[list] = None,
         token_expires_at: Optional[float] = None,
         enrolment_scope_kind: Optional[str] = None,
+        preflight: Optional[dict] = None,
     ) -> dict[str, Any]:
         """Idempotent register/re-register by stable worker id (UPSERT on PK).
 
@@ -3185,13 +3329,23 @@ class Store:
         capabilities on every subsequent call — see server.py's
         _handle_worker_register docstring.
 
+        `preflight` (v23) is the box's own launch self-check summary — JSON-encoded
+        verbatim, DIAGNOSTIC ONLY, never read back into an auth or dispatch decision
+        (a box that cannot work says so by registering with EMPTY capabilities; this
+        field only says WHY, which is the whole point when nobody can SSH into the box
+        — ledger F12). Register REPLACES it, including with NULL: a register is a full
+        re-statement of the box's identity, exactly like `capabilities`, so a downgrade
+        to a pre-v23 sidecar clears a stale report rather than leaving a lie on screen.
+        The heartbeat, by contrast, only ever refreshes it (COALESCE).
+
         Returns the stored row shape (NO token, NO hash):
             {"id", "orgId", "displayName", "host", "os", "agentVersion",
              "maxSessions", "currentSessions", "capabilities", "registeredAt",
-             "lastHeartbeatAt", "tokenExpiresAt", "revokedAt"}.
+             "lastHeartbeatAt", "tokenExpiresAt", "revokedAt", "preflight"}.
         """
         now = time.time()
         caps_json = json.dumps(capabilities or [])
+        preflight_json = json.dumps(preflight) if preflight is not None else None
         token_hash = hash_session_token(token)
         with self._tx() as c:
             c.execute(
@@ -3199,8 +3353,9 @@ class Store:
                        (id, org_id, display_name, host, os, agent_version,
                         last_heartbeat_at, registered_at, max_sessions,
                         current_sessions, capabilities, worker_token_hash,
-                        token_expires_at, revoked_at, enrolment_scope_kind)
-                   VALUES (?,?,?,?,?,?, ?,?,?, 0, ?, ?, ?, NULL, ?)
+                        token_expires_at, revoked_at, enrolment_scope_kind,
+                        preflight_json)
+                   VALUES (?,?,?,?,?,?, ?,?,?, 0, ?, ?, ?, NULL, ?, ?)
                    ON CONFLICT(id) DO UPDATE SET
                        org_id            = excluded.org_id,
                        display_name      = excluded.display_name,
@@ -3215,10 +3370,11 @@ class Store:
                        token_expires_at  = excluded.token_expires_at,
                        revoked_at        = NULL,
                        enrolment_scope_kind = COALESCE(excluded.enrolment_scope_kind,
-                                                        workers.enrolment_scope_kind)""",
+                                                        workers.enrolment_scope_kind),
+                       preflight_json    = excluded.preflight_json""",
                 (worker_id, org_id, display_name, host, os, agent_version,
                  now, now, int(max_sessions), caps_json, token_hash,
-                 token_expires_at, enrolment_scope_kind),
+                 token_expires_at, enrolment_scope_kind, preflight_json),
             )
             # Read back canonical timestamps: on a re-register the ON CONFLICT clause
             # PRESERVES the original registered_at, so the returned shape must mirror
@@ -3240,6 +3396,7 @@ class Store:
             "lastHeartbeatAt": stored["last_heartbeat_at"],
             "tokenExpiresAt": token_expires_at,
             "revokedAt": None,
+            "preflight": preflight,
         }
 
     def record_worker_heartbeat(
@@ -3247,30 +3404,35 @@ class Store:
         *,
         worker_id: str,
         current_sessions: Optional[int] = None,
+        preflight: Optional[dict] = None,
     ) -> bool:
         """Presence heartbeat: stamp last_heartbeat_at = now() on the worker's OWN row
         only (WHERE id=? AND revoked_at IS NULL). Optionally update current_sessions
-        when the body carries a load number. Returns True iff exactly one live row was
+        when the body carries a load number, and preflight_json (v23) when the body
+        carries a self-check summary. Returns True iff exactly one live row was
         updated (rowcount == 1); False when the worker is unknown or revoked — the
         caller maps False to 404/401. Touches NO other worker's row."""
-        # Two fully-hardcoded statements rather than an f-string-assembled SET clause:
+        # ONE fully-hardcoded statement rather than an f-string-assembled SET clause:
         # there is NO dynamic SQL surface here, so a future field added to a `sets`
         # list can never become an injection point (security review M5). All values
-        # remain parameterised.
+        # remain parameterised. v23 collapsed the previous two-branch form into this
+        # single COALESCE statement instead of adding a third and fourth branch — an
+        # omitted field (NULL param) keeps whatever is stored, which is exactly what
+        # "the body didn't carry it" means for both current_sessions and preflight.
         now = time.time()
+        preflight_json = json.dumps(preflight) if preflight is not None else None
         with self._tx() as c:
-            if current_sessions is None:
-                cur = c.execute(
-                    "UPDATE workers SET last_heartbeat_at = ? "
-                    "WHERE id = ? AND revoked_at IS NULL",
-                    (now, worker_id),
-                )
-            else:
-                cur = c.execute(
-                    "UPDATE workers SET last_heartbeat_at = ?, current_sessions = ? "
-                    "WHERE id = ? AND revoked_at IS NULL",
-                    (now, int(current_sessions), worker_id),
-                )
+            cur = c.execute(
+                "UPDATE workers "
+                "   SET last_heartbeat_at = ?, "
+                "       current_sessions  = COALESCE(?, current_sessions), "
+                "       preflight_json    = COALESCE(?, preflight_json) "
+                " WHERE id = ? AND revoked_at IS NULL",
+                (now,
+                 None if current_sessions is None else int(current_sessions),
+                 preflight_json,
+                 worker_id),
+            )
             return cur.rowcount == 1
 
     def get_worker_by_token(self, token: str) -> Optional[dict[str, Any]]:
@@ -3282,7 +3444,12 @@ class Store:
         Returns the authenticated worker identity (NO hash):
             {"id", "orgId", "capabilities", "maxSessions", "currentSessions",
              "agentVersion", "enrolmentScopeKind"}
-        or None."""
+        or None.
+
+        v23 deliberately does NOT add `preflight` here: this shape is the AUTH
+        identity, not a console view, and nothing on the auth/lease path may branch on
+        a self-reported diagnostic (a box withholds its capabilities to stop being
+        leased to — that is the only mechanism). Stated so nobody "helpfully" adds it."""
         if not token:
             return None
         row = self._conn.execute(
@@ -3315,7 +3482,12 @@ class Store:
             {"id", "orgId", "displayName", "host", "os", "agentVersion",
              "maxSessions", "currentSessions", "capabilities",
              "registeredAt", "lastHeartbeatAt", "lastSeenAgeSec",
-             "status", "revokedAt", "currentJob"}.
+             "status", "revokedAt", "currentJob", "preflight"}.
+        `preflight` (v23) is the box's last reported launch self-check
+        `{ok, blocking, enforced, ranAt, failed[]}` or None for a box that has never
+        sent one (a pre-v23 sidecar). It is what turns "online with 0 capabilities"
+        into "online, token_persistence FAIL, here is the remedy" for an admin who
+        cannot SSH into that PC (F12). `readiness.fleet_readiness` also consumes it.
         `currentJob` is the leased/running job the box is executing right now (or None):
         `{"jobId","campaignId","platform","status","runId","leaseExpiresAt"}` — so the
         console shows WHAT each worker is doing, not just that it is online. A revoked
@@ -3326,7 +3498,8 @@ class Store:
         rows = self._conn.execute(
             """SELECT id, org_id, display_name, host, os, agent_version,
                       last_heartbeat_at, registered_at, max_sessions,
-                      current_sessions, capabilities, token_expires_at, revoked_at
+                      current_sessions, capabilities, token_expires_at, revoked_at,
+                      preflight_json
                  FROM workers
                 ORDER BY registered_at DESC, id ASC""",
         ).fetchall()
@@ -3350,6 +3523,7 @@ class Store:
                 "status": derive_worker_status(last_hb, now_v),
                 "revokedAt": row["revoked_at"],
                 "currentJob": current_by_worker.get(row["id"]),
+                "preflight": _decode_preflight(row["preflight_json"]),
             })
         return out
 
@@ -3395,6 +3569,18 @@ class Store:
                 (now_v, worker_id),
             )
             return cur.rowcount == 1
+
+    def is_worker_revoked(self, worker_id: str) -> bool:
+        """True iff a worker row EXISTS for ``worker_id`` and carries a revoked_at.
+
+        Read by the register handler's legacy-bootstrap branch (ledger B10): a box whose
+        token was retired must not be able to walk back in on the shared bootstrap secret,
+        because `register_worker` UPSERTs `revoked_at = NULL` and would silently undo the
+        revocation an operator just performed. An UNKNOWN worker returns False — a fresh
+        box, or one whose row a DB reset removed (C3), still enrols normally. Read-only."""
+        row = self._conn.execute(
+            "SELECT revoked_at FROM workers WHERE id = ?", (worker_id,)).fetchone()
+        return row is not None and row["revoked_at"] is not None
 
     # ----- v22 worker enrolment tokens (BUILD-PLAN B8 fix) -----
     # Per-worker, single-use, admin-minted tokens that carry a SERVER-ASSIGNED scope
@@ -3694,7 +3880,16 @@ class Store:
                     (worker_id, now_v + ttl, now_v, row["id"], worker_id, now_v),
                 )
                 if cur.rowcount == 1:
-                    return _job_row_to_lease(row, lease_expires_at=now_v + ttl)
+                    # B9: ship the campaign's cloud-side spend total WITH the lease, on
+                    # the same _tx_immediate as the claim, so the box can subtract it
+                    # from its box-local AIZU_SPEND_CAP instead of starting at $0.
+                    # Resolved here (not baked at enqueue) because a queued job may sit
+                    # while other boxes spend against the same campaign.
+                    prior = c.execute(
+                        "SELECT COALESCE(SUM(usd),0) AS t FROM spend_log WHERE campaign_id=?",
+                        (row["campaign_id"],)).fetchone()
+                    return _job_row_to_lease(row, lease_expires_at=now_v + ttl,
+                                             prior_spend_usd=float(prior["t"]))
         return None
 
     def extend_lease(
@@ -3724,16 +3919,23 @@ class Store:
             return cur.rowcount == 1
 
     def ack_job(self, *, job_id: str, worker_id: str,
-                summary: dict, leads: Optional[list[dict]] = None) -> bool:
+                summary: dict, leads: Optional[list[dict]] = None,
+                spend: Optional[list[dict]] = None,
+                worker_db_id: Optional[str] = None) -> bool:
         """Mark a leased job `done`, store its result summary, and persist the captured
-        lead BODIES (`leads`) — ALL IN ONE TRANSACTION so a crash can never leave a job
-        `done` with its leads lost (Phase-3 atomicity fix). Idempotent: a second ack (row
-        already terminal or owned by no one) updates nothing and returns False, so the
-        sync runs exactly once. Every lead is FORCED under the job's own campaign/org
+        lead BODIES (`leads`) plus the run's SPEND rollup (`spend`, B9) — ALL IN ONE
+        TRANSACTION so a crash can never leave a job `done` with its leads or its spend
+        lost (Phase-3 atomicity fix). Idempotent: a second ack (row already terminal or
+        owned by no one) updates nothing and returns False, so the sync runs exactly
+        once. Every lead and every spend row is FORCED under the job's own campaign/org
         (BOLA guard). The `sessions` mirror is observational (panel display only) and
         stays best-effort OUTSIDE the transaction — losing it never loses lead data."""
         now = time.time()
         session_id = summary.get("session_id") or summary.get("sessionId")
+        # Warm the (possibly freshly minted) local database identity BEFORE the tx —
+        # see database_id(): minting inside would nest a _tx() and commit early.
+        if spend and worker_db_id:
+            self.database_id()
         with self._tx() as c:
             cur = c.execute(
                 """UPDATE jobs
@@ -3751,6 +3953,8 @@ class Store:
             # lead is committed, or the whole ack rolls back and the job stays leased
             # for ReclaimManager to requeue. No partial 'done-but-leads-gone' window.
             self._sync_acked_leads(c, job, leads)
+            self._sync_acked_spend(c, job, spend, session_id=session_id,
+                                   worker_db_id=worker_db_id)
         self._mirror_acked_session(job, session_id, summary)
         return True
 
@@ -3823,6 +4027,71 @@ class Store:
         logger.info("lead sync: %d/%d leads upserted for campaign %s",
                     synced, len(rows), campaign_id)
 
+    def _sync_acked_spend(self, c: sqlite3.Cursor, job,
+                          spend: Optional[list[dict]], *,
+                          session_id: Optional[str] = None,
+                          worker_db_id: Optional[str] = None) -> None:
+        """Roll the worker-reported spend delta into the CLOUD `spend_log` on the
+        caller's cursor `c` (the ack/nack transaction) — B9.
+
+        Without this the cloud spend_log never sees a single fleet dollar: the only
+        writer of spend is `router._record` on the box, so a campaign's cap silently
+        restarted at $0 on every machine and the panel showed `spent` $0 / `cpl` None
+        for a fleet-run campaign. Rows are FORCED under the job's OWN campaign (org
+        stamped from that campaign — the same BOLA guard as `_sync_acked_leads`).
+
+        SHARED-DATABASE GUARD (the reason `worker_db_id` exists): the worker's
+        `AIZU_DB` defaults to the SAME `aizu.db` filename the bridge uses, and the
+        same-box dev/desktop topology genuinely points both at one file. There the
+        child ALREADY wrote these rows into this very table, and spend_log is an
+        append-only AUTOINCREMENT table with no unique key — so unlike
+        `_sync_acked_leads` (idempotent via the matches PK) a second insert would
+        silently DOUBLE the campaign's spend and trip its cap at half the budget. When
+        the reported database identity is ours, the rollup is skipped entirely.
+
+        A malformed/zero/non-finite row is SKIPPED, never raised on — losing a
+        best-effort accounting row must not roll back a legitimate ack/nack."""
+        if not spend or job is None or not isinstance(spend, list):
+            return
+        if worker_db_id and worker_db_id == self.database_id():
+            logger.debug("spend sync skipped: worker reports our own database id")
+            return
+        campaign_id = job["campaign_id"]
+        if self.org_for_campaign(campaign_id) is None:
+            logger.warning("spend sync skipped: job %s campaign %s resolves to no org",
+                           job["id"], campaign_id)
+            return
+        rows = spend[:MAX_SYNC_SPEND_ROWS]
+        if len(spend) > MAX_SYNC_SPEND_ROWS:
+            logger.warning(
+                "spend sync capped at %d of %d for campaign %s (excess dropped)",
+                MAX_SYNC_SPEND_ROWS, len(spend), campaign_id)
+        now = time.time()
+        synced, total = 0, 0.0
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            usd = _lead_float(row.get("usd"), None)
+            if usd is None or not math.isfinite(usd) or usd <= 0:
+                continue  # zero/negative/NaN spend carries no information — drop it
+            stage = _lead_str(row.get("stage")) or "fleet"
+            model = _lead_str(row.get("model"))
+            at = _lead_float(
+                row.get("at") or row.get("createdAt") or row.get("created_at"), None)
+            # Clamp to now: `spend_by_day` buckets on created_at, so an honest earlier
+            # timestamp keeps a midnight-spanning run on the right day, while a bogus
+            # future one can never park spend in a day that has not happened.
+            created_at = min(at, now) if (at is not None and math.isfinite(at)
+                                          and at > 0) else now
+            c.execute(
+                """INSERT INTO spend_log(campaign_id, session_id, stage, model, usd, created_at)
+                   VALUES(?,?,?,?,?,?)""",
+                (campaign_id, session_id, stage, model, float(usd), created_at))
+            synced += 1
+            total += float(usd)
+        logger.info("spend sync: %d/%d rows ($%.4f) rolled up for campaign %s",
+                    synced, len(rows), total, campaign_id)
+
     # ----- v16 platform settings (superadmin execution-backend switch) -----
 
     def get_platform_setting(self, key: str, default: Optional[str] = None) -> Optional[str]:
@@ -3843,6 +4112,36 @@ class Store:
                      value=excluded.value, updated_at=excluded.updated_at,
                      updated_by=excluded.updated_by""",
                 (key, value, now, by))
+
+    def database_id(self) -> str:
+        """This database's stable identity (see DATABASE_ID_KEY), minted on first read.
+
+        Lives in `platform_settings`, which is base DDL — so EVERY Store has it,
+        worker-local ones included, with no migration. Cached per Store instance: the
+        ack/nack spend roll-up compares it inside a write transaction, and minting it
+        there would open a NESTED `_tx()` whose commit would prematurely commit the
+        ack's own UPDATE. `ack_job`/`nack_job` therefore warm this BEFORE opening their
+        transaction; the in-transaction call is then always a cache hit."""
+        cached = getattr(self, "_database_id", None)
+        if cached:
+            return cached
+        existing = self.get_platform_setting(DATABASE_ID_KEY)
+        if not existing:
+            # DO NOTHING, not set_platform_setting's DO UPDATE: in the shared-db
+            # topology the worker's Store and the bridge's Store are the SAME file and
+            # may mint concurrently. First writer must win — a last-writer upsert would
+            # leave the two processes holding different ids, defeating the guard exactly
+            # when it matters. Re-read afterwards so we adopt whoever won.
+            with self._tx() as c:
+                c.execute(
+                    """INSERT INTO platform_settings(key, value, updated_at, updated_by)
+                       VALUES(?,?,?,NULL) ON CONFLICT(key) DO NOTHING""",
+                    (DATABASE_ID_KEY, uuid.uuid4().hex, time.time()))
+            existing = self.get_platform_setting(DATABASE_ID_KEY)
+            if not existing:  # unreachable in practice; never cache/return an empty id
+                raise RuntimeError("could not establish a database id")
+        self._database_id = existing
+        return existing
 
     def execution_backend(self) -> str:
         """The active run execution backend — `in_process` (default) or `distributed`.
@@ -3988,16 +4287,33 @@ class Store:
     def nack_job(self, *, job_id: str, worker_id: str, reason: str,
                  retry_after_at: Optional[float] = None,
                  poison: bool = False,
+                 spend: Optional[list[dict]] = None,
+                 worker_db_id: Optional[str] = None,
                  now: Optional[float] = None) -> dict[str, Any]:
         """Fail a leased job: requeue with backoff, or dead-letter when attempts are
         exhausted or the failure is poison (won't fix itself on retry). Increments
         `attempts`. Returns ``{"outcome": "requeued"|"dead_lettered"|"ignored",
         "attempts", "retryAfterAt"}``. Idempotent on a terminal/foreign row (outcome
-        'ignored' — never double-counts attempts or resurrects a done job)."""
+        'ignored' — never double-counts attempts or resurrects a done job).
+
+        `spend` is the B9 rollup: a crashed/halted attempt spent real money before it
+        died, and a REQUEUE is unpinned (attempt 2 can land on a box that has neither
+        the local spend rows nor any cloud record of them), so the nack path must roll
+        spend up exactly like the ack path or up to DEFAULT_JOB_MAX_ATTEMPTS attempts'
+        worth of spend goes unaccounted. Nothing is recorded on the 'ignored' outcome —
+        that row is not this worker's to write against."""
         now_v = now if now is not None else time.time()
+        # See ack_job: warm the local database identity outside the transaction.
+        if spend and worker_db_id:
+            self.database_id()
         with self._tx() as c:
+            # id/org_id/campaign_id/platform are selected for _sync_acked_spend's BOLA
+            # forcing — reading them off the sqlite3.Row would otherwise raise IndexError
+            # inside the tx, 500 the nack, and strand the job leased until reclaim.
             row = c.execute(
-                "SELECT attempts, max_attempts, status, leased_by, spec FROM jobs WHERE id=?",
+                """SELECT id, org_id, campaign_id, platform, attempts, max_attempts,
+                          status, leased_by, spec
+                     FROM jobs WHERE id=?""",
                 (job_id,)).fetchone()
             if row is None or row["leased_by"] != worker_id \
                     or row["status"] not in ("leased", "running"):
@@ -4021,20 +4337,29 @@ class Store:
                 self._close_sessions_for_run(
                     c, run_id, now=now_v,
                     halt_reason="job dead-lettered: worker never closed session")
+                self._sync_acked_spend(c, row, spend, worker_db_id=worker_db_id)
                 return {"outcome": "dead_lettered", "attempts": attempts,
                         "retryAfterAt": None}
             ra = retry_after_at if retry_after_at is not None \
                 else now_v + nack_backoff_sec(attempts)
+            # Persist the reason on the REQUEUE branch too (B6): without it a job that
+            # fails its CDP probe leaves no record of why anywhere but the worker box's
+            # local log, and the panel renders a blank "Finished on the fleet". `result`
+            # is diagnostic only — `status`/`dead_lettered_at` remain the sole terminal
+            # signal, and a later ack_job overwrites this blob with the run summary.
             c.execute(
                 """UPDATE jobs
-                      SET status='queued', attempts=?, retry_after_at=?,
+                      SET status='queued', attempts=?, retry_after_at=?, result=?,
                           leased_by=NULL, lease_expires_at=NULL, updated_at=?
                     WHERE id=?""",
-                (attempts, ra, now_v, job_id),
+                (attempts, ra,
+                 json.dumps({"reason": reason, "poison": poison, "requeued": True}),
+                 now_v, job_id),
             )
             self._close_sessions_for_run(
                 c, run_id, now=now_v,
                 halt_reason="job requeued: prior attempt session abandoned")
+            self._sync_acked_spend(c, row, spend, worker_db_id=worker_db_id)
             return {"outcome": "requeued", "attempts": attempts, "retryAfterAt": ra}
 
     def get_job(self, job_id: str) -> Optional[dict[str, Any]]:

@@ -69,9 +69,12 @@ class LinkedInFeed(CDPFeedBase):
                 return  # comments arrived with no post open → cannot attribute, drop
             comments, _cursor = parse_comments(body)
             if comments:
-                bucket = self._comments_by_reel.setdefault(rid, [])
-                known = {c.comment_id for c in bucket}
-                bucket.extend(c for c in comments if c.comment_id not in known)
+                # Locked: written on the Playwright OWNER thread, read by
+                # fetch_comments on the caller's (see core/cdp.py's _queue_lock).
+                with self._queue_lock:
+                    bucket = self._comments_by_reel.setdefault(rid, [])
+                    known = {c.comment_id for c in bucket}
+                    bucket.extend(c for c in comments if c.comment_id not in known)
 
     # ---- discovery sources ----
     def _sources(self) -> list[str]:
@@ -124,13 +127,18 @@ class LinkedInFeed(CDPFeedBase):
         self._saw_data = False
         self._open_comments_and_paginate()
 
-        all_comments = self._comments_by_reel.get(reel_id, [])
+        # Snapshot under the lock so the returned comments and the persisted
+        # watermark describe the SAME list — see the instagram engine's
+        # fetch_comments for the full write-up.
+        with self._queue_lock:
+            all_comments = list(self._comments_by_reel.get(reel_id, []))
+        total = len(all_comments)
         # Count watermark = robust "new since last poll" that survives re-scrapes.
         start = int(since_cursor) if (since_cursor and since_cursor.isdigit()) else 0
         new = all_comments[start:]
         log.debug("LinkedIn fetched comments · post=%s new=%d total=%d",
-                  reel_id, len(new), len(all_comments))
-        return new, str(len(all_comments))
+                  reel_id, len(new), total)
+        return new, str(total)
 
     def _open_comments_and_paginate(self) -> None:
         """Click the post's comment control (loads the thread) and scroll/expand so

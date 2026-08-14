@@ -158,3 +158,52 @@ def test_single_platform_card_platforms_list_fallback():
     finally:
         store.close()
     assert card["platforms"] == ["youtube"]      # falls back to [platform]
+
+
+# --- Lead identity: the composite (campaign, platform, comment) key -----------
+
+from aizu.panel import _build_matches, lead_uid
+
+
+def test_lead_uid_is_injective_across_the_composite_key():
+    """Distinct (campaign, platform, comment) triples must never collide — including
+    when a part itself contains the delimiter or an escape character."""
+    assert lead_uid("c", "instagram", "x1") != lead_uid("c", "x", "x1")
+    assert lead_uid("a", "instagram", "x1") != lead_uid("b", "instagram", "x1")
+    # "a|b" + "c" must not collide with "a" + "b|c".
+    assert lead_uid("a|b", "instagram", "c") != lead_uid("a", "instagram", "b|c")
+    # A literal "%7C" in a part must not read back as an escaped delimiter.
+    assert lead_uid("a%7Cb", "instagram", "c") != lead_uid("a|b", "instagram", "c")
+
+
+def test_lead_payload_keeps_two_campaigns_leads_distinct():
+    """The same commenter under two campaigns (and the same comment id on two
+    platforms) stays THREE distinct panel rows, each carrying its own composite key.
+
+    The payload used to emit `"id": comment_id`, collapsing all three into one row —
+    so clicking a lead in campaign A opened, and wrote status to, campaign B's lead.
+    """
+    store = _bare_store()
+    try:
+        for cid, platform, user in (("camp-a", "instagram", "alice"),
+                                    ("camp-b", "instagram", "bob"),
+                                    ("camp-a", "x", "carol")):
+            store.upsert_match(campaign_id=cid, reel_id="r", comment_id="dup-1",
+                               username=user, text="t", lang="en", score=0.9,
+                               reason="r", extracted=None, tier="local",
+                               platform=platform)
+        rows = _build_matches(store, "camp-a") + _build_matches(store, "camp-b")
+    finally:
+        store.close()
+
+    assert len(rows) == 3
+    assert len({r["id"] for r in rows}) == 3, "each lead needs its own panel id"
+    by_id = {r["id"]: r for r in rows}
+    # Every id resolves back to exactly the record it came from — the write path
+    # reads campaignId/platform/commentId off the resolved row.
+    for r in rows:
+        assert by_id[lead_uid(r["campaignId"], r["platform"], r["commentId"])] is r
+    assert by_id[lead_uid("camp-b", "instagram", "dup-1")]["username"] == "bob"
+    assert by_id[lead_uid("camp-a", "x", "dup-1")]["username"] == "carol"
+    # The raw platform comment id is still carried for display/export.
+    assert {r["commentId"] for r in rows} == {"dup-1"}

@@ -30,6 +30,16 @@ from .core.pacing import PacingConfig, Pacer
 from .core.pause import pause_file_from_env, wait_while_paused
 from .core.router import OpenRouterRouter, build_router, env_flag, _parse_csv_env
 from .core.store import Store
+# 9333 is the canonical warmed-Chrome port repo-wide (ledger F10). The literal is
+# duplicated from readiness.DEFAULT_CDP_URL on purpose, exactly as core/cdp.py and
+# worker/config.py do it: `readiness` imports Playwright AT IMPORT TIME, and this module
+# is pulled in by `worker/job_runner.py` (for the `_run_session_loop` seam), so a
+# module-scope `from .readiness import ...` here dragged the whole Playwright package
+# into every worker sidecar — including an API-only box that never opens a browser — and
+# silently defeated the lazy `from .. import readiness` imports inside
+# `worker/preflight.py`, which exist for precisely that reason. One string is not worth
+# the dependency; `test_config_import_cost.py` pins the constants against each other.
+DEFAULT_CDP_URL = "http://127.0.0.1:9333"
 
 # Explicit name (not __name__): run as `python -m aizu.cli`, __name__ is
 # "__main__", which would sit outside the configured `aizu` logger tree.
@@ -725,7 +735,7 @@ def cmd_run_all(args: argparse.Namespace) -> int:
 
 
 def cmd_panel(args: argparse.Namespace) -> int:
-    from .server import serve
+    from .server import PortInUseError, serve
     panel_dir = Path(args.panel_dir)
     if not (panel_dir / "index.html").exists():
         print(f"error: no index.html under {panel_dir} — build the panel first "
@@ -741,7 +751,17 @@ def cmd_panel(args: argparse.Namespace) -> int:
               "(cd admin-panel && npm run build), or pass --panel-dir",
               file=sys.stderr)
         return 2
-    httpd = serve(args.db, str(panel_dir), args.config, host=args.host, port=args.port)
+    try:
+        httpd = serve(args.db, str(panel_dir), args.config,
+                      host=args.host, port=args.port)
+    except PortInUseError as e:
+        # The most common failure of the documented start command (a stale bridge from
+        # an unclean exit). serve() already refuses to touch the DB or start a daemon
+        # before it binds, so there is nothing to clean up — print it in the same
+        # one-line `error: …` style the missing-panel-build checks above use, rather
+        # than letting a traceback full of absolute paths out.
+        print(f"error: {e}", file=sys.stderr)
+        return 2
     url = f"http://{args.host}:{args.port}/"
     log.success("Panel serving %s at %s (db=%s)", panel_dir, url, args.db)
     print(f"AIZU panel serving {panel_dir} at {url}")
@@ -859,7 +879,7 @@ def build_parser() -> argparse.ArgumentParser:
                              "requires AIZU_STT_ENABLED + AIZU_STT_MODEL_PATH and "
                              "\"uz\" in language_mix to actually fire — Instagram only)")
         sp.add_argument("--cdp-url",
-                        default=os.environ.get("AIZU_CDP_URL", "http://127.0.0.1:9222"))
+                        default=os.environ.get("AIZU_CDP_URL", DEFAULT_CDP_URL))
         sp.add_argument("--spend-cap", type=float, default=20.0, help="USD cloud spend cap")
         sp.add_argument("--text-model",
                         default=os.environ.get("OPENROUTER_TEXT_MODEL", "openrouter/owl-alpha"))
@@ -899,7 +919,7 @@ def build_parser() -> argparse.ArgumentParser:
     wr.add_argument("--timezone", default=None,
                     help="account timezone id (e.g. America/New_York or UTC) for the daytime guard")
     wr.add_argument("--cdp-url",
-                    default=os.environ.get("AIZU_CDP_URL", "http://127.0.0.1:9222"))
+                    default=os.environ.get("AIZU_CDP_URL", DEFAULT_CDP_URL))
     wr.add_argument("--skip-verify", action="store_true",
                     help="register without attaching over CDP to confirm the login")
     wr.set_defaults(func=cmd_warm_register)

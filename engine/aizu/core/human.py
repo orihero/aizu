@@ -34,6 +34,7 @@ from dataclasses import dataclass, field
 from typing import Callable, Dict, Literal, Optional, Tuple
 
 from .logsetup import get_logger
+from .pw_owner import PlaywrightOwner, PlaywrightTimeout
 
 log = get_logger(__name__)
 
@@ -133,6 +134,14 @@ class HumanSim:
         # engines wire this from ``cfg.js_timeout_ms`` in CDPFeedBase.__init__, the
         # same seeding pattern already used for ``cfg.ranges["engage"]``.
         self.call_timeout_s = call_timeout_s
+        # The PlaywrightOwner whose thread owns the page these helpers touch.
+        # ``CDPFeedBase.__init__`` INJECTS its own owner here — a HumanSim handed
+        # a feed's page but not that feed's owner is a footgun: it would submit
+        # work to a second thread and hit greenlet.error on every call. None
+        # means "no owner wired"; ``_bounded`` then lazily creates one, which is
+        # correct only because a bare HumanSim's page is never a real Playwright
+        # object (see _bounded).
+        self.owner = None
 
     # ---- timing ----
     def pick(self, rng_range: Tuple[float, float]) -> float:
@@ -169,15 +178,30 @@ class HumanSim:
         self._last_keyed_call[key] = self._clock()
 
     def _bounded(self, fn):
-        """Run fn() directly, on the caller's (Playwright-owning) thread.
+        """Run ``fn()`` under ``call_timeout_s``, on Playwright's OWNING thread.
 
-        Previously routed through ``call_bounded`` when ``call_timeout_s`` was
-        wired. That moved the call to a daemon thread, which Playwright's
-        thread-affine sync API rejects with ``greenlet.error: Cannot switch to a
-        different thread`` — so mouse_move's evaluate + mouse.move failed on
-        every invocation. See ``CDPFeedBase._call_bounded`` for the full write-up
-        and the follow-up needed to restore a real deadline."""
-        return fn()
+        ``fn`` is submitted to ``self.owner`` (``core/pw_owner.py``) — for a CDP
+        engine that is the very thread that started Playwright, so the call
+        never moves; only the wait crosses. This deliberately does NOT use
+        ``core.bounded.call_bounded``, which runs the callable on a fresh daemon
+        thread: Playwright's sync API is thread-affine and that raised
+        ``greenlet.error`` on 100% of calls, silently killing every harvest. See
+        ``CDPFeedBase._call_bounded`` for the full write-up (ledger D6).
+
+        ``call_timeout_s is None`` (a bare ``HumanSim()``) keeps the old
+        straight-through behaviour: no deadline, caller's thread, no thread
+        spawned."""
+        if self.call_timeout_s is None:
+            return fn()
+        owner = self.owner
+        if owner is None:
+            # No feed wired one in. Lazily own our own thread rather than
+            # silently dropping the deadline: a caller that set call_timeout_s
+            # asked for a bound. (Without this the AttributeError would be eaten
+            # by mouse_move's outer `except Exception: return` and the deadline
+            # would vanish with no signal at all.)
+            owner = self.owner = PlaywrightOwner()
+        return owner.call(fn, self.call_timeout_s, PlaywrightTimeout)
 
     # ---- input (best-effort; swallow ALL exceptions) ----
     def mouse_move(self, page, box: Optional[dict] = None) -> None:

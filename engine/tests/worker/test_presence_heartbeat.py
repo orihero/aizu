@@ -25,7 +25,14 @@ from aizu.worker.lease_client import LeaseClient, Result
 from aizu.worker.sidecar import Sidecar
 
 # Bounded wait so a missed/slow beat fails fast instead of hanging the suite.
-_WAIT_TIMEOUT_SEC = 5.0
+# Generous on purpose. These waits are "spin until the background presence thread has done
+# N beats", so a longer ceiling costs NOTHING when the predicate becomes true (the helper
+# returns on the first passing poll) and is only ever spent on a genuine failure. 5s was
+# enough for this file in isolation but starved roughly one full-suite run in five: the
+# presence thread runs with `sleep=lambda t: None`, so it is pure GIL contention against
+# every other thread the suite has alive at that moment. A flaky revocation test is worse
+# than a slow one — B10 is the path that decides whether a box gets bricked.
+_WAIT_TIMEOUT_SEC = 20.0
 _POLL_SEC = 0.01
 
 
@@ -33,8 +40,18 @@ _POLL_SEC = 0.01
 def _fast_heartbeat_floor(monkeypatch):
     """Lower the production heartbeat-cadence floor (security clamp, normally 5s) so
     the interval-driven presence tests beat within the test window instead of waiting
-    5s per beat. The clamp itself is still exercised — just with a tiny floor."""
+    5s per beat. The clamp itself is still exercised — just with a tiny floor.
+
+    Same reason for the revocation-confirmation window: a confirmed 401 revocation now
+    requires the streak to have LASTED `_UNAUTHORIZED_CONFIRM_WINDOW_SEC` (minutes) and
+    spaces its retries accordingly, so a ~9s server-side blip can no longer brick a box.
+    These tests are about what a PRESENCE 401 does, not about how long the wait is — that
+    duration is pinned in `test_sidecar_loop.py` against a virtual clock. Compressed here
+    so they still finish in a bounded wait; the CONSECUTIVE-count guard is untouched."""
     monkeypatch.setattr(sidecar, "_HEARTBEAT_MIN_SEC", 0.01)
+    monkeypatch.setattr(sidecar, "_UNAUTHORIZED_CONFIRM_WINDOW_SEC", 0.0)
+    monkeypatch.setattr(sidecar, "_UNAUTHORIZED_RETRY_MIN_SEC", 0.0)
+    monkeypatch.setattr(sidecar, "_UNAUTHORIZED_RETRY_CAP_SEC", 0.0)
 
 
 def _wait_until(predicate, timeout: float = _WAIT_TIMEOUT_SEC) -> bool:
@@ -64,6 +81,8 @@ class _FakeClient:
         self.nacks: list[dict] = []
         self.registered = False
         self.closed = False
+
+    token = "worker-token-1"
 
     def with_token(self, token):
         return self
@@ -248,6 +267,96 @@ def test_presence_exception_does_not_crash_loop(monkeypatch, cfg: WorkerConfig):
     sc.close()
 
 
+def test_presence_401_retires_the_token_and_stops_leasing(monkeypatch, cfg: WorkerConfig,
+                                                          cipher):
+    """B10. A 401 is the ONE presence outcome that is not merely observational: the token
+    is dead, not the network. It stops NEW leasing (which presence is already allowed to
+    do via drain/halt) and clears the stored token — but still never touches a RUNNING
+    job, so LOCKED #9 holds."""
+    from aizu.worker.token_store import TokenStore
+
+    monkeypatch.setattr(job_runner, "run_one_job", lambda *a, **k: {})
+    client = _FakeClient(
+        leases=[],
+        # envelope=True: only the dispatch's OWN 401 body is a revocation signal — a
+        # proxy's HTML 401 stays transient (test_lease_client.py).
+        presence_result=Result(ok=False, error="invalid or revoked worker token",
+                               status=401, envelope=True))
+    sc = _sidecar(cfg, client)
+    tokens = TokenStore(cfg.state_dir, cipher=cipher)
+    tokens.save("worker-token-1")
+    sc._tokens = tokens
+
+    sc.run(max_iterations=1)
+    revoked = _wait_until(lambda: sc.reenrolment_required)
+
+    assert revoked, "a 401 presence beat never marked the box as revoked"
+    assert tokens.load() is None
+    assert sc._stop_leasing.is_set()
+    # It takes CONSECUTIVE rejections, never a single one (see test_sidecar_loop).
+    assert len(client.presence_calls) >= sidecar._UNAUTHORIZED_CONFIRM_LIMIT
+
+    sc.close()
+
+
+def test_a_revoked_box_STOPS_beating_instead_of_authenticating_forever(
+        monkeypatch, cfg: WorkerConfig, cipher):
+    """A parked (revoked) process must be inert. Before this, `_on_auth_revoked` never
+    touched the presence thread and `main` blocked in `park_for_reenrolment` — the only
+    caller of `close()` — so a revoked box posted a rejected /api/worker/heartbeat every
+    interval FOREVER (~4k/day), silently, while the desktop UI and control surface both
+    reported it halted."""
+    from aizu.worker.token_store import TokenStore
+
+    monkeypatch.setattr(job_runner, "run_one_job", lambda *a, **k: {})
+    client = _FakeClient(
+        leases=[],
+        presence_result=Result(ok=False, error="invalid or revoked worker token",
+                               status=401, envelope=True))
+    sc = _sidecar(cfg, client)
+    tokens = TokenStore(cfg.state_dir, cipher=cipher)
+    tokens.save("worker-token-1")
+    sc._tokens = tokens
+
+    sc.run(max_iterations=1)
+    assert _wait_until(lambda: sc.reenrolment_required)
+    thread = sc._presence_thread
+    assert thread is not None
+    stopped = _wait_until(lambda: not thread.is_alive())
+
+    assert stopped, "the presence thread kept beating after the box was revoked"
+    beats_at_halt = len(client.presence_calls)
+    time.sleep(20 * 0.02)                      # ~20 intervals at the test cadence
+    assert len(client.presence_calls) == beats_at_halt   # truly inert
+
+    sc.close()
+
+
+def test_a_transient_presence_failure_never_retires_the_token(monkeypatch,
+                                                              cfg: WorkerConfig, cipher):
+    """The flaky-network guard: a 500/transport presence failure must leave the token
+    (and leasing) exactly as they were — only a 401 means revoked."""
+    from aizu.worker.token_store import TokenStore
+
+    monkeypatch.setattr(job_runner, "run_one_job", lambda *a, **k: {})
+    client = _FakeClient(leases=[],
+                         presence_result=Result(ok=False, error="server error 500",
+                                                status=500))
+    sc = _sidecar(cfg, client)
+    tokens = TokenStore(cfg.state_dir, cipher=cipher)
+    tokens.save("worker-token-1")
+    sc._tokens = tokens
+
+    sc.run(max_iterations=1)
+    assert _wait_until(lambda: client.presence_count >= 2)  # kept beating
+
+    assert sc.reenrolment_required is False
+    assert tokens.load() == "worker-token-1"
+    assert not sc._stop_leasing.is_set()
+
+    sc.close()
+
+
 def test_close_stops_presence_thread(monkeypatch, cfg: WorkerConfig):
     # Arrange
     monkeypatch.setattr(job_runner, "run_one_job", lambda *a, **k: {})
@@ -303,3 +412,108 @@ def test_active_jobs_reported_in_presence(monkeypatch, cfg: WorkerConfig):
         assert idle_again, "presence did not return to currentSessions == 0 when idle"
     finally:
         sc.close()
+
+
+# --- the preflight rides the presence beat (§4.4) ----------------------------
+#
+# The launch preflight's compact upstream body is what puts the REAL provisioning cause
+# (no AIZU_SECRET_KEY, no capabilities, no LLM, Chrome on the other port) in front of an
+# admin who cannot SSH into the box. `record_worker_heartbeat` COALESCEs an omitted
+# report, so omitting is always safe — the cadence question is only how much noise the
+# common case costs, and how stale the console may get.
+
+
+def _preflight_thread(client, wire) -> sidecar._PresenceThread:
+    """A bare presence thread (no Sidecar) beating fast against ``client``."""
+    return sidecar._PresenceThread(client, "w1", 0.01, lambda: 0, threading.Event(),
+                                   preflight_wire=wire)
+
+
+def _beat(client, thread, *, at_least: int) -> list:
+    thread.start()
+    try:
+        assert _wait_until(lambda: client.presence_count >= at_least), (
+            f"only {client.presence_count} presence beats in {_WAIT_TIMEOUT_SEC}s")
+    finally:
+        thread.stop()
+        thread.join(timeout=_WAIT_TIMEOUT_SEC)
+    return list(client.presence_calls)
+
+
+_GREEN = {"ok": True, "blocking": False, "enforced": True, "ranAt": 1.0, "failed": []}
+_RED = {"ok": False, "blocking": True, "enforced": True, "ranAt": 2.0,
+        "failed": [{"id": "capabilities", "severity": "fatal", "detail": "unset"}]}
+
+
+def test_an_unchanged_preflight_does_not_ride_every_beat():
+    """A box that has been green for a week must not re-send the same blob every ~20s."""
+    client = _FakeClient()
+    bodies = _beat(client, _preflight_thread(client, lambda: dict(_GREEN)), at_least=4)
+
+    assert bodies[0].get("preflight") == _GREEN     # first beat: changed from nothing
+    assert all("preflight" not in b for b in bodies[1:4])
+
+
+def test_a_CHANGED_preflight_rides_the_very_next_beat():
+    """The whole point: a box that just went red must not wait minutes to say so."""
+    reports = [dict(_GREEN)]
+
+    def _wire():
+        return dict(reports[-1])
+
+    client = _FakeClient()
+    thread = _preflight_thread(client, _wire)
+    thread.start()
+    try:
+        assert _wait_until(lambda: client.presence_count >= 2)
+        reports.append(dict(_RED))
+        assert _wait_until(
+            lambda: any(c.get("preflight", {}).get("blocking") for c in
+                        client.presence_calls))
+    finally:
+        thread.stop()
+        thread.join(timeout=_WAIT_TIMEOUT_SEC)
+
+
+def test_an_unchanged_preflight_is_still_re_sent_every_tenth_beat():
+    """The staleness floor. Without it a console could be showing a diagnosis from an
+    unbounded time ago — the same 'looks healthy, is dead' confusion this work exists to
+    end, just moved one level up."""
+    client = _FakeClient()
+    thread = _preflight_thread(client, lambda: dict(_GREEN))
+    bodies = _beat(client, thread, at_least=sidecar._PREFLIGHT_RESEND_EVERY_BEATS)
+
+    tenth = bodies[sidecar._PREFLIGHT_RESEND_EVERY_BEATS - 1]
+    assert tenth.get("preflight") == _GREEN
+
+
+def test_no_preflight_key_at_all_before_the_first_report_exists():
+    """None means 'checking…'. Sending nothing is right: the store COALESCEs an omitted
+    report and keeps what it has, so this can never overwrite a real diagnosis with a
+    placeholder."""
+    client = _FakeClient()
+    bodies = _beat(client, _preflight_thread(client, lambda: None), at_least=3)
+
+    assert all("preflight" not in b for b in bodies[:3])
+
+
+def test_a_raising_preflight_reader_never_breaks_the_beat():
+    """Presence is liveness. A diagnostic that cannot be read must not cost the box its
+    keepalive — that would turn a cosmetic bug into a reclaimed lease."""
+    def _boom():
+        raise RuntimeError("cannot read the report")
+
+    client = _FakeClient()
+    bodies = _beat(client, _preflight_thread(client, _boom), at_least=3)
+
+    assert len(bodies) >= 3
+    assert all("preflight" not in b for b in bodies)
+
+
+def test_a_report_the_dispatch_REJECTED_is_re_sent_next_beat():
+    """Memoized only on an ACCEPTED beat: a report the cloud never received is not 'sent',
+    and marking it so would hide a changed diagnosis until the next forced resend."""
+    client = _FakeClient(presence_result=Result(ok=False, status=500, error="kaboom"))
+    bodies = _beat(client, _preflight_thread(client, lambda: dict(_RED)), at_least=3)
+
+    assert all(b.get("preflight") == _RED for b in bodies[:3])

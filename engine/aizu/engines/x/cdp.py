@@ -70,10 +70,16 @@ class XFeed(CDPFeedBase):
         rid = self._current_post_id
         if rid is None:
             return  # tweets arrived with no post open → cannot attribute, drop
+        # Locked: written on the Playwright OWNER thread, read by fetch_comments
+        # on the caller's (see core/cdp.py's _queue_lock). The discover branch
+        # above already returned, so _enqueue_reel's own acquisition is
+        # unreachable from here — no nesting.
         if self._mode == "reply":
-            self._merge(self._replies_by_reel, rid, parse_replies(body, rid))
+            with self._queue_lock:
+                self._merge(self._replies_by_reel, rid, parse_replies(body, rid))
         elif self._mode == "quote":
-            self._merge(self._quotes_by_reel, rid, parse_quotes(body, rid))
+            with self._queue_lock:
+                self._merge(self._quotes_by_reel, rid, parse_quotes(body, rid))
 
     @staticmethod
     def _merge(bucket_by_reel: dict, rid: str, comments: list[Comment]) -> None:
@@ -134,8 +140,13 @@ class XFeed(CDPFeedBase):
         self._load_quotes(reel_id)
         self._mode = "discover"   # restore so the discovery walk keeps intercepting
 
-        replies = self._replies_by_reel.get(reel_id, [])
-        quotes = self._quotes_by_reel.get(reel_id, [])
+        # Snapshot both surfaces under the lock: the composite cursor packs the
+        # two lengths, so a list that grows between the slice and the pack would
+        # persist a watermark past tweets this call never returned — see the
+        # instagram engine's fetch_comments for the full write-up.
+        with self._queue_lock:
+            replies = list(self._replies_by_reel.get(reel_id, []))
+            quotes = list(self._quotes_by_reel.get(reel_id, []))
         # One composite cursor in the single slot: "<reply count>|<quote count>".
         rw, qw = unpack_cursor(since_cursor)
         new = replies[rw:] + quotes[qw:]

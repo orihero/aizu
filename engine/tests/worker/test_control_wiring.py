@@ -21,6 +21,8 @@ class _FakeClient:
         self.acks = []
         self.nacks = []
 
+    token = "worker-token-1"
+
     def with_token(self, token):
         return self
 
@@ -126,4 +128,19 @@ def test_control_source_status_snapshot(cfg: WorkerConfig):
     assert snap.worker_id == "w1"
     assert snap.current_job is None
     assert snap.paused is False
+    assert snap.reenrolment_required is False
     assert snap.chrome is not None  # a (disconnected) chrome status is always present
+
+
+def test_control_source_surfaces_a_revoked_box(cfg: WorkerConfig, cipher):
+    """B10: the halted-for-re-enrolment state must reach the desktop app's status feed,
+    not just the log — otherwise a revoked worker looks identical to an idle one."""
+    from aizu.worker.token_store import TokenStore
+    sc = _sidecar(cfg, _FakeClient(leases=[]))
+    sc._worker_id = "w1"
+    sc._tokens = TokenStore(cfg.state_dir, cipher=cipher)
+    sc._on_auth_revoked("lease")
+
+    snap = SidecarControlSource(sc).get_status()
+
+    assert snap.reenrolment_required is True

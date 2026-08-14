@@ -49,6 +49,7 @@ import type {
   LeadNote,
   LeadsPayload,
   LeadsQuery,
+  Match,
   InviteCreateInput,
   InviteInfo,
   InviteLink,
@@ -70,6 +71,26 @@ import type {
   WorkspaceSettingsInput,
 } from '@/shared/types/domain';
 import { buildAgentReadiness, buildBilling, paginateLeads } from './fixtures';
+
+/**
+ * Does a lead write address THIS lead? Mirrors the engine, which keys `matches` on
+ * the composite (campaign_id, platform, comment_id). Matching on `commentId` alone
+ * — as this fake used to — makes a write appear to succeed against the wrong
+ * campaign's lead, which is exactly the defect the real bug produced; a fake that
+ * repeats the bug cannot catch it.
+ */
+function targets(
+  lead: Match,
+  campaignId: string,
+  commentId: string,
+  platform: string | undefined,
+): boolean {
+  return (
+    lead.campaignId === campaignId &&
+    lead.commentId === commentId &&
+    (platform === undefined || lead.platform === platform)
+  );
+}
 
 const DEFAULT_ORG = { id: 1, name: 'Test Co', logo: null, description: null };
 const DEFAULT_USER: AuthUser = {
@@ -341,7 +362,9 @@ export class FakePanelRepository implements PanelRepository {
     this.state = {
       ...this.state,
       MATCHES: this.state.MATCHES.map((m) =>
-        m.commentId === request.commentId ? { ...m, status: request.status } : m,
+        targets(m, request.campaignId, request.commentId, request.platform)
+          ? { ...m, status: request.status }
+          : m,
       ),
     };
     return Promise.resolve(ok(undefined));
@@ -350,11 +373,12 @@ export class FakePanelRepository implements PanelRepository {
   bulkSetStatus(request: BulkStatusRequest): Promise<Result<void>> {
     if (this.takeFailure()) return this.simulatedFailure();
     this.bulkWrites.push(request);
-    const ids = new Set(request.items.map((i) => i.commentId));
     this.state = {
       ...this.state,
       MATCHES: this.state.MATCHES.map((m) =>
-        ids.has(m.commentId) ? { ...m, status: request.status } : m,
+        request.items.some((i) => targets(m, request.campaignId, i.commentId, i.platform))
+          ? { ...m, status: request.status }
+          : m,
       ),
     };
     return Promise.resolve(ok(undefined));
@@ -374,7 +398,9 @@ export class FakePanelRepository implements PanelRepository {
     this.state = {
       ...this.state,
       MATCHES: this.state.MATCHES.map((m) =>
-        m.commentId === input.commentId ? { ...m, notes: [...m.notes, note] } : m,
+        targets(m, input.campaignId, input.commentId, input.platform)
+          ? { ...m, notes: [...m.notes, note] }
+          : m,
       ),
     };
     return Promise.resolve(ok(undefined));

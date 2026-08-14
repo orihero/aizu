@@ -118,6 +118,113 @@ def test_cdp_probe_failure_nacks_fast_without_spawning(cfg: WorkerConfig):
     assert not job_runner._spec_path(cfg.state_dir, job.id).exists()
 
 
+def test_api_platform_job_skips_the_cdp_preflight(cfg: WorkerConfig):
+    """An API-only platform drives no browser, so a Chrome-less box must still run it —
+    gating it on the CDP probe nacked it `cdp_unreachable` until it dead-lettered."""
+    job = _job(platform="youtube")
+    _write_child_result(cfg, job, {"ok": True,
+                                   "summary": {"matches": 2, "run_id": "run-1",
+                                               "job_id": job.id}})
+    popen = _popen_factory(FakePopen(polls=(None, 0)))
+    summary = job_runner.run_one_job(object(), job, cfg=cfg, halt=threading.Event(),
+                                     popen=popen, sleep=NOOP_SLEEP,
+                                     monotonic=NEVER_TIMEOUT, cdp_probe=PROBE_BAD)
+    assert "halt_reason" not in summary
+    assert summary["matches"] == 2
+    assert popen.captured["argv"][1:3] == ["-m", "aizu.worker.job_child"]
+
+
+# ----- B9 REVIEW FIX: fail-fast spend cap ---------------------------------------
+
+class _SpendStore:
+    """Just enough store for the cap math: this box's LOCAL total for the campaign."""
+
+    def __init__(self, total: float = 0.0):
+        self._total = total
+
+    def total_spend(self, _campaign_id: str) -> float:
+        return self._total
+
+
+def test_no_spend_headroom_refuses_to_spawn(cfg: WorkerConfig):
+    """REVIEW FIX. A REQUEUE never traverses cloud dispatch — `nack_job` puts the row
+    straight back to `queued` — so a job that went over cap on attempt 1 is re-leased
+    with `priorSpendUsd >= cap`. Before this branch the box computed an effective cap of
+    exactly its local total, spawned anyway, and `router._spend_guard` failed on call
+    one; `_degrade` does NOT stop a run, so the box held its warmed account for the whole
+    duration cap emitting degraded stand-ins — once per remaining attempt."""
+    job = _job(prior_spend_usd=cfg.spend_cap + 5.0)
+    popen = _popen_factory(FakePopen(polls=(0,)))
+    summary = job_runner.run_one_job(_SpendStore(0.0), job, cfg=cfg,
+                                     halt=threading.Event(), popen=popen,
+                                     sleep=NOOP_SLEEP, monotonic=NEVER_TIMEOUT,
+                                     cdp_probe=PROBE_OK)
+    assert summary["halt_reason"] == job_runner.SPEND_CAP_REASON
+    assert summary["job_id"] == job.id
+    assert "argv" not in popen.captured          # never spawned
+    assert not job_runner._spec_path(cfg.state_dir, job.id).exists()
+
+
+def test_no_spend_headroom_is_checked_before_the_cdp_probe(cfg: WorkerConfig):
+    # An over-budget job must not even be diagnosed as a Chrome problem: `cdp_unreachable`
+    # is a REQUEUE reason, so it would retry to dead-letter instead of stopping now.
+    job = _job(prior_spend_usd=cfg.spend_cap)
+    summary = job_runner.run_one_job(_SpendStore(0.0), job, cfg=cfg,
+                                     halt=threading.Event(),
+                                     popen=_popen_factory(FakePopen(polls=(0,))),
+                                     sleep=NOOP_SLEEP, monotonic=NEVER_TIMEOUT,
+                                     cdp_probe=PROBE_BAD)
+    assert summary["halt_reason"] == job_runner.SPEND_CAP_REASON
+
+
+def test_the_spend_cap_refusal_is_poison_so_it_dead_letters(cfg: WorkerConfig):
+    # Spend only ever grows, so retrying can only reach the same verdict — the sidecar
+    # must dead-letter it rather than burn the remaining attempts.
+    from aizu.worker.sidecar import _is_poison
+    assert _is_poison(job_runner.SPEND_CAP_REASON) is True
+
+
+def test_headroom_left_still_spawns(cfg: WorkerConfig):
+    job = _job(prior_spend_usd=cfg.spend_cap - 1.0)
+    _write_child_result(cfg, job, {"ok": True,
+                                   "summary": {"matches": 1, "run_id": "run-1",
+                                               "job_id": job.id}})
+    popen = _popen_factory(FakePopen(polls=(None, 0)))
+    summary = job_runner.run_one_job(_SpendStore(0.0), job, cfg=cfg,
+                                     halt=threading.Event(), popen=popen,
+                                     sleep=NOOP_SLEEP, monotonic=NEVER_TIMEOUT,
+                                     cdp_probe=PROBE_OK)
+    assert summary["matches"] == 1
+    assert popen.captured["argv"][1:3] == ["-m", "aizu.worker.job_child"]
+
+
+def test_local_spend_the_cloud_never_saw_still_blocks(cfg: WorkerConfig):
+    # The box holds spend the cloud never learned about (an attempt that died before its
+    # ack/nack, re-pinned here by reclaim). `max(prior, local)` must count it.
+    job = _job(prior_spend_usd=0.0)
+    popen = _popen_factory(FakePopen(polls=(0,)))
+    summary = job_runner.run_one_job(_SpendStore(cfg.spend_cap + 1.0), job, cfg=cfg,
+                                     halt=threading.Event(), popen=popen,
+                                     sleep=NOOP_SLEEP, monotonic=NEVER_TIMEOUT,
+                                     cdp_probe=PROBE_OK)
+    assert summary["halt_reason"] == job_runner.SPEND_CAP_REASON
+    assert "argv" not in popen.captured
+
+
+def test_an_uncapped_box_never_refuses_on_spend(cfg: WorkerConfig):
+    import dataclasses
+    cfg = dataclasses.replace(cfg, spend_cap=None)
+    job = _job(prior_spend_usd=9999.0)
+    _write_child_result(cfg, job, {"ok": True, "summary": {"matches": 0,
+                                                           "job_id": job.id}})
+    summary = job_runner.run_one_job(_SpendStore(9999.0), job, cfg=cfg,
+                                     halt=threading.Event(),
+                                     popen=_popen_factory(FakePopen(polls=(None, 0))),
+                                     sleep=NOOP_SLEEP, monotonic=NEVER_TIMEOUT,
+                                     cdp_probe=PROBE_OK)
+    assert "halt_reason" not in summary
+
+
 def test_cdp_probe_success_proceeds_to_spawn(cfg: WorkerConfig):
     """A passing probe leaves the existing happy path untouched — the child is spawned
     and its result returned."""

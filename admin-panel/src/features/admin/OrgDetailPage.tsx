@@ -8,6 +8,7 @@ import { Button } from '@/shared/ui/Button';
 import { Card, CardBody, CardHeader } from '@/shared/ui/Card';
 import { EmptyState } from '@/shared/ui/EmptyState';
 import { Modal } from '@/shared/ui/Modal';
+import { leadUidOf } from '@/shared/lib/leadId';
 import { platformLabel } from '@/shared/lib/platformLabel';
 import { useAdminOrgCampaigns, useAdminOrgLeads, useStartImpersonation } from './adminHooks';
 import { useAdminAuth } from './useAdminAuth';
@@ -143,8 +144,10 @@ function LeadsCard({ orgId }: { readonly orgId: number }) {
             <p className="px-5 py-6 text-sm text-text-muted">No leads.</p>
           ) : (
             <ul className="divide-y divide-border">
+              {/* Composite key — one org's leads span campaigns and platforms, which
+                  can legitimately share a commentId. */}
               {(leads.data?.leads ?? []).map((lead) => (
-                <li key={lead.commentId} className="px-5 py-3">
+                <li key={leadUidOf(lead)} className="px-5 py-3">
                   <div className="flex items-center gap-2">
                     <span className="font-semibold text-text">@{lead.username}</span>
                     <Badge tone="neutral">{platformLabel(lead.platform)}</Badge>

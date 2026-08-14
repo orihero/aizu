@@ -51,7 +51,7 @@ export function LeadColumn({ column, threshold, onOpen, draggable }: LeadColumnP
         ) : (
           column.leads.map((lead) => (
             <LeadCard
-              key={lead.commentId}
+              key={lead.id}
               lead={lead}
               threshold={threshold}
               onOpen={onOpen}

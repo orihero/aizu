@@ -16,10 +16,19 @@ that deliberately never calls ``browser.close()``).
 Every side effect (process launch, CDP probe, HTTP probe, sleep, OS name, focus) is
 injected with a real default, so the whole module is unit-testable with NO real Chrome.
 
-Port note (unresolved policy): the engine default is 9222 but every LIVE run in this repo
-has used 9333 (per-account BASE_PORT+ordinal). This module takes ``cdp_url`` from config
-with NO internal default — the wiring layer MUST set it correctly or reproduce the 9333
-ECONNREFUSED history. See ``memory/engine-live-run.md``.
+Port note (RESOLVED 2026-08, ledger F10): **9333 is canonical**, and 9222 is retired as a
+default but stays a first-class detected sibling forever. Every live run in this repo, the
+``scripts/warm_chrome.sh`` runbook, ``engines.md §9`` and the desktop shell already used
+9333; 9222 survived only as a Python literal, which is exactly how a box ended up running
+Chrome on 9333 while its sidecar probed a dead 9222 and told the operator to "start Chrome"
+on a machine where Chrome was already running.
+
+This module still takes ``cdp_url`` from config with NO internal default — the wiring layer
+sets it. What CHANGED is that the wiring layer no longer has to be right by luck:
+``worker/preflight.py::resolve_cdp_url`` probes the configured port, then the one named
+sibling, and ADOPTS a live sibling with a logged warning when the operator never pinned
+``AIZU_CDP_URL`` (an explicit pin is reported as a named fatal instead, never silently
+overridden). See ``memory/engine-live-run.md``.
 """
 from __future__ import annotations
 
@@ -325,7 +334,7 @@ def config_from_env(cdp_url: Optional[str] = None) -> ChromeManagerConfig:
     unrelated). AIZU_CDP_URL is the same var every other CDP call site reads;
     AIZU_CHROME_PROFILE_DIR/AIZU_CHROME_BINARY are new, both optional, both defaulted
     for a bare dev box so `ensure_chrome_running` works with zero configuration."""
-    url = cdp_url or os.environ.get("AIZU_CDP_URL", "http://127.0.0.1:9222")
+    url = cdp_url or os.environ.get("AIZU_CDP_URL", "http://127.0.0.1:9333")
     profile = os.environ.get("AIZU_CHROME_PROFILE_DIR") or str(
         Path.home() / ".aizu-chrome-profile")
     binary = os.environ.get("AIZU_CHROME_BINARY") or None

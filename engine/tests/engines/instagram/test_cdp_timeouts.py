@@ -173,6 +173,13 @@ class _HangingCookiesPage:
         return "some-agent/1.0"
 
 
+# Was SKIPPED while `_call_bounded` enforced no deadline (ledger D6) — the hanging
+# `context.cookies()` never returned and this hung forever instead of failing. The
+# deadline is back, on Playwright's owning thread (`core/pw_owner.py`).
+# NOTE for future re-testing: on a LIVE session `context.cookies()` is a
+# BROWSER-process call, not a renderer one — it returns promptly even with the
+# renderer fully wedged. Its real wedge mode is a dead CDP pipe, which is what this
+# fake models.
 def test_reel_media_request_degrades_when_cookies_call_hangs_forever():
     feed = CDPFeed(CDPConfig(js_timeout_ms=150))
     feed._page = _HangingCookiesPage()
@@ -185,3 +192,91 @@ def test_reel_media_request_degrades_when_cookies_call_hangs_forever():
     url, headers = result
     assert url == "https://cdn.example.test/video.mp4"
     assert headers["cookies"] == ""
+
+
+# ---- open_reel keeps its bool contract even with the owner wedged -----------
+
+class _HangingWheelPage:
+    def __init__(self):
+        class _Mouse:
+            def wheel(self, dx, dy):
+                threading.Event().wait()
+        self.mouse = _Mouse()
+
+    def evaluate(self, *a, **k):
+        return None
+
+
+def test_open_reel_returns_false_when_the_owner_is_wedged_and_no_ipage_exists():
+    """A wedged owner must skip ONE reel, not end the run with a traceback.
+
+    ``open_reel``'s first line is ``page = self._ensure_ipage()``, ABOVE its
+    try/except, and ``Session._run`` only catches ``HaltSession`` around
+    ``for reel in self.feed.walk()``. Since ``_ensure_ipage`` now makes a real
+    cross-thread call (``browser.contexts``), an unguarded raise there would end
+    the whole session where the design says raise a soft ``reel_unavailable``
+    flag and move on.
+    """
+    feed = CDPFeed(CDPConfig(js_timeout_ms=150))
+
+    class _Ctx:
+        _impl_obj = object()
+
+        def new_page(self):
+            raise AssertionError("must not be reached while wedged")
+
+    class _Browser:
+        _impl_obj = object()
+        contexts = [_Ctx()]
+
+    feed._browser = feed._wrap_pw(_Browser())
+    feed._wheel_once(_HangingWheelPage(), 900)      # wedge the owner
+    assert feed._owner.is_wedged()
+    assert feed.open_reel(Reel(reel_id="Cabc123")) is False
+
+
+# ---- interception state is cross-thread now: the read must be atomic --------
+
+def test_fetch_comments_never_reports_a_cursor_past_the_comments_it_returned():
+    """The watermark and the returned slice must describe the SAME list.
+
+    ``page.on("response")`` handlers dispatch on the Playwright owner thread, so
+    ``_classify`` appends there while ``fetch_comments`` reads here — and the
+    window is widest exactly after a deadline expiry, when the caller has walked
+    away but the owner keeps pumping the dispatcher. Reading the LIVE list let it
+    grow between ``all_comments[start:]`` and ``len(all_comments)``; the extra
+    comments were persisted into the cursor (``session.py`` → ``store.set_cursor``)
+    without ever being returned, so they were never scored and never re-read.
+    """
+    from aizu.core.feed import Comment
+
+    feed = CDPFeed(CDPConfig(js_timeout_ms=150))
+    rid = "Cabc123"
+    feed._comments_by_reel[rid] = [
+        Comment(comment_id=str(i), username="u", text="t") for i in range(9)]
+
+    # Driven deterministically rather than by racing threads and hoping: a free-
+    # running writer hits the (few-bytecode) window so rarely that the same test
+    # passes with the fix reverted. Holding the lock the interception side holds
+    # proves the read actually takes it.
+    feed._open_comments_and_paginate = lambda: None  # type: ignore[method-assign]
+    out: dict = {}
+
+    def _read():
+        out["result"] = feed.fetch_comments(rid, "0")
+
+    reader = threading.Thread(target=_read, daemon=True)
+    with feed._queue_lock:          # stand in for `_classify` on the owner thread
+        reader.start()
+        reader.join(timeout=0.5)
+        assert reader.is_alive(), (
+            "fetch_comments read the live list without taking _queue_lock — the "
+            "slice and the length can then describe two different lists")
+        feed._comments_by_reel[rid].extend(
+            Comment(comment_id=str(i), username="u", text="t") for i in range(9, 12))
+    reader.join(timeout=5)
+
+    comments, cursor = out["result"]
+    assert int(cursor) == len(comments) == 12, (
+        f"returned {len(comments)} comments but persisted cursor {cursor} — the "
+        "difference is never scored and never re-read on a later poll")

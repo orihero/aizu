@@ -366,7 +366,7 @@ function historyFor(status: MatchStatus, atTs: number): readonly StatusChange[] 
 export const DEMO_MATCHES: readonly Match[] = LEAD_SEEDS.map((seed, index) => {
   const ts = TS_BASE + index * TS_STEP_SEC;
   return buildMatch({
-    id: seed.id,
+    // No explicit `id` — buildMatch derives the composite lead identity.
     commentId: seed.id,
     campaignId: DEMO_CAMPAIGN_ID,
     platform: seed.platform,
@@ -435,7 +435,7 @@ const DEMO_DASHBOARD_PERIOD = buildDashboardPeriod({
     .sort((a, b) => b.capturedAt.ts - a.capturedAt.ts)
     .slice(0, 6)
     .map((m) => ({
-      id: m.commentId, username: m.username, platform: m.platform, score: m.score,
+      id: m.id, username: m.username, platform: m.platform, score: m.score,
       capturedAt: { date: m.capturedAt.date, time: m.capturedAt.time },
     })),
 });

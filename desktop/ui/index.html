@@ -24,8 +24,9 @@
 <div class="app" id="app">
   <!-- ======================= LEFT RAIL (248px, persistent) ======================= -->
   <aside class="rail">
-    <!-- Brand block — 7-tap target reveals the hidden dev menu (env switch). -->
-    <div class="rail-brand" id="brand-tap" title="">
+    <!-- Brand block. The 7-tap easter egg that used to be the ONLY way to configure this
+         app is GONE — setup is a permanent, labelled button below. -->
+    <div class="rail-brand" id="brand" title="">
       <span class="brand-glyph" aria-hidden="true">
         <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true">
           <circle cx="12" cy="12" r="4" fill="var(--brand)"></circle>
@@ -47,6 +48,13 @@
         <span class="env-chip" id="env-chip">Local</span>
         <span class="mono muted small" id="dispatch-host">—</span>
       </div>
+      <!-- The label and the amber outline are driven by setup state: an unfinished setup
+           the operator deferred must stay visible here, because the wizard deliberately
+           stops re-opening on every launch once they have dismissed it once. -->
+      <button id="btn-setup" class="btn btn-ghost full" type="button"
+              title="Open the setup checklist for this worker PC">
+        <span aria-hidden="true">⚙</span> <span id="btn-setup-label">Setup</span>
+      </button>
     </section>
 
     <!-- CONTROLS -->
@@ -96,7 +104,11 @@
       </button>
     </section>
 
-    <div class="rail-footer muted small mono">Ⓥ 0.1.0</div>
+    <div class="rail-footer">
+      <span class="muted small mono">Ⓥ 0.1.0</span>
+      <button id="btn-advanced" class="btn btn-mini btn-ghost" type="button"
+              title="Advanced: point this worker at a different dispatch">Advanced</button>
+    </div>
   </aside>
 
   <!-- ============================ CONTENT (fluid grid) ============================ -->
@@ -132,6 +144,33 @@
       <span class="pill pill-cloud">update required</span>
       Worker update required — restart to apply.
     </div>
+
+    <!-- Revoked/re-enrolment strip (hidden unless controls.reenrolmentRequired — ledger
+         B10). A revoked box used to look simply "idle" here forever; this names the state
+         and the one action that fixes it. -->
+    <div class="update-strip danger-strip hidden" id="reenrol-strip">
+      <span class="pill pill-danger">re-enrolment required</span>
+      This worker's token was rejected by dispatch (revoked or expired) and has been
+      cleared. Mint a NEW enrolment token in the panel (Fleet → Add worker) and paste it
+      into Setup → Enrol. This one cannot be reused.
+      <button id="reenrol-fix" class="btn btn-mini" type="button">Open Setup → Enrol</button>
+    </div>
+
+    <!-- PREFLIGHT HEALTH STRIP — the steady-state face of the SAME report the wizard
+         walks. Green "ready" / amber "N warnings" / red "PARKED — <first fatal>" / grey
+         "checking…" when the first pass has not finished. A null report is NEVER healthy.
+         Kept distinct from the re-enrolment strip above: a revoked box (B10) is terminal
+         until a human mints a new token, while a parked box self-heals every 30s. -->
+    <section class="pf-strip is-unknown" id="pf-strip">
+      <div class="pf-strip-head">
+        <span class="pill pill-neutral" id="pf-strip-pill">checking…</span>
+        <span class="pf-strip-text" id="pf-strip-text">Running the launch preflight…</span>
+        <button id="pf-strip-toggle" class="btn btn-mini" type="button" aria-expanded="false">details</button>
+        <button id="pf-strip-recheck" class="btn btn-mini" type="button">re-check</button>
+        <button id="pf-strip-setup" class="btn btn-mini" type="button">open setup</button>
+      </div>
+      <div class="pf-strip-body hidden" id="pf-strip-body"></div>
+    </section>
 
     <!-- KPI STRIP (6 tiles) -->
     <section class="kpi-strip" id="kpi-strip">
@@ -264,12 +303,273 @@
 
 <!-- Window-edge condition SPINE lives in body::before (see style.css); JS sets --rail. -->
 
-<!-- Hidden DEV MENU — revealed by tapping the brand 7× within 3s. Switches dispatch
-     between local and cloud at runtime (writes config + restarts the app). -->
+<!-- ============================ FIRST-RUN SETUP WIZARD ============================
+     Opens automatically while config.toml's `setup_complete` is false, and on demand from
+     the rail's permanent Setup button. The step it lands on is DERIVED in Rust
+     (commands::derive_step) from live config + the sidecar's own preflight report on every
+     get_setup_state call — never from a stored counter. Quit mid-setup, fix the box by
+     hand, or let the sidecar restart: it always reopens where the box actually is.
+
+     Every green badge in here is read out of the preflight report. There is no step whose
+     gate is the operator asserting that they did something. -->
+<div id="wizard-overlay" class="overlay hidden">
+  <div class="wizard" role="dialog" aria-modal="true" aria-labelledby="wz-title">
+    <header class="wz-head">
+      <div>
+        <div class="eyebrow">Worker setup</div>
+        <h1 class="wz-title" id="wz-title">Set up this worker PC</h1>
+      </div>
+      <button id="wz-close" class="btn btn-mini btn-ghost" type="button" aria-label="Close setup">✕</button>
+    </header>
+
+    <!-- Step rail: one dot per step; JS marks done / current / blocked / skipped. -->
+    <ol class="wz-steps" id="wz-steps" aria-label="Setup steps"></ol>
+
+    <div class="wz-body" id="wz-body">
+
+      <!-- 0 · WELCOME ------------------------------------------------------------ -->
+      <section class="wz-pane" data-step="0">
+        <p class="wz-lede">
+          This PC runs jobs for your team. Five things have to be true before it can —
+          this checklist makes each one visible instead of letting the box come up looking
+          healthy and quietly doing nothing.
+        </p>
+        <ul class="wz-list">
+          <li><b>The cloud address</b> this worker leases jobs from.</li>
+          <li><b>An enrolment token</b> — mint it in the panel under <i>Fleet → Add worker</i>.</li>
+          <li><b>Two keys</b>: one so this box can store its own identity, one so it can run the AI.</li>
+          <li><b>Which platforms</b> this PC is allowed to run.</li>
+          <li><b>A signed-in Chrome</b> for each browser platform you picked.</li>
+        </ul>
+        <p class="wz-note">
+          You can close this at any time. Nothing here is destructive, and the worker stays
+          visible to your admins the whole way through — including while it is parked.
+        </p>
+        <div class="wz-inline-actions">
+          <button id="wz-open-panel" class="btn btn-small" type="button">Where do I get a token?</button>
+          <span class="muted small" id="wz-panel-hint"></span>
+        </div>
+      </section>
+
+      <!-- 1 · CONNECT ------------------------------------------------------------ -->
+      <section class="wz-pane" data-step="1">
+        <p class="wz-lede">Point this worker at the cloud it should lease jobs from.</p>
+        <label class="wz-field">
+          <span class="eyebrow">Dispatch base URL</span>
+          <input id="wz-dispatch" class="mono" type="text" spellcheck="false" autocapitalize="off"
+                 placeholder="https://your-cloud.example.com" />
+        </label>
+        <div class="wz-row">
+          <button id="wz-test-dispatch" class="btn btn-small" type="button">Test reachability</button>
+          <span class="small" id="wz-dispatch-probe"></span>
+        </div>
+        <div class="wz-check" id="wz-check-sidecar">
+          <span class="pill pill-neutral" data-badge>waiting</span>
+          <div>
+            <div class="wz-check-title">The worker process is running and talking to this app</div>
+            <div class="wz-check-detail muted small" data-detail>
+              Saving starts the worker. It is normal for it to fail to reach your cloud at
+              first — this app talks to it locally, so you can finish setup either way.
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- 2 · KEYS --------------------------------------------------------------- -->
+      <section class="wz-pane" data-step="2">
+        <p class="wz-lede">
+          Two secrets live only on this PC. They are written to a 0600 file next to the
+          config and are never sent anywhere.
+        </p>
+
+        <div class="wz-check" id="wz-check-token-persistence">
+          <span class="pill pill-neutral" data-badge>checking…</span>
+          <div>
+            <div class="wz-check-title">This box can store its own worker identity</div>
+            <div class="wz-check-detail muted small" data-detail></div>
+          </div>
+        </div>
+        <label class="wz-field">
+          <span class="eyebrow">AIZU_SECRET_KEY <span class="muted small" id="wz-secret-state"></span></span>
+          <div class="wz-row">
+            <input id="wz-secret-key" class="mono" type="password" spellcheck="false" autocapitalize="off"
+                   placeholder="paste a key, or generate one" />
+            <button id="wz-generate-key" class="btn btn-small" type="button">Generate</button>
+          </div>
+        </label>
+        <p class="wz-note">
+          Without this the worker registers, gets an identity from the cloud, then crashes
+          trying to save it — your admin sees a box that says "online" over a dead process.
+        </p>
+
+        <div class="wz-check" id="wz-check-llm-backend">
+          <span class="pill pill-neutral" data-badge>checking…</span>
+          <div>
+            <div class="wz-check-title">This box has an AI backend for live runs</div>
+            <div class="wz-check-detail muted small" data-detail></div>
+          </div>
+        </div>
+        <label class="wz-field">
+          <span class="eyebrow">OPENROUTER_API_KEY <span class="muted small" id="wz-openrouter-state"></span></span>
+          <input id="wz-openrouter" class="mono" type="password" spellcheck="false" autocapitalize="off"
+                 placeholder="sk-or-…" />
+        </label>
+        <p class="wz-note">
+          Skippable only on a warming-only box. Without it every live job fails at setup and
+          gives up after five tries, and the reason never leaves this PC.
+        </p>
+        <div class="wz-inline-actions">
+          <button id="wz-save-keys" class="btn btn-brand btn-small" type="button">Save keys</button>
+          <span class="small" id="wz-keys-msg"></span>
+        </div>
+      </section>
+
+      <!-- 3 · ENROL -------------------------------------------------------------- -->
+      <section class="wz-pane" data-step="3">
+        <p class="wz-lede">
+          Paste the enrolment token minted for this box in the panel (<i>Fleet → Add
+          worker</i>). It is single-use and tied to one organisation.
+        </p>
+        <label class="wz-field">
+          <span class="eyebrow">Enrolment token <span class="muted small" id="wz-token-state"></span></span>
+          <input id="wz-token" type="password" spellcheck="false" autocapitalize="off"
+                 placeholder="paste the token" />
+        </label>
+        <div class="wz-inline-actions">
+          <button id="wz-save-token" class="btn btn-brand btn-small" type="button">Save &amp; enrol</button>
+          <span class="small" id="wz-token-msg"></span>
+        </div>
+        <div class="wz-check" id="wz-check-enrolled">
+          <span class="pill pill-neutral" data-badge>waiting</span>
+          <div>
+            <div class="wz-check-title">The cloud gave this box a worker id</div>
+            <div class="wz-check-detail muted small" data-detail>Enrolment takes a few seconds after saving.</div>
+          </div>
+        </div>
+        <p class="wz-note">
+          A rejected token means it was already used or was minted for another organisation
+          — mint a fresh one rather than retrying this one.
+        </p>
+      </section>
+
+      <!-- 4 · PLATFORMS ---------------------------------------------------------- -->
+      <section class="wz-pane" data-step="4">
+        <p class="wz-lede">Which platforms may this PC run?</p>
+        <div class="wz-platforms" id="wz-platforms"></div>
+        <p class="wz-note">
+          A box that advertises nothing is never sent work — and it makes your team's
+          readiness banner say "ready" when it is not. You cannot continue with none picked.
+        </p>
+        <div class="wz-check" id="wz-check-capabilities">
+          <span class="pill pill-neutral" data-badge>checking…</span>
+          <div>
+            <div class="wz-check-title">The worker advertises at least one platform</div>
+            <div class="wz-check-detail muted small" data-detail></div>
+          </div>
+        </div>
+        <div class="wz-inline-actions">
+          <button id="wz-save-platforms" class="btn btn-brand btn-small" type="button">Save platforms</button>
+          <span class="small" id="wz-platforms-msg"></span>
+        </div>
+      </section>
+
+      <!-- 5 · CHROME ------------------------------------------------------------- -->
+      <section class="wz-pane" data-step="5">
+        <p class="wz-lede">
+          Browser platforms run through one warmed Chrome on this PC, started on its own
+          profile so your everyday browser is untouched.
+        </p>
+
+        <!-- Port-drift banner: the F10 case, with the one-click repair. -->
+        <div class="wz-banner hidden" id="wz-drift-banner">
+          <span class="pill pill-warn">port mismatch</span>
+          <span id="wz-drift-text"></span>
+          <button id="wz-drift-fix" class="btn btn-mini" type="button">Use it</button>
+        </div>
+
+        <div class="wz-inline-actions">
+          <button id="wz-launch-chrome" class="btn btn-brand btn-small" type="button">Launch warmed Chrome</button>
+          <span class="small" id="wz-chrome-msg"></span>
+        </div>
+
+        <div class="wz-check" id="wz-check-cdp-reachable">
+          <span class="pill pill-neutral" data-badge>checking…</span>
+          <div>
+            <div class="wz-check-title">Chrome is running and reachable</div>
+            <div class="wz-check-detail muted small" data-detail></div>
+          </div>
+        </div>
+        <div class="wz-check" id="wz-check-cdp-attachable">
+          <span class="pill pill-neutral" data-badge>checking…</span>
+          <div>
+            <div class="wz-check-title">Chrome really accepts an automation attach</div>
+            <div class="wz-check-detail muted small" data-detail></div>
+          </div>
+        </div>
+        <p class="wz-note">
+          That second check is the one that catches a Chrome which looks alive and is not —
+          it answers on the port while refusing every attach. If it is red, quit that Chrome
+          <b>completely</b> (do not just reload a tab) and launch it again from here.
+        </p>
+      </section>
+
+      <!-- 6 · SIGN IN ------------------------------------------------------------ -->
+      <section class="wz-pane" data-step="6">
+        <p class="wz-lede">
+          Sign in to each platform <b>inside the Chrome window this app opens</b> — 2FA and
+          all. Nothing is typed into this app; it reads the browser's own session and the
+          badge turns green by itself.
+        </p>
+        <div class="wz-logins" id="wz-logins"></div>
+        <p class="wz-note">
+          Skip a platform if its badge is wrong — the LinkedIn and X session signatures are
+          not yet confirmed against a live account, so a red badge there may be the check
+          being wrong rather than your login. A skip lets you finish setup; it is remembered
+          only until you quit this app, is never sent to your cloud, and never hides the
+          warning from your admins.
+        </p>
+      </section>
+
+      <!-- 7 · VERIFY ------------------------------------------------------------- -->
+      <section class="wz-pane" data-step="7">
+        <p class="wz-lede">
+          This is the same card the dashboard shows from now on. It is the worker's own
+          report, re-run on every launch.
+        </p>
+        <div class="wz-preflight" id="wz-preflight"></div>
+        <p class="wz-note">
+          Green means nothing known-broken on this machine. It is not a promise that a
+          campaign will find leads — that depends on the brief and the account.
+        </p>
+      </section>
+    </div>
+
+    <footer class="wz-foot">
+      <span class="wz-foot-msg small" id="wz-msg"></span>
+      <div class="wz-foot-actions">
+        <!-- Shown only when a step BEHIND the one on screen stopped being green. The
+             wizard deliberately does not teleport the operator mid-read (a flapping check
+             would bounce them every 1.5s) — it offers the jump instead. -->
+        <button id="wz-goto" class="btn btn-small hidden" type="button"></button>
+        <!-- The genuine escape hatch. It does NOT mark setup complete — it records that the
+             operator has seen this, so the wizard stops re-opening over the dashboard on
+             every launch. The rail's Setup button keeps saying "Finish setup" until it
+             really is finished. -->
+        <button id="wz-later" class="btn btn-ghost btn-small" type="button">Close and fix later</button>
+        <button id="wz-back" class="btn btn-small" type="button">Back</button>
+        <button id="wz-next" class="btn btn-brand btn-small" type="button">Next</button>
+      </div>
+    </footer>
+  </div>
+</div>
+
+<!-- ADVANCED MENU — opened from the rail's "Advanced" button. This used to be the ONLY
+     configuration path in the app, revealed by tapping the brand 7×; it is now a labelled
+     escape hatch for switching dispatch, and no first-run operator needs it. -->
 <div id="dev-overlay" class="overlay hidden">
   <div class="dev-menu" role="dialog" aria-modal="true" aria-label="Developer settings">
     <div class="dev-head">
-      <div class="eyebrow">Developer · environment</div>
+      <div class="eyebrow">Advanced · environment</div>
       <button id="dev-close" class="btn btn-mini btn-ghost" type="button" aria-label="Close">✕</button>
     </div>
 

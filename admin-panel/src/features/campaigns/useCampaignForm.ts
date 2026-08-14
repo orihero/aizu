@@ -247,6 +247,11 @@ export function useCampaignForm(seed?: CampaignFormSeed, draft?: CampaignDraft):
     update: (patch) => { setForm((prev) => ({ ...prev, ...patch })); },
     toInput: () => ({
       campaignId,
+      // Name the intent instead of letting the bridge infer it from existence: a
+      // create whose slug collides with an existing campaign must be refused (409,
+      // "rename it or edit the existing campaign") rather than overwrite that
+      // campaign's brief and inherit its leads.
+      op: isEdit ? ('edit' as const) : ('create' as const),
       displayName: form.name.trim(),
       status: isEdit ? seed.status : 'draft',
       budgetCap: form.budgetCap,

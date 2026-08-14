@@ -12,7 +12,7 @@ Every table, column, constraint, and index below is transcribed from `store.py` 
 
 - **One SQLite file** is the whole interface (`store.py:1-11`).
 - Opened in **WAL** mode with `foreign_keys=ON`, `busy_timeout=30000`, connection `timeout=30.0s` (`store.py:1046-1050`).
-- **Schema version:** `SCHEMA_VERSION = 17`, stored in `meta` under key `schema_version` (`store.py:34`, `1163-1168`). The docstring on line 34 is the authoritative version history (v2 → v17).
+- **Schema version:** `SCHEMA_VERSION = 23`, stored in `meta` under key `schema_version` (`store.py:37`). The docstring on that line is the authoritative version history (v2 → v23).
 - **Timestamps** are **REAL epoch seconds** on data tables (sessions/actions/matches/etc.). A few audit tables use **ISO-8601 TEXT** — notably `audit_log.created_at`. Local time everywhere is **Asia/Tashkent, a fixed UTC+5 with no DST** (`store.py:69-74`; `schedule.py:14-15`).
 
 ### Migration model
@@ -167,19 +167,25 @@ Holds `schema_version` among others.
 
 **Index:** `idx_health_flags_account(account_id)` (`store.py:1128-1129`).
 
-#### `spend_log` — per-call cloud spend (`store.py:209-217`)
+#### `spend_log` — per-call cloud spend (`store.py:259-268`)
 
 | Column | Type | Constraints |
 |---|---|---|
 | id | INTEGER | PK AUTOINCREMENT |
 | campaign_id | TEXT | NOT NULL |
 | session_id | TEXT | |
-| stage | TEXT | NOT NULL — relevance / match / vision / transcribe |
+| stage | TEXT | NOT NULL — relevance / match / vision / transcribe, plus `fleet` on a roll-up row with no reported stage |
 | model | TEXT | |
 | usd | REAL | NOT NULL |
 | created_at | REAL | NOT NULL |
 
-**Index:** `idx_spend_time(campaign_id, created_at)` (`store.py:737`).
+**Index:** `idx_spend_time(campaign_id, created_at)` (`store.py:818`).
+
+The single source of truth for spend: `total_spend`, `spend_by_day`, `spend_by_stage`, `per_campaign_rollup`, the panel's `spent`/`cpl`, and `router._spend_guard` (the cap) all read this one table, and the only in-run writer is `router._record` → `log_spend` on whichever DB the process opened.
+
+**Fleet roll-up rows (B9).** On a worker box that DB is the box-local `AIZU_DB`, so fleet spend used to be invisible here — the panel showed $0 and every box's cap restarted at $0 (ledger B9). A worker now ships its attempt's delta, grouped per `(stage, model)`, on the ack AND nack body, and `store._sync_acked_spend` inserts it here inside that same transaction. Such a row is a per-`(stage, model)` AGGREGATE of one attempt, not one LLM call: `session_id` is the acked summary's session (NULL on a nack), and `created_at` is the group's earliest real timestamp clamped to `min(at, now)` so `spend_by_day` still buckets a midnight-spanning run correctly. `campaign_id` is FORCED from the job row (BOLA), never taken from the payload.
+
+There is no unique key here and the PK is AUTOINCREMENT, so — unlike the `matches` lead sync — this insert is NOT idempotent: a duplicate roll-up would silently DOUBLE a campaign's spend and trip its cap at half the budget. Two things prevent that. Exactly-once per attempt rides the ack/nack `leased_by` ownership check (a replayed report writes nothing), and the same-database case is caught by the `dbId` sentinel on the report body compared against `platform_settings.db_id` — necessary because `AIZU_DB` defaults to the same `aizu.db` filename the bridge uses, so a worker's DB frequently IS the cloud DB and the rows are already here.
 
 #### `actions` — engagement actions (like/follow), opt-in (`store.py:220-229`)
 
@@ -536,10 +542,33 @@ Provider credentials are env vars, not rows (`store.py:530-531`).
 | worker_token_hash | TEXT | NOT NULL — SHA-256 at rest |
 | token_expires_at | REAL | NULL = no expiry |
 | revoked_at | REAL | NULL = active |
+| enrolment_scope_kind | TEXT | v22 — `'org'` / `'pool'` if enrolled via an enrolment token, else NULL (legacy, self-declared). Sticky across re-register |
+| preflight_json | TEXT | v23 — the box's own launch self-check summary (JSON), or NULL = never reported one |
 
 - **Indexes:** `idx_workers_org(org_id)`, `idx_workers_token(worker_token_hash)`.
+- **`preflight_json` (v23, ledger F9/F10/F12)** is written by `register_worker` (REPLACE) and `record_worker_heartbeat` (COALESCE — an omitted field keeps the stored summary, because the sidecar only re-sends on change). Decoded tolerantly by `_decode_preflight`: a corrupt or non-dict blob reads as `None`, never an exception — one bad row must not be able to crash a whole fleet read. It is **diagnostic only**: `find_worker_by_token`'s auth shape deliberately excludes it, so nothing on the trust path can see a worker-authored blob. Surfaced by `list_workers()` as `preflight` (→ `GET /api/admin/fleet`) and read by `readiness.fleet_readiness`, which refuses to count an online box whose report is `blocking`.
 - **`status` is NOT a column** — it is DERIVED at read time from heartbeat age: online ≤ 2×interval, stale ≤ 6×interval, offline > 6×interval, with `WORKER_HEARTBEAT_INTERVAL_SEC = 20.0` (`store.py:555-556`, `759-767`).
-- Token TTL backstop `WORKER_TOKEN_TTL_SEC = 1 year`; revocation is the real off-switch (`store.py:846-849`).
+- Token TTL backstop `WORKER_TOKEN_TTL_SEC = 1 year`; revocation is the real off-switch (`store.py:846-849`). Setting `revoked_at` (or letting `token_expires_at` pass) makes `get_worker_by_token` miss, so every worker-plane route answers `401`; the sidecar reads that one status as revocation, clears its stored token and halts for re-enrolment rather than retrying forever (ledger B10, api-reference §9).
+
+#### `worker_enrolment_tokens` — single-use, admin-minted worker enrolment (v22)
+
+| Column | Type | Constraints |
+|---|---|---|
+| id | TEXT | PRIMARY KEY — opaque, NON-secret, admin-facing |
+| token_hash | TEXT | NOT NULL UNIQUE — SHA-256; the plaintext is returned to the admin exactly once and never stored |
+| scope_kind | TEXT | NOT NULL, **CHECK IN (org, pool)** — the SERVER-assigned scope |
+| org_id | INTEGER | → `organizations(id)` **ON DELETE CASCADE**; required for `org`, NULL for `pool` |
+| label | TEXT | |
+| created_at | REAL | NOT NULL |
+| created_by_admin_id | INTEGER | → `platform_admins(id)` (no cascade) |
+| expires_at | REAL | NOT NULL |
+| redeemed_at | REAL | set exactly once, atomically (`redeem_worker_enrolment_token` under `_tx_immediate`) |
+| redeemed_by_worker_id | TEXT | → workers.id (soft) |
+| revoked_at | REAL | |
+| revoked_by_admin_id | INTEGER | → `platform_admins(id)` (no cascade) |
+
+- **Index:** `idx_worker_enrolment_tokens_org(org_id)`.
+- Closes ledger B8: a box's org scope is server-assigned here instead of self-declared at register. Redemption stamps `workers.enrolment_scope_kind`, which then clamps `org_id`/`capabilities` on that register **and every later re-register**. `pool` is the deliberate multi-org grant and leaves capabilities unclamped.
 
 #### `jobs` — leased engine jobs (`store.py:581-601`)
 
@@ -654,7 +683,7 @@ Provider credentials are env vars, not rows (`store.py:530-531`).
 
 **PK:** `(admin_id, counter)`.
 
-#### `platform_settings` — v16 platform-wide superadmin key/value (`store.py:706-711`)
+#### `platform_settings` — v16 platform-wide superadmin key/value (`store.py:787-792`)
 
 | Column | Type | Constraints |
 |---|---|---|
@@ -663,7 +692,7 @@ Provider credentials are env vars, not rows (`store.py:530-531`).
 | updated_at | REAL | NOT NULL |
 | updated_by | TEXT | acting admin email |
 
-Known keys: `execution_backend` (`in_process` \| `distributed`, routes every run — `store.py:785-791`); `model_comparison_enabled` (v17 fan-out gate — `store.py:793-797`).
+Known keys: `execution_backend` (`in_process` \| `distributed`, routes every run — `store.py:4012-4024`); `model_comparison_enabled` (v17 fan-out gate — `store.py:4027-4034`); `db_id` (B9 — this database's `uuid4().hex` identity, minted lazily by `Store.database_id`, `store.py:3991`; the sentinel a worker's ack/nack `dbId` is compared against so a shared-`db_path` worker's spend is not rolled up twice).
 
 #### `model_comparison_log` — v17 per-call model fan-out log (`store.py:717-733`)
 
@@ -699,7 +728,8 @@ All links are **soft (no FK)** unless noted otherwise.
 - **`accounts.id`** is referenced by `account_state_changes.account_id`, `campaign_accounts.account_id`, `account_secrets.account_id`, `sessions.account_id`, `actions.account_id`, and `health_flags.account_id`.
 - **`organizations.id` (`org_id`)** fans out to `users`, `settings`, `integrations`, `integration_secrets`, `matches`, `health_flags`, `campaign_meta`, `campaign_briefs`, `accounts`, `campaign_accounts`, `account_secrets`, `subscriptions`, `workers`, `jobs`, `run_events`, `audit_log`, and `invites`. Only `invites.org_id` is a hard FK.
 - **`workers.id`** is referenced by `jobs.leased_by` and `jobs.pinned_worker_id`.
-- **Hard FKs (CASCADE):** `auth_sessions → users`, `invites → organizations`, `platform_admin_sessions → platform_admins`.
+- **Hard FKs (CASCADE):** `auth_sessions → users`, `invites → organizations`, `platform_admin_sessions → platform_admins`, `worker_enrolment_tokens → organizations` (`org_id`, v22).
+- **Hard FKs (no CASCADE):** `worker_enrolment_tokens.created_by_admin_id` and `.revoked_by_admin_id` → `platform_admins(id)` — a minted token outlives the admin who minted it, so the audit trail is not deleted with them.
 
 ```mermaid
 erDiagram
@@ -823,6 +853,7 @@ erDiagram
       INTEGER org_id
       TEXT worker_token_hash
       REAL last_heartbeat_at
+      TEXT preflight_json
     }
     organizations {
       INTEGER id PK
@@ -904,7 +935,7 @@ When `platform_settings.execution_backend = 'distributed'`, a run enqueues a `jo
 
 ### 4.6 Worker (v14)
 
-Registered with a hashed bearer token. Presence `status` is **never stored** — derived from `now - last_heartbeat_at`: online ≤ 2×20s, stale ≤ 6×20s, offline beyond (`store.py:759-767`). Token expiry (1-year backstop) plus explicit `revoked_at` are the off-switches (`store.py:846-849`).
+Registered with a hashed bearer token. Presence `status` is **never stored** — derived from `now - last_heartbeat_at`: online ≤ 2×20s, stale ≤ 6×20s, offline beyond (`store.py:759-767`). Token expiry (1-year backstop) plus explicit `revoked_at` are the off-switches (`store.py:846-849`). Either one makes every worker-plane call `401`, at which point the box clears its stored token and stops leasing until an operator re-enrols it (ledger B10). Note that `register_worker` UPSERTs and resets `revoked_at = NULL`, so a revoked box that is RESTARTED while `AIZU_WORKER_LEGACY_BOOTSTRAP_ENABLED` is still on can first-register again off the shared bootstrap secret and un-revoke its own row — completing the B8 cutover (flag off) is what makes revocation durable across restarts.
 
 ### 4.7 Auth sessions & invites
 

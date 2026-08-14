@@ -7,6 +7,7 @@ import io
 import json
 import logging
 import os
+import sqlite3
 import tempfile
 import threading
 import time
@@ -16,6 +17,7 @@ from pathlib import Path
 
 import pytest
 
+from aizu import readiness
 from aizu.auth import new_session_token
 from aizu.server import (WORKER_BOOTSTRAP_ENV, WORKER_LEGACY_BOOTSTRAP_ENV, serve)
 from aizu.admin_auth import ADMIN_IP_ALLOWLIST_ENV
@@ -29,8 +31,11 @@ PW = "longenough1"
 BOOTSTRAP = "boot-secret-xyz"
 
 
-def _req(method, base, path, body=None, *, cookie=None, bearer=None):
-    data = json.dumps(body).encode() if body is not None else None
+def _req(method, base, path, body=None, *, cookie=None, bearer=None, raw=None):
+    # `raw` sends exact bytes (e.g. b"null") so a test can drive a body shape json.dumps
+    # of a Python object cannot express as "present but null".
+    data = raw if raw is not None else (
+        json.dumps(body).encode() if body is not None else None)
     headers = {"Content-Type": "application/json"}
     if cookie:
         headers["Cookie"] = cookie
@@ -393,6 +398,70 @@ def test_register_legacy_bootstrap_disabled_rejects_shared_secret(srv, monkeypat
     assert code == 200, resp
 
 
+# ----- B10: revocation must survive the box ----------------------------------
+# The sidecar retires its persisted token when the dispatch confirms a 401. That moves
+# its next start off the re-register branch and onto FIRST register, where it presents
+# the still-configured shared AIZU_WORKER_BOOTSTRAP_TOKEN — and `register_worker` UPSERTs
+# `revoked_at = NULL`. Without the guard below, every revoked box resurrects itself on
+# the next reboot / Tauri watchdog relaunch / desktop "Restart worker" click, and the
+# panel's Revoke button means nothing while the legacy fallback is on.
+
+def test_a_revoked_worker_cannot_resurrect_itself_with_the_shared_bootstrap_token(
+        srv, monkeypatch, caplog):
+    monkeypatch.setenv(WORKER_BOOTSTRAP_ENV, BOOTSTRAP)
+    monkeypatch.delenv(WORKER_LEGACY_BOOTSTRAP_ENV, raising=False)   # default = on
+    code, resp, _ = _post(srv["base"], "/api/worker/register",
+                          {"machineId": "m-revoked-boot"}, bearer=BOOTSTRAP)
+    assert code == 200, resp
+
+    store = Store(srv["db"])
+    try:
+        assert store.revoke_worker("m-revoked-boot") is True
+    finally:
+        store.close()
+
+    # Exactly what a restarted, token-less box does: first-register on the shared secret.
+    with caplog.at_level(logging.WARNING, logger="aizu.server"):
+        code, resp, _ = _post(srv["base"], "/api/worker/register",
+                              {"machineId": "m-revoked-boot"}, bearer=BOOTSTRAP)
+    assert code == 401, resp
+    assert "revoked" in resp["error"]
+    assert _worker_row(srv["db"], "m-revoked-boot")["revokedAt"] is not None
+
+
+def test_a_revoked_worker_IS_brought_back_by_a_fresh_enrolment_token(srv, monkeypatch):
+    """The recovery path B10 exists to open stays open — and it is the ONLY one. An
+    admin-minted, single-use enrolment token is a deliberate act by a human with panel
+    access, unlike the shared secret already sitting in the box's own environment."""
+    monkeypatch.setenv(WORKER_BOOTSTRAP_ENV, BOOTSTRAP)
+    code, resp, _ = _post(srv["base"], "/api/worker/register",
+                          {"machineId": "m-revoked-reenrol"}, bearer=BOOTSTRAP)
+    assert code == 200, resp
+    store = Store(srv["db"])
+    try:
+        assert store.revoke_worker("m-revoked-reenrol") is True
+    finally:
+        store.close()
+
+    token = _mint_enrolment_token(srv["db"], scope_kind="pool",
+                                  worker_id_hint="reenrol")
+    code, resp, _ = _post(srv["base"], "/api/worker/register",
+                          {"machineId": "m-revoked-reenrol"}, bearer=token)
+
+    assert code == 200, resp
+    assert _worker_row(srv["db"], "m-revoked-reenrol")["revokedAt"] is None
+
+
+def test_an_unknown_machine_still_enrols_normally(srv, monkeypatch):
+    """Companion guard: the revocation check must key on a REVOKED row, never on the
+    mere absence of one — a fresh box, or one whose row a DB reset removed (C3), has to
+    keep enrolling on the documented path."""
+    monkeypatch.setenv(WORKER_BOOTSTRAP_ENV, BOOTSTRAP)
+    code, resp, _ = _post(srv["base"], "/api/worker/register",
+                          {"machineId": "m-never-seen"}, bearer=BOOTSTRAP)
+    assert code == 200, resp
+
+
 def test_register_existing_bearer_reregister_unaffected_by_enrolment_state(srv, monkeypatch):
     """(e) The steady-state re-register path (worker's OWN bearer) is untouched by
     ANY of this for a worker that was ITSELF enrolled via the deprecated legacy
@@ -548,6 +617,259 @@ def test_fleet_envelope_shape(srv, monkeypatch):
     assert "workers" in resp["data"]
 
 
+# ----- v23 launch preflight: register/heartbeat → fleet console (B4 trap) -----
+#
+# EVERY test in this block goes over the WIRE. The store already accepted a `preflight`
+# column before this diff landed and the field was still silently dropped, because
+# _validate_worker_register builds its `out` dict key-by-key — exactly the B4 shape that
+# shipped inert twice. A store-level test proves nothing about that; only a real POST
+# followed by a real GET /api/admin/fleet does.
+
+_GOOD_PREFLIGHT = {
+    "ok": False, "blocking": True, "enforced": True, "ranAt": 1786800000.12,
+    "failed": [
+        {"id": "token_persistence", "severity": "fatal", "status": "fail",
+         "detail": "encrypted-file backend: SecretCipherError: AIZU_SECRET_KEY is not set"},
+        {"id": "capabilities", "severity": "fatal", "status": "fail",
+         "detail": "neither AIZU_WORKER_PLATFORMS nor AIZU_WORKER_CAPABILITIES is set"},
+        {"id": "login.instagram", "severity": "warn", "status": "fail",
+         "detail": "logged_out"},
+    ],
+}
+
+
+def _fleet_worker(base, db, worker_id, email):
+    cookie = admin_cookie(base, db, email=email)
+    code, resp = _get(base, "/api/admin/fleet", cookie=cookie)
+    assert code == 200, resp
+    return next(w for w in resp["data"]["workers"] if w["id"] == worker_id)
+
+
+def test_register_preflight_reaches_the_fleet_console_over_the_wire(srv, monkeypatch):
+    """THE B4 test. Register carrying a preflight summary, then read it back out of the
+    served admin fleet endpoint — the two ends of the only channel an admin has into a
+    box nobody can SSH into (F12)."""
+    monkeypatch.setenv(WORKER_BOOTSTRAP_ENV, BOOTSTRAP)
+    code, resp, _ = _post(srv["base"], "/api/worker/register",
+                          {"machineId": "m-pf", "displayName": "PF box",
+                           "capabilities": [], "preflight": _GOOD_PREFLIGHT},
+                          bearer=BOOTSTRAP)
+    assert code == 200, resp
+    target = _fleet_worker(srv["base"], srv["db"], "m-pf", "fleet-pf1@x.io")
+    assert target["preflight"] == _GOOD_PREFLIGHT
+    # The enforcement half: a blocking box registers normally but advertises nothing.
+    assert target["capabilities"] == []
+
+
+def test_register_without_preflight_reads_as_null_not_missing(srv, monkeypatch):
+    """A pre-v23 sidecar must render as "never reported one", never as healthy and never
+    as a crash — the whole fleet predates this field."""
+    monkeypatch.setenv(WORKER_BOOTSTRAP_ENV, BOOTSTRAP)
+    assert _post(srv["base"], "/api/worker/register", {"machineId": "m-pf-none"},
+                 bearer=BOOTSTRAP)[0] == 200
+    target = _fleet_worker(srv["base"], srv["db"], "m-pf-none", "fleet-pf2@x.io")
+    assert "preflight" in target and target["preflight"] is None
+
+
+def test_heartbeat_preflight_updates_then_coalesces_over_the_wire(srv, monkeypatch):
+    """§4.4: the sidecar only re-sends on change (or every 10th beat), so a beat WITHOUT
+    the field must leave the stored summary alone. Getting this backwards blanks the
+    console between changes, which both UIs render as "checking…" forever."""
+    monkeypatch.setenv(WORKER_BOOTSTRAP_ENV, BOOTSTRAP)
+    _, resp, _ = _post(srv["base"], "/api/worker/register",
+                       {"machineId": "m-pf-hb", "preflight": _GOOD_PREFLIGHT},
+                       bearer=BOOTSTRAP)
+    token = resp["data"]["token"]
+    healed = {"ok": True, "blocking": False, "enforced": True, "ranAt": 1786800900.0,
+              "failed": []}
+    assert _post(srv["base"], "/api/worker/heartbeat", {"preflight": healed},
+                 bearer=token)[0] == 200
+    assert _fleet_worker(srv["base"], srv["db"], "m-pf-hb",
+                         "fleet-pf3@x.io")["preflight"] == healed
+    # A beat with no preflight key at all: COALESCE keeps the stored one.
+    assert _post(srv["base"], "/api/worker/heartbeat", {"currentSessions": 1},
+                 bearer=token)[0] == 200
+    assert _fleet_worker(srv["base"], srv["db"], "m-pf-hb",
+                         "fleet-pf4@x.io")["preflight"] == healed
+
+
+def test_null_body_heartbeat_still_succeeds_with_preflight_wired(srv, monkeypatch):
+    """_validate_worker_heartbeat's `payload is None` early return has to carry the new
+    key too, or the handler KeyErrors into a 500 on every JSON-`null` beat — the exact
+    regression shape a key-by-key validator invites. (`None` reaches the validator only
+    from a literal `null` body; a truly empty body is rejected earlier at the length
+    check, so this is the branch that must be exercised.)"""
+    monkeypatch.setenv(WORKER_BOOTSTRAP_ENV, BOOTSTRAP)
+    _, resp, _ = _post(srv["base"], "/api/worker/register", {"machineId": "m-pf-empty"},
+                       bearer=BOOTSTRAP)
+    token = resp["data"]["token"]
+    code, body, _ = _req("POST", srv["base"], "/api/worker/heartbeat", None,
+                         bearer=token, raw=b"null")
+    assert code == 200, body
+    # And it did not blank the stored summary on the way through.
+    assert _fleet_worker(srv["base"], srv["db"], "m-pf-empty",
+                         "fleet-pf8@x.io")["preflight"] is None
+
+
+def test_malformed_preflight_is_dropped_never_a_400(srv, monkeypatch):
+    """B9 rule: a diagnostic hint must NEVER be the reason a workable box cannot
+    register. Every one of these bodies is garbage; every one still enrols the box."""
+    monkeypatch.setenv(WORKER_BOOTSTRAP_ENV, BOOTSTRAP)
+    for i, junk in enumerate([
+        "not-an-object", 42, [], {"failed": "not-a-list"},
+        {"ok": "yes", "failed": [None, "x", {"id": 7}]},
+        # Unknown ids, bad severities and an unsupported login platform are dropped ROW
+        # BY ROW — one bad row never discards a report that also carries a real cause.
+        {"ok": False, "blocking": True, "enforced": True,
+         "failed": [{"id": "rm -rf", "severity": "fatal", "detail": "x"},
+                    {"id": "capabilities", "severity": "critical", "detail": "x"},
+                    {"id": "login.myspace", "severity": "warn", "detail": "x"},
+                    {"id": "cdp_reachable", "severity": "fatal", "detail": "real"}]},
+    ]):
+        wid = f"m-pf-junk-{i}"
+        code, resp, _ = _post(srv["base"], "/api/worker/register",
+                              {"machineId": wid, "preflight": junk}, bearer=BOOTSTRAP)
+        assert code == 200, (junk, resp)
+    survivor = _fleet_worker(srv["base"], srv["db"], "m-pf-junk-5", "fleet-pf5@x.io")
+    assert survivor["preflight"]["failed"] == [
+        # `status` is absent from every junk row above and defaults to "fail" — the
+        # reading that never under-reports a problem from an older sidecar.
+        {"id": "cdp_reachable", "severity": "fatal", "status": "fail", "detail": "real"}]
+
+
+def test_oversized_preflight_is_dropped_and_the_register_still_succeeds(srv, monkeypatch):
+    monkeypatch.setenv(WORKER_BOOTSTRAP_ENV, BOOTSTRAP)
+    fat = {"ok": False, "blocking": True, "enforced": True,
+           "failed": [{"id": "cdp_reachable", "severity": "fatal", "detail": "x" * 5000}]
+                     * 40}
+    code, resp, _ = _post(srv["base"], "/api/worker/register",
+                          {"machineId": "m-pf-fat", "preflight": fat}, bearer=BOOTSTRAP)
+    assert code == 200, resp
+    target = _fleet_worker(srv["base"], srv["db"], "m-pf-fat", "fleet-pf6@x.io")
+    # Rows are capped at 16 and details at 200 chars, so this one survives trimmed
+    # rather than being dropped whole — either outcome is fine, a 400 is not.
+    assert target["preflight"] is None or (
+        len(target["preflight"]["failed"]) <= 16
+        and all(len(r["detail"]) <= 200 for r in target["preflight"]["failed"]))
+
+
+def test_preflight_cannot_be_used_to_smuggle_extra_keys(srv, monkeypatch):
+    """`detail` is worker-authored text rendered in the SUPERADMIN console (E1/E2/F18).
+    The validator rebuilds the object key-by-key rather than passing the dict through,
+    so nothing the box invents reaches that surface."""
+    monkeypatch.setenv(WORKER_BOOTSTRAP_ENV, BOOTSTRAP)
+    _post(srv["base"], "/api/worker/register",
+          {"machineId": "m-pf-smuggle",
+           "preflight": {"ok": True, "blocking": False, "enforced": True, "failed": [
+               {"id": "playwright", "severity": "warn", "detail": "d",
+                "remedy": "<img src=x onerror=alert(1)>", "title": "pwned"}],
+               "html": "<script>", "extra": {"deep": 1}}},
+          bearer=BOOTSTRAP)
+    pf = _fleet_worker(srv["base"], srv["db"], "m-pf-smuggle",
+                       "fleet-pf7@x.io")["preflight"]
+    assert set(pf) == {"ok", "blocking", "enforced", "failed"}
+    assert set(pf["failed"][0]) == {"id", "severity", "status", "detail"}
+
+
+def test_a_blocking_preflight_reaches_the_tenant_readiness_banner(srv, monkeypatch):
+    """The second consumer of the stored summary: `readiness.fleet_readiness`, which
+    `GET /api/agent/readiness` runs over `store.list_workers()` on the distributed
+    backend. A box that is online AND capable but parked by its own preflight must NOT
+    count as ready — a false `ready:true` is the tenant-visible half of F9.2/F10, and it
+    is worse than no banner because it tells an operator to expect leads from a fleet
+    that cannot produce any.
+
+    The REGISTER half goes over the wire, then the verdict is computed from the rows the
+    server actually persisted — not a hand-built dict, which is the whole point. It is
+    NOT driven through `GET /api/agent/readiness` because (a) readiness is a property of
+    the WHOLE fleet and this module-scoped DB already holds a dozen workers from earlier
+    tests, and (b) a second `serve()` in one process is unsafe: `_configure_and_start`
+    rebinds `PanelHandler.db_path` as a CLASS attribute, so spinning up an isolated
+    server silently repoints the module's existing server at the new database.
+    """
+    monkeypatch.setenv(WORKER_BOOTSTRAP_ENV, BOOTSTRAP)
+    caps = [[None, "instagram", None]]
+
+    def _rows(*worker_ids):
+        store = Store(srv["db"])
+        try:
+            by_id = {w["id"]: w for w in store.list_workers()}
+        finally:
+            store.close()
+        return [by_id[w] for w in worker_ids]
+
+    # A capability-less box: online, and still not ready (F9.2 — this is the assertion
+    # the original fleet_readiness test had backwards).
+    assert _post(srv["base"], "/api/worker/register", {"machineId": "m-rdy-bare"},
+                 bearer=BOOTSTRAP)[0] == 200
+    verdict = readiness.fleet_readiness(_rows("m-rdy-bare"))
+    assert verdict["ready"] is False and "none advertises a platform" in verdict["detail"]
+
+    # Capable, but parked by its own preflight ⇒ still not ready, with the reason.
+    assert _post(srv["base"], "/api/worker/register",
+                 {"machineId": "m-rdy-parked", "capabilities": caps,
+                  "preflight": {"ok": False, "blocking": True, "enforced": True,
+                                "failed": [{"id": "cdp_attachable", "severity": "fatal",
+                                            "detail": "refuses a DevTools attach"}]}},
+                 bearer=BOOTSTRAP)[0] == 200
+    verdict = readiness.fleet_readiness(_rows("m-rdy-bare", "m-rdy-parked"))
+    assert verdict["ready"] is False and "parked" in verdict["detail"]
+
+    # Heal it: same box, same capability, a clean report ⇒ ready. This is the
+    # re-register-on-heal path, so it also proves a stale red report is REPLACED.
+    assert _post(srv["base"], "/api/worker/register",
+                 {"machineId": "m-rdy-parked", "capabilities": caps,
+                  "preflight": {"ok": True, "blocking": False, "enforced": True,
+                                "failed": []}}, bearer=BOOTSTRAP)[0] == 200
+    assert readiness.fleet_readiness(_rows("m-rdy-parked"))["ready"] is True
+
+
+def test_preflight_check_id_whitelist_covers_the_preflight_module():
+    """Drift guard. server.py keeps the id whitelist as literals so the bridge takes no
+    static dependency on the sidecar package — this test is what makes that safe: add a
+    check id in worker/preflight.py without adding it here and the row would be silently
+    dropped on the wire, which is B4 all over again."""
+    from aizu import server
+    from aizu.worker import preflight
+
+    module_ids = {v for k, v in vars(preflight).items()
+                  if k.startswith("CHECK_") and isinstance(v, str)
+                  and k != "CHECK_LOGIN_PREFIX"}
+    assert module_ids, "no CHECK_* constants found — did preflight.py move?"
+    assert module_ids <= server._WORKER_PREFLIGHT_CHECK_IDS
+    assert preflight.CHECK_LOGIN_PREFIX == server._WORKER_PREFLIGHT_LOGIN_PREFIX
+    # And the caps the worker trims to are the caps the server enforces.
+    assert preflight.MAX_UPSTREAM_FAILED == server._WORKER_MAX_PREFLIGHT_FAILED
+    assert preflight.MAX_UPSTREAM_DETAIL == server._WORKER_MAX_PREFLIGHT_DETAIL
+    assert preflight.MAX_UPSTREAM_BYTES == server._WORKER_MAX_PREFLIGHT_BYTES
+
+
+def test_a_real_report_survives_the_validator_unchanged():
+    """End-to-end shape agreement without a live box: build a real PreflightReport,
+    take its to_upstream_wire(), and assert the server keeps it byte-for-byte. If the
+    two shapes ever drift, this fails before an operator sees a blank health cell."""
+    from aizu.server import _validate_preflight_summary
+    from aizu.worker import preflight as pf
+
+    report = pf.PreflightReport(
+        checks=(
+            pf.CheckResult(pf.CHECK_STATE_DIR, "t", pf.SEVERITY_FATAL, pf.STATUS_PASS),
+            pf.CheckResult(pf.CHECK_CAPABILITIES, "t", pf.SEVERITY_FATAL, pf.STATUS_FAIL,
+                           "neither var is set", "remedy text"),
+            pf.CheckResult("login.instagram", "t", pf.SEVERITY_WARN, pf.STATUS_UNKNOWN,
+                           "unreadable", "remedy text"),
+            pf.CheckResult(pf.CHECK_CDP_ATTACHABLE, "t", pf.SEVERITY_FATAL,
+                           pf.STATUS_SKIP, "skipped"),
+        ),
+        ran_at=1786800000.12, duration_ms=8421)
+    wire = report.to_upstream_wire()
+    assert _validate_preflight_summary(wire) == wire
+    # skip/pass rows never ride the wire; the two real problems do.
+    assert [r["id"] for r in wire["failed"]] == ["capabilities", "login.instagram"]
+    # remedy/title stay client-side copy.
+    assert all(set(r) == {"id", "severity", "status", "detail"} for r in wire["failed"])
+
+
 # ----- dispatch ordering -----------------------------------------------------
 
 def test_worker_routes_bypass_cookie_gate(srv, monkeypatch):
@@ -557,6 +879,31 @@ def test_worker_routes_bypass_cookie_gate(srv, monkeypatch):
     code, resp, _ = _post(srv["base"], "/api/worker/heartbeat", {}, bearer="garbage")
     assert code == 401
     assert resp["error"] == "invalid or revoked worker token"
+
+
+def test_a_store_failure_answers_503_not_401_on_the_worker_plane(srv, monkeypatch):
+    """B10 blast-radius guard, server side. `_current_worker` fails CLOSED on ANY store
+    error, and every worker route answered that with the same 401 a revoked token gets.
+    A bridge restarted before its DB volume mounted therefore told an entire fleet of
+    perfectly valid tokens "you are revoked" — and the boxes acted on it. A server fault
+    must look like a server fault: 503, which the sidecar backs off on."""
+    import aizu.server as server_mod
+
+    real_store = server_mod.Store
+
+    class _ExplodingStore:
+        def __init__(self, *a, **k):
+            raise sqlite3.OperationalError("unable to open database file")
+
+    monkeypatch.setattr(server_mod, "Store", _ExplodingStore)
+    try:
+        code, resp, _ = _post(srv["base"], "/api/worker/heartbeat", {},
+                              bearer="a-perfectly-valid-token")
+    finally:
+        monkeypatch.setattr(server_mod, "Store", real_store)
+
+    assert code == 503, resp
+    assert "temporarily unavailable" in resp["error"]
 
 
 def test_fleet_does_not_require_bearer(srv, monkeypatch):

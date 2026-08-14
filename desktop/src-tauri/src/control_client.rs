@@ -5,8 +5,17 @@
 //! the **single source of truth** for worker/job/Chrome state in the UI:
 //!
 //!   - `GET  /status`  → the full `StatusDto` (worker id, per-account health, current job
-//!                        incl. its `logFilePath`, control flags, Chrome status).
-//!   - `POST /command` → `{"action": "pause"|"resume"|"stopCurrentJob"|"focusWarmedChrome"}`.
+//!                        incl. its `logFilePath`, control flags, Chrome status, and the
+//!                        launch **preflight** report).
+//!   - `POST /command` → `{"action": "pause"|"resume"|"stopCurrentJob"|"focusWarmedChrome"
+//!                                  |"runPreflight"|"openLoginTab"}` (+ `platform` for the
+//!                        last one).
+//!
+//! # `runPreflight` / `openLoginTab` are ACCEPTED, not COMPLETED
+//! Both answer `200 {"accepted": true}` immediately and run **detached** on the sidecar —
+//! each takes seconds (a CDP probe, a Playwright attach), far past this client's 3s
+//! timeout. So `send_command` returning `true` means "the sidecar took the intent", NOT
+//! "it finished". The operator's actual feedback is the NEXT `/status` poll, 1.5s later.
 //!
 //! **This replaces any log-scraping.** The UI does not infer state from logs — it renders
 //! `/status`. The per-job log tail (`log_tail.rs`) follows the exact `currentJob.logFilePath`
@@ -55,6 +64,20 @@ pub struct StatusDto {
     pub controls: ControlsDto,
     #[serde(default)]
     pub chrome: Option<ChromeDto>,
+    /// The sidecar's launch preflight report (`preflight.PreflightReport.to_wire()`),
+    /// or `null` while the first pass is still running.
+    ///
+    /// Deliberately an OPAQUE `serde_json::Value` forwarded verbatim to the UI: the Rust
+    /// never needs to know a single check id, so a change to the Python check list costs
+    /// nothing here, and a wrong guess about the shape cannot blank the whole status
+    /// parse. `#[serde(default)]` for the same reason `reenrolment_required` has it — an
+    /// older packaged sidecar omits the key entirely, and a missing report must degrade
+    /// to "checking…", never fail the parse.
+    ///
+    /// **`None` is NOT healthy.** The UI renders it as "checking…"; a box whose preflight
+    /// has not finished has been cleared of nothing.
+    #[serde(default)]
+    pub preflight: Option<serde_json::Value>,
     #[serde(default)]
     pub generated_at: f64,
 }
@@ -88,6 +111,13 @@ pub struct ControlsDto {
     pub halt_reason: Option<String>,
     pub update_required: bool,
     pub paused: bool,
+    /// Ledger B10: dispatch answered 401, the box's token was cleared and the pull loop
+    /// stopped — it does NOTHING until an operator re-enrols it. `serde(default)` because
+    /// an older sidecar binary (packaged before this field existed) omits it entirely,
+    /// and a missing flag must degrade to "not revoked", never fail the whole status
+    /// parse and blank the UI.
+    #[serde(default)]
+    pub reenrolment_required: bool,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -98,29 +128,56 @@ pub struct ChromeDto {
     pub browser_version: Option<String>,
 }
 
-/// The four zero-argument operator intents (mirror `control_state.VALID_COMMANDS`).
-#[derive(Debug, Clone, Copy)]
+/// The operator intents (mirror `control_state.VALID_COMMANDS`).
+///
+/// NOT `Copy` any more: `OpenLoginTab` carries the platform name. Kept as an enum rather
+/// than a free-form string so a typo is a compile error, never a `400 unknown action` the
+/// operator sees as "nothing happened".
+#[derive(Debug, Clone)]
 pub enum Command {
     Pause,
     Resume,
     StopCurrentJob,
     FocusWarmedChrome,
+    /// Re-run the launch preflight now (the wizard's and the dashboard's "Re-check").
+    RunPreflight,
+    /// Open/focus a login tab for `platform` in the warmed Chrome so the operator can sign
+    /// in **in the real browser**. This is the local half of the handoff
+    /// `server._handle_agent_launch_login` has always promised in distributed mode.
+    /// `platform` is whitelisted server-side against `CDP_PLATFORMS`.
+    OpenLoginTab { platform: String },
 }
 
 impl Command {
-    fn action(self) -> &'static str {
+    fn action(&self) -> &'static str {
         match self {
             Command::Pause => "pause",
             Command::Resume => "resume",
             Command::StopCurrentJob => "stopCurrentJob",
             Command::FocusWarmedChrome => "focusWarmedChrome",
+            Command::RunPreflight => "runPreflight",
+            Command::OpenLoginTab { .. } => "openLoginTab",
+        }
+    }
+
+    /// The only per-action argument the control surface accepts today.
+    fn platform(&self) -> Option<&str> {
+        match self {
+            Command::OpenLoginTab { platform } => Some(platform.as_str()),
+            _ => None,
         }
     }
 }
 
+/// `skip_serializing_if` keeps the zero-argument commands byte-identical to what they
+/// have always sent (`{"action":"pause"}`). `validate_command` does tolerate a null
+/// `platform` on those actions today, but sending a field an action does not take is how
+/// a future tightening of that validator turns Pause into a silent 400.
 #[derive(Debug, Serialize)]
-struct CommandBody {
+struct CommandBody<'a> {
     action: &'static str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    platform: Option<&'a str>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -129,9 +186,15 @@ struct AcceptedDto {
     accepted: bool,
 }
 
-/// Thin HTTP client over the loopback control surface. Cheap to clone (`Arc` fields).
+/// Thin HTTP client over the loopback control surface.
+///
+/// The port is an atomic, not a baked-in base URL: the advanced menu can change
+/// `control_port` at runtime and the sidecar is now restarted in place rather than by
+/// relaunching the whole app, so a frozen base would leave this client politely polling a
+/// port nothing listens on — a UI that shows "connecting…" forever with a perfectly
+/// healthy worker behind it.
 pub struct ControlClient {
-    base: String,
+    port: std::sync::atomic::AtomicU16,
     token: Arc<String>,
     http: reqwest::Client,
 }
@@ -145,10 +208,22 @@ impl ControlClient {
             .build()
             .expect("reqwest client build");
         Self {
-            base: format!("http://127.0.0.1:{control_port}"),
+            port: std::sync::atomic::AtomicU16::new(control_port),
             token,
             http,
         }
+    }
+
+    /// Point at a new control-surface port (after a config write). Loopback only, always.
+    pub fn set_port(&self, port: u16) {
+        if port != 0 {
+            self.port.store(port, std::sync::atomic::Ordering::SeqCst);
+        }
+    }
+
+    fn url(&self, path: &str) -> String {
+        let port = self.port.load(std::sync::atomic::Ordering::SeqCst);
+        format!("http://127.0.0.1:{port}{path}")
     }
 
     /// `GET /status`. On any transport/parse failure returns `ControlSurfaceUnreachable`
@@ -156,7 +231,7 @@ impl ControlClient {
     pub async fn get_status(&self) -> Result<StatusDto, DesktopError> {
         let resp = self
             .http
-            .get(format!("{}/status", self.base))
+            .get(self.url("/status"))
             .bearer_auth(self.token.as_str())
             .send()
             .await
@@ -176,11 +251,12 @@ impl ControlClient {
     /// `POST /command`. Returns whether the sidecar ACCEPTED the intent (a job existed /
     /// Chrome was reachable) — not whether it has COMPLETED (both are eventual).
     pub async fn send_command(&self, cmd: Command) -> Result<bool, DesktopError> {
+        let body = CommandBody { action: cmd.action(), platform: cmd.platform() };
         let resp = self
             .http
-            .post(format!("{}/command", self.base))
+            .post(self.url("/command"))
             .bearer_auth(self.token.as_str())
-            .json(&CommandBody { action: cmd.action() })
+            .json(&body)
             .send()
             .await
             .map_err(|e| DesktopError::ControlSurfaceUnreachable(format!("POST /command: {e}")))?;
@@ -194,6 +270,49 @@ impl ControlClient {
                 env.error.unwrap_or_else(|| "command rejected".into()),
             )),
         }
+    }
+}
+
+/// How long the wizard's one-shot "can this box reach your cloud?" probe waits.
+const DISPATCH_PROBE_TIMEOUT_MS: u64 = 4_000;
+
+/// One-shot reachability probe of the DISPATCH url for the wizard's Connect step.
+///
+/// **Deliberately not a preflight check, and deliberately not fatal to anything.** A
+/// preflight that failed on a flaky network would park working boxes every time a VPN
+/// blinked (spec §6, step 1), so reachability is a one-shot piece of operator feedback
+/// here and nothing else. Any HTTP answer at all — including 401/404 — proves the box can
+/// reach that host, which is the only question being asked; only a transport error is a
+/// "no". Returns `Ok(status_code)` or `Err(short reason)`.
+///
+/// This is the ONE place this client talks to something that is not the loopback control
+/// surface, so it builds its own short-lived client rather than reusing `ControlClient`.
+pub async fn probe_dispatch(base_url: &str) -> Result<u16, String> {
+    let url = base_url.trim().trim_end_matches('/').to_string();
+    if !(url.starts_with("http://") || url.starts_with("https://")) {
+        return Err("not an http(s) URL".into());
+    }
+    let http = reqwest::Client::builder()
+        .timeout(Duration::from_millis(DISPATCH_PROBE_TIMEOUT_MS))
+        .build()
+        .map_err(|e| format!("client build: {e}"))?;
+    match http.get(&url).send().await {
+        Ok(resp) => Ok(resp.status().as_u16()),
+        // The transport error string can name the host but never a credential — nothing
+        // authenticating is sent on this request at all.
+        Err(e) => Err(short_transport_error(&e)),
+    }
+}
+
+/// Condense a reqwest error into one operator-readable clause. `reqwest::Error`'s Display
+/// chains causes into a paragraph; the wizard has one line.
+fn short_transport_error(e: &reqwest::Error) -> String {
+    if e.is_timeout() {
+        "timed out".into()
+    } else if e.is_connect() {
+        "could not connect".into()
+    } else {
+        "request failed".into()
     }
 }
 

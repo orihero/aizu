@@ -183,8 +183,23 @@ on the CDP port** (9333 live), plus provider creds (`OPENROUTER_API_KEY`) in the
 This is the standing "live exit gate." See [engine-live-run notes] and CDP gotchas below (D3).
 **How to avoid/detect:** Before blaming the pipeline, verify CDP attach works:
 a real `connect_over_cdp('http://127.0.0.1:9333')` must succeed — HTTP 200 on `/json/version`
-is NOT sufficient. Consider surfacing a non-zero `halt_reason` when Chrome can't attach so a
-0-result run isn't silently reported as success.
+is NOT sufficient.
+**The "don't report a silent success" half is now DONE (2026-08-13)** — this entry's closing
+recommendation, implemented by three independent pieces:
+1. **Can't attach at all** → the worker probes CDP before spawning and returns
+   `halt_reason='cdp_unreachable'` without spawning, so the job nacks with a real reason instead of
+   hanging ~180s and crashing. Gated to `CDP_PLATFORMS`, since an API-only job (youtube/telegram/
+   reddit) drives no browser and must still run on a Chrome-less box.
+2. **Attaches, then wedges mid-run** → `HaltSession("cdp_call_wedged", kind="canary")` after
+   `cfg.max_consecutive_wedged_calls` degraded calls (see D6). Without it, the restored deadline
+   turned a frozen browser into a clean `completed` run with 0 leads — this entry's exact symptom,
+   reintroduced by the fix for a different bug. Probed: `walk elapsed=23.59s reels=0 exception=None`.
+3. **Operator visibility** → the run activity feed surfaces the fleet job's failure code, so a dead
+   run reads "Failed on the fleet — the worker's Chrome could not be attached" rather than a blank
+   "Finished on the fleet".
+**Still open — the live exit gate itself:** nobody has yet driven a real `target_leads>=1` run to
+leads on a warmed, logged-in Chrome on a worker box. That needs hardware and a warmed account, not
+code.
 
 ### B7. Per-org platform credentials on a remote box — fetch, never bake
 **Symptom:** A youtube/telegram/reddit fleet job on a genuinely remote worker resolves its
@@ -214,7 +229,7 @@ JOB ROW, never from the request. Deliberately does NOT touch `_job_capability_co
 lease-holder check is strictly tighter than capability matching, so pool-wide `[null, platform,
 null]` capabilities keep working (see B1/B2 — breaking those regresses every deployment).
 
-### B8. Cross-tenant credential reach via the shared bootstrap token (OPEN)
+### B8. Cross-tenant credential reach via the shared bootstrap token (MECHANISM SHIPPED — cutover still owed)
 **Symptom:** None observed — a design exposure surfaced by security review, not a live bug.
 **Root cause:** `AIZU_WORKER_BOOTSTRAP_TOKEN` is ONE shared secret for the whole fleet, and a
 worker self-declares its capabilities at register. `_job_capability_covers` treats `cap_org=None`
@@ -226,21 +241,121 @@ credential.
 (campaign metadata → a live credential, a full logged-in session for Telegram) without authoring
 it. The bootstrap token IS the fleet's trust boundary today: anyone holding it could already
 lease, run, and sync leads for any org.
-**Fix direction (not done):** per-worker, single-use, revocable enrolment tokens instead of one
-shared fleet token — so a worker's org scope is server-assigned at enrolment rather than
-self-declared. Do NOT "fix" it by rejecting `cap_org=None`; that breaks the shipped desktop app,
-which registers pool-wide by default (B1/B2).
+**Fix (shipped in `Launch`, schema v22 + the v22.1 clamp-on-re-register follow-up):** per-worker,
+single-use, admin-minted enrolment tokens — `worker_enrolment_tokens` (`store.py:639`), minted from
+the panel (`MintEnrolmentTokenModal.tsx`), redeemed on first register. A redeemed token's scope is
+stamped on the worker row as `workers.enrolment_scope_kind` (`store.py:621`) and CLAMPS what gets
+written on that register **and on every later re-register** (`server.py:3490-3497`): `'org'` forces
+`org_id` and every capability's `cap_org` to the token's org; `'pool'` is the deliberate multi-org
+grant and leaves capabilities unclamped. The `cap_org=None` trap was correctly avoided — pool-wide
+registration still works, so the shipped desktop app (B1/B2) is unaffected.
+**Why this entry is not CLOSED — three things the shipped mechanism does not do by itself:**
+1. **A legacy-enrolled worker is never clamped, ever.** The clamp is gated on
+   `if enrolment_scope is not None` (`server.py:3490`), and a worker that first-registered via the
+   shared bootstrap token has `enrolment_scope_kind IS NULL` forever. It keeps self-declaring its
+   own `org_id` + pool-wide capabilities on every re-register, on a bearer token with a 1-year TTL
+   that each re-register refreshes. `test_worker_server.py:396-421` pins exactly this. **So the
+   exposure persists on every already-provisioned box until it is re-enrolled**, no matter what the
+   feature flag says.
+2. **Re-enrolling a box is not just "hand it the new token".** The sidecar presents a bootstrap /
+   enrolment token ONLY when it holds no stored worker token (`sidecar.py:388-397`) — otherwise it
+   takes the re-register branch and never calls redemption. The runbook must be: stop the sidecar →
+   **delete the persisted token** (`<AIZU_WORKER_STATE>/worker-token.enc`, default
+   `.worker-state/worker-token.enc`, or the `aizu-worker-token` keyring entry —
+   `token_backends.py:33,37,67`) → set the enrolment token → restart. Reusing the same machineId is
+   fine; `register_worker` UPSERTs the same row (`store.py:3199-3218`).
+3. **The completion criterion is a DB query, not a log line.** `SELECT id, host FROM workers WHERE
+   revoked_at IS NULL AND enrolment_scope_kind IS NULL` must be EMPTY before flipping
+   `AIZU_WORKER_LEGACY_BOOTSTRAP_ENABLED=0`. Watching for the deprecation warning
+   (`server.py:3470-3474`) is insufficient — a legacy box that only ever re-registers on its own
+   bearer token never hits that branch and never logs it.
+**Also note:** scope choice is what decides whether the cutover delivers real isolation. Minting
+`'pool'` out of habit leaves the exposure materially unchanged — only now revocable and
+attributable. And the flag parse (`server.py:3463-3466`) treats an EMPTY value as disabled, so
+`AIZU_WORKER_LEGACY_BOOTSTRAP_ENABLED=` in a `.env` silently fails closed and can lock out an
+un-enrolled box. That direction is safe, but surprising — set `1` or `0` explicitly.
 
-### B9. Spend cap silently resets per worker box (OPEN)
+### B10. Revoking a worker permanently bricks the box (no 401 recovery) — FIXED 2026-08-13
+**Symptom:** A worker whose row is revoked server-side (or whose `workers` row vanished in a DB
+reset — see C3) goes dead and never comes back, even after the operator re-issues credentials.
+**Root cause:** There is NO 401 handling anywhere in the worker sidecar — `grep '401\|revoked'`
+over `worker/sidecar.py` and `worker/lease_client.py` returns nothing. The box keeps presenting its
+persisted bearer token forever, gets rejected forever, and never clears the token or falls back to
+enrolment. This directly undercuts B8's "revocable" claim: revocation stops the box from working
+but leaves no way to bring it back short of a manual token-file deletion (C3's workaround).
+**Fix (2026-08-13, no schema change — SCHEMA_VERSION stays 22):** every worker-plane 401 funnels
+into one idempotent `Sidecar._on_auth_revoked`, reached from all seven bearer-authenticated calls
+(register, presence, lease, job heartbeat, ack, nack, credential). It clears the token through
+`TokenStore` (so the keyring backend is cleared too, not an unlink of `worker-token.enc`), logs at
+CRITICAL naming the operator action, stops leasing, and parks the process with the control surface
+still serving so a supervisor/desktop shell does not crash-loop it. **No auto-re-register.**
+Operators see `controls.reenrolmentRequired` on the status surface and a red strip + "revoked" pill
+in the desktop app.
+**Detection is deliberately narrow, because the failure mode of getting this wrong is worse than the
+bug.** Three CRITICAL defects were caught in review and fixed; all three are ways a *transient*
+condition could have bricked a healthy box, or ways revocation could have failed to stick:
+1. **A 401 must come from the dispatch, not from anything in front of it.** Keying on the status
+   code alone meant a reverse proxy's or captive portal's HTML-bodied 401 destroyed a valid token.
+   `Result.is_unauthorized` now requires `status == 401` AND a body that really parsed to an
+   envelope with a boolean `ok` that is false.
+2. **One 401 is not proof.** The token is retired only after `_UNAUTHORIZED_CONFIRM_LIMIT` (3)
+   CONSECUTIVE 401s across any route; any non-401 outcome resets the counter. Server-side companion:
+   `_current_worker` now distinguishes "store raised" from "no such row" and answers **503**, not
+   401, during a DB blip — a valid token was being told it was revoked.
+3. **Revocation did not survive a restart, and the token clear is what re-opened the hole.** With no
+   token, a restarted box takes the FIRST-register branch, where the shared bootstrap secret UPSERTs
+   `revoked_at = NULL` and silently undoes the revocation. Closed server-side: `Store.is_worker_revoked`
+   (`store.py:3495`), and the legacy-bootstrap branch of register now refuses a revoked worker with
+   `401 worker is revoked; re-enrol it with a per-worker enrolment token`. An unknown machine still
+   enrols normally, so C3's DB-reset recovery is preserved, and an admin-minted enrolment token
+   still un-revokes. **This makes revocation durable without waiting for the B8 cutover.**
+**A 401 mid-job does not kill the running child by itself** — the pre-existing three-strike heartbeat
+rule decides its fate. A worker that cannot heartbeat has lost its lease claim and the server may
+re-dispatch, so continuing blind risks the same job running on two boxes; and letting it "finish and
+report" is hollow because the ack would 401 too.
+**Also fixed:** the parked process no longer keeps a presence thread authenticating forever, and a
+401 is compared against the bearer that was actually presented — if another process rotated the
+token in a shared state dir, the stale process ADOPTS the new token instead of halting.
+
+### B9. Spend cap silently resets per worker box — FIXED 2026-08-13
 **Symptom:** A campaign with a `--spend-cap` can spend up to the full cap again each time its
 job lands on a different worker box.
 **Root cause:** `core/router.py` checks `self.store.total_spend(campaign_id) >= self.spend_cap_usd`
 against the **local** `spend_log` table. A fleet job is unpinned (pool-wide capability), so box B
 has no rows for a campaign previously run on box A or on the server, sees $0, and permits a full
 fresh budget. The cap is effectively per-box, not per-campaign.
-**Fix direction (not done):** either roll spend up to the cloud on ack (alongside the existing
-lead sync-back, which already proves the pattern) and gate against the authoritative total, or
-ship the campaign's already-spent total in the job spec so the box starts from the right number.
+**Fix:** prior total resolved at LEASE time + delta rolled up on ack AND nack, riding the same
+channel the lead sync-back already proved. No schema change (SCHEMA_VERSION stays 22).
+- `priorSpendUsd` is resolved live inside `lease_one_job`'s `_tx_immediate` and emitted through
+  `_job_row_to_lease`'s whitelist (`store.py:1152`) — the B4 trap, so its regression test hits the
+  served `POST /api/worker/lease`, not the store layer (`test_jobs_server.py:216`).
+- The box computes `effective_cap = local + max(0, cap - max(prior, local))`, so a campaign's
+  budget is honoured across boxes instead of resetting.
+- The sidecar reports the delta on BOTH ack and nack, so every graceful failure banks its spend.
+**Four traps this walked into, all found by adversarial review with executed probes — do not
+reintroduce them:**
+1. **Same-DB double count.** `AIZU_DB` defaults to the same `aizu.db` filename the bridge uses, and
+   the repo's own integration test wires worker and server to ONE file. In that topology the child
+   already wrote the rows into the cloud `spend_log`, so the rollup INSERTed them a second time
+   (`spend_log` has no unique key — it is not idempotent like `_upsert_match_row`). Guarded by
+   `Store.database_id()`: the sidecar sends `dbId`, and the sync SKIPS entirely when it matches the
+   server's own. Probed: $3 spent read back as $6 before the guard.
+2. **A cloud-side cap does not exist.** `AIZU_SPEND_CAP` is a WORKER-plane variable — set on the
+   boxes, absent on the bridge. The first cut had the bridge fall back to a hard-coded default and
+   permanently refuse to dispatch an over-budget campaign nobody had capped. The enqueue-time skip
+   now fails OPEN: `_fleet_spend_cap_usd()` returns None when the bridge has no explicit cap, and
+   the skip only fires when a cap is genuinely known. **Authoritative enforcement lives on the box**,
+   which is the only place that knows its own cap.
+3. **A requeue never traverses dispatch.** `nack_job` puts the row straight back to `queued`, so the
+   enqueue-time skip cannot see it and an over-cap job would re-lease and burn a full duration of
+   degraded local stand-ins. The box now refuses BEFORE the CDP probe and before the spawn, with
+   `halt_reason='spend_cap'` in `_POISON_HALTS` so it dead-letters instead of burning all 5 attempts.
+4. **A reclaimed attempt lost its dollars.** The cursor was re-taken per attempt, so a SIGKILLed
+   box's spend fell between the old mark and the retry's. The mark is now parked at
+   `<state_dir>/run-<runId>.spend-cursor`, resumed on retry, and retired only on an ACCEPTED report.
+**How to avoid/detect:** `total_spend` is a LIFETIME sum, not per-run — anything gating on it must
+say which. And when a fix needs a value the control plane cannot know, fail OPEN and enforce where
+the value actually lives; a guessed default turns a safety rail into an outage.
 
 ---
 
@@ -281,6 +396,39 @@ classifier, and would be wiped on the next re-register anyway.
 **Takeaway:** Fix the SOURCE (config/env/code path that produces the value), not the DB row.
 Registry columns like `workers.capabilities` are UPSERT-overwritten on every re-register.
 
+### C5. Entire panel Vitest suite red on Node ≥25 — vitest never copies jsdom's Storage
+**Symptom:** 100% of the admin-panel suite fails — `Test Files 51 failed (51) / Tests 470 failed
+(470)` — every failure identical: `TypeError: Cannot read properties of undefined (reading 'clear')`
+from the global `afterEach` in `admin-panel/src/test/setup.ts:18`. Plus an `ExperimentalWarning:
+localStorage is not available` on stderr. **CI stayed green the whole time.**
+**Root cause:** vitest 3.2.6's `getWindowKeys` skips any jsdom-window key that already exists on the
+Node global unless it is in a hardcoded allowlist — `if (k in global) return keysArray.includes(k)`
+(`node_modules/vitest/dist/chunks/index.CmSc2RE5.js:250`). Neither `localStorage` nor
+`sessionStorage` is in that list (it carries the `Storage` *constructor*, not the instances). Node
+≥25 unflagged webstorage, so `'localStorage' in globalThis` is now true and jsdom's Storage is never
+copied — `localStorage` stays Node's lazy accessor, which is `undefined` without
+`--localstorage-file`. The jsdom env calls `populateGlobal` with no `additionalKeys`, so there is no
+config knob. jsdom is a BYSTANDER (its `window.localStorage` works fine) and bumping vitest does not
+help — `main` carries the identical filter. Upstream: vitest-dev/vitest#8757.
+**Quieter companion bug:** pre-fix on Node ≥25, `sessionStorage` silently resolved to Node's
+*process-global* Storage — a working-but-wrong object (`instanceof globalThis.Storage === false`)
+that leaked across test files and was never cleared by the `afterEach`.
+**Fix:** shim at the top of `admin-panel/src/test/setup.ts` — read the untouched WebIDL accessor
+`Object.getOwnPropertyDescriptor(Document.prototype, 'defaultView')` (vitest shadows
+`document.defaultView` with an own property pointing at the global) and re-point both storage globals
+at the real jsdom window. A no-op on Node ≤24, where they are already the same object. Two things to
+preserve if you edit it: **never bind the getter to a variable** (`@typescript-eslint/unbound-method`
+errors under `strictTypeChecked` and reds `npm run lint` — which `tsc` does NOT catch), and never
+swap in a hand-rolled polyfill (`src/shared/lib/storage.test.ts` spies on
+`Storage.prototype.setItem/getItem`, which needs a genuine jsdom Storage). Delete the shim once
+vitest adds both names to OTHER_KEYS.
+**How to avoid/detect:** the real lesson is a **two-major local/CI Node drift with ZERO CI signal** —
+CI pins Node 24 (`.github/workflows/ci-cd.yml:50`) while local dev ran 26, so a total local wipeout
+was invisible to CI. A root `.nvmrc` (`24`) now pins nvm users to the CI Node.
+`src/shared/lib/storage.test.ts` carries a named `describe('test environment')` guard asserting both
+storages are `instanceof Storage` — `toBeInstanceOf` is the load-bearing part, since it also catches
+the silent-substitution variant, not just the `undefined` one.
+
 ---
 
 ## D. General development findings (cross-cutting)
@@ -319,6 +467,186 @@ deferred `_tx` (read lock until first write) lets two workers SELECT the same ro
 `_tx_immediate` for anything that leases/claims. All worker writes serialize through one writer;
 fine at PRD scale, revisit Postgres only past a measured throughput ceiling.
 
+### D6. A test that HANGS is far worse than a test that fails — it wedges CI silently
+**Symptom:** `python -m pytest` never terminates. Locally it looks like a stalled run ("1%" for
+10+ minutes); in CI the job burns until GitHub's 6-hour timeout and only then fails, and because
+`deploy` `needs: [engine, panel]`, **deploys are blocked** with no useful signal about why.
+**Root cause:** `CDPFeedBase._call_bounded` (`core/cdp.py:232-256`) deliberately stopped enforcing
+a deadline — routing Playwright's greenlet-based, thread-affine SYNC API through
+`core.bounded.call_bounded` raised `greenlet.error: Cannot switch to a different thread` on 100% of
+calls, so every scroll notch was skipped and the feed never advanced. Removing it was correct. What
+was missed is that **five tests still assert the old contract by feeding in a page that blocks on
+`threading.Event().wait()`**. With a deadline they returned and passed; with none they never return
+at all: `tests/core/test_cdp.py` (3), `tests/core/test_human.py` (1),
+`tests/engines/instagram/test_cdp_timeouts.py` (1).
+**Fix, part 1 (2026-08-13):** all five marked `pytest.mark.skip` to unwedge CI while the real fix
+was designed.
+**Fix, part 2 — the deadline is BACK (2026-08-13), `core/pw_owner.py` (new, ~390 lines).** All five
+tests are un-skipped and pass in 0.84s. The mechanism is a dedicated `PlaywrightOwner` daemon thread
+with a work queue: **`attach()` itself runs on the owner**, so `sync_playwright().start()`,
+`connect_over_cdp`, the `Page`, the `BrowserContext` and every ElementHandle are created on and bound
+to that thread — it IS the owning thread. Only the WAIT crosses threads. That is the distinction the
+original disaster missed: the rule is thread-AFFINITY, not thread-identity, and `readiness.py` was
+already safely using `core/bounded.py` for exactly this reason (it starts its own `sync_playwright()`
+INSIDE the daemon thread). An `OwnedPW` auto-dispatching proxy replaces what would have been a
+~35-site hand migration across 5 files — every missed site would have raised `greenlet.error` inside
+an `except Exception: return False`, i.e. silently.
+**Verified live, not inferred:** against real headless Chrome 151 on `--remote-debugging-port=9444`,
+a `SIGSTOP`'d browser makes `page.mouse.wheel` hang unboundedly (the D6 risk, observed); the same
+call under a 1.0s queue deadline returns control at 1.002s; `SIGCONT` self-heals and the next call
+succeeds in ~6ms.
+**Three ways this fix nearly recreated the original catastrophe, all caught in review and fixed:**
+1. **A wedged session finished as a clean, successful, zero-lead run** — probe:
+   `walk elapsed=23.59s reels=0 healthy=False exception=None`. The deadline turns "hangs forever"
+   into "every call degrades", and every degrade path is skip-and-continue, so the run ended
+   `completed` with no halt reason and no flag: **ledger B6's exact complaint**. Now `PlaywrightOwner`
+   counts a wedge streak (expiries AND the fast-fails behind them; any completed call resets) and
+   `walk()` raises `HaltSession("cdp_call_wedged", kind="canary")` past
+   `cfg.max_consecutive_wedged_calls` (default 3, 0 disables).
+2. **The owner could migrate mid-session.** An unlatched `_ensure()` failure let the owner move from
+   the caller thread to a new daemon thread — the forbidden move, mid-run.
+3. **`attach()` leaked the node driver subprocess** on any failure after `sync_playwright().start()`,
+   because the objects lived in a local closure. `stop()` is only legal on the owning thread, so the
+   cleanup had to run there.
+**The loud-failure guard:** `PlaywrightThreadAffinityError` deliberately subclasses **BaseException**
+(`pw_owner.py:92`), so a thread-affinity regression escapes the `except Exception:` handlers that
+made the first breakage invisible to a fully green suite. If this trap is ever re-entered, it fails
+loudly instead of silently harvesting nothing.
+**Rejected with evidence, do not retry:** a transport-level kill (nothing to kill — the acceptance
+fakes block in pure Python with no CDP behind them, so it re-wedges CI) and prevent-and-detect via
+`os._exit` (terminates the pytest process mid-test; a crashed session is not a green test).
+**How to avoid/detect:** when you delete a guarantee, grep for the tests that assert it — a test
+built around "hangs forever" input turns into an infinite hang, not a red X. Any test that fakes a
+wedge should carry its own hard bound (`pytest-timeout`, or a real deadline inside the fake) so it
+FAILS instead of hanging. Consider a job-level `timeout-minutes` on the CI engine step so a wedge
+surfaces in minutes rather than hours.
+
+---
+
+## E. HTTP bridge, panel API & product surface — found by the LIVE SHAKEDOWN (2026-08-13)
+
+> Ten agents booted the real bridge, the built panel and a real `aizu-worker` on isolated ports and
+> drove the product over HTTP; every claimed defect was then independently reproduced from a clean
+> slate before being accepted. **All of section E was invisible to a fully green 1,953-test suite.**
+> The meta-lesson: unit tests prove a function's contract; only running the app proves the product's.
+
+### E1. Unauthenticated remote DoS — the access log echoed the full request path
+**Symptom:** a few hundred KB of long-URL requests froze the WHOLE bridge; a normal `/api/health` went
+from 0.9 ms to 1157 ms. Measured curve: 1k=6ms, 8k=190ms, 16k=726ms, 32k=2894ms, 64k=11594ms.
+**Root cause:** `log_request` handed the entire attacker-controlled `self.path` to the Rich console
+handler; word-wrapping ONE unbroken token is quadratic, and Rich's renderer holds the GIL, so every
+thread stalls. No auth needed to trigger it.
+**Fix:** `_log_path()` bounds the path at every sink, plus a `LineCapFormatter` backstop on the
+console handlers so no caller can make rendering superlinear. Capped PER LINE, so tracebacks keep all
+frames; the file handler stays uncapped. After: the curve is flat (~1.5 ms at 64k) and the flood costs
+68 ms instead of 2103 ms.
+**How to avoid/detect:** any request-controlled string reaching a log sink is a DoS surface, and a
+pretty-printing handler is a *computational* surface, not just an I/O one.
+
+### E2. NaN/Infinity accepted at 200 permanently bricked an org's panel
+**Symptom:** `POST /api/campaign` with `budgetCap: Infinity` → HTTP 200, stored. Thereafter
+`/api/state` and `/api/campaigns` returned **200 with a body no JSON parser accepts** (`json.dumps`
+emits bare `Infinity`/`NaN`, invalid per RFC 8259). The org's panel was dead with no in-app remedy.
+**Root cause:** `_opt_number` validated type and `>= 0` but never `math.isfinite` — and **`NaN < 0` is
+False**, so NaN sailed through the range check.
+**Fix:** one shared `_finite_number()` boundary, AND `_json_bytes()` now serializes with
+`allow_nan=False` so the response layer itself cannot emit invalid JSON — the class cannot recur
+through a different door.
+**How to avoid/detect:** every comparison-based range check has a NaN hole. Validate finiteness
+explicitly, and make the serializer the last line of defence.
+
+### E3. An out-of-range number killed the connection with NO response and leaked a traceback
+**Symptom:** a 400-digit `budgetCap` → curl exit 52, HTTP 000, empty reply — the socket reset with no
+HTTP response at all — plus a full traceback with absolute paths on stderr. A sibling case returned
+500 leaking the SQLite driver's own message.
+**Root cause:** validation ran BEFORE the handler's try-block, and `float(value)` raises
+`OverflowError`, which escaped `do_POST` unguarded.
+**Fix:** `_finite_number` catches it → clean 400; plus `_dispatch_guarded()` wraps all routing so any
+unexpected exception becomes a generic 500 with detail to the LOG only, and a `send_response_only`
+override prevents a second status line on an already-started response. 19 `error=str(e)` leak sites
+swept.
+
+### E4. Lead identity collided across campaigns — clicking one lead wrote to another
+**Symptom:** an operator clicked a row in campaign A; the drawer opened campaign B's lead, and the
+status write returned 200 having marked **B's** lead 'interested'.
+**Root cause:** the panel payload flattened a lead to `"id": comment_id`, but real identity is the
+composite PK `(campaign_id, platform, comment_id)`. The same commenter under two campaigns — or the
+same id on two platforms — collapsed into one row.
+**How to avoid/detect:** when a DB row has a composite key, any single-column "id" handed to a client
+is a bug waiting for its second tenant. Check every flattening boundary between store and panel.
+
+### E5. A colliding campaign CREATE silently destroyed the existing campaign
+**Symptom:** creating a second campaign named the same as an existing one overwrote the first's brief,
+and because `matches` is keyed on `(campaign_id, …)`, the first campaign's entire lead history
+silently re-pointed to what the operator thought was a new campaign.
+**Root cause:** CREATE and EDIT were the same endpoint with the same payload and no discriminator.
+**Fix:** a create that would clobber an existing id is refused with `409 a campaign with this id
+already exists`. **The trap during the fix:** the first attempt keyed the guard on an explicit
+`op: "edit"` field — which the SHIPPED PANEL NEVER SENDS, so the bug was untouched on the real wire
+while its regression test passed. Caught by the verification pass. Any create/edit discriminator MUST
+be validated against the payload the actual client sends.
+
+### E6. Campaign ids were a GLOBAL namespace across tenants
+**Symptom:** org B creating an ordinarily-named campaign that org A already had got
+`404 unknown campaign` **on a CREATE** — and could thereby probe which ids other tenants owned (a
+cross-tenant existence oracle).
+**Fix:** campaign identity is per-org. **The regression this introduced, caught in verification:** the
+first fix let any tenant permanently lock every other tenant out of any campaign name by
+pre-registering it — a cross-tenant denial-of-service *created by the fix for a cross-tenant leak*.
+**How to avoid/detect:** when de-globalising a namespace, ask immediately what a hostile tenant can now
+reserve.
+
+### E7. The B6 fleet-failure fix was INERT on the wire (the B4 trap, one layer up)
+**Symptom:** a dispatched run whose worker could not attach Chrome showed the operator NOTHING —
+`/api/run/activity` returned `404 unknown run`.
+**Root cause:** the handler 404s when there are no sessions AND no events — which is exactly the state
+of a job that died before doing anything — and that check sat BEFORE the `fleetJob` block, using a
+`job` row the handler had ALREADY FETCHED a few lines earlier.
+**How to avoid/detect:** this is ledger B4 repeating in a new place. A fix is not shipped until a test
+drives the SERVED endpoint in the exact failure state the fix exists for. "No rows yet" IS the state
+that matters for a failure-reporting path.
+
+### E8. The panel reported $0 spent for any campaign with spend but no leads
+**Symptom:** $999 banked in `spend_log` rendered as `"spent": 0.0` on the campaign card, while the
+SAME `/api/reports` payload summed that money under `spendByStage` — the payload contradicted itself.
+**Root cause:** `per_campaign_rollup` built its rows `FROM matches … GROUP BY campaign_id`, so a
+campaign with zero leads simply did not exist in the result, and the panel defaulted it to 0.
+**How to avoid/detect:** a rollup driven off the *success* table silently reports zero for every
+failure case — which is precisely when an operator needs the number.
+
+### E9. B10's revocation halt was trigger-happy: a 9-second blip bricked a box
+**Symptom:** restarting the bridge on an empty DB destroyed a worker's persisted token in NINE
+SECONDS (401s at :19, :22, :28 → CRITICAL, token deleted, box parked pending a manual re-enrolment).
+**Root cause:** the confirmation was COUNT-ONLY (`_UNAUTHORIZED_CONFIRM_LIMIT = 3`) while `_backoff`
+starts sub-second, so "three strikes" was worth ~2.5 s of wall clock.
+**Fix:** confirmation is now bounded in TIME as well as count — a sustained window (~5 min) with a
+minimum spacing between 401 retries. A genuinely revoked box still halts, still never auto-re-registers,
+and revocation still survives a restart.
+**How to avoid/detect:** "N consecutive failures" is meaningless without knowing the retry interval.
+Any destructive confirmation threshold must be expressed in time.
+
+### E10. The production build publicly served the entire TypeScript source
+**Symptom:** `GET /assets/app-*.js.map` → 200, ~2.1 MB, unauthenticated, with `sourcesContent` for all
+265 sources — the complete proprietary frontend including the RBAC mirror. 7.5 MB of a 10 MB `dist`.
+**Fix:** `sourcemap: 'hidden'` plus a Vite plugin that moves every `.map` out of `dist` into
+`admin-panel/.vite/sourcemaps/`. Maps still exist for symbolicating a production stack trace; none is
+ever served. Never copy them into a deployed `--panel-dir`.
+
+### E11. Smaller live findings, all fixed
+- A campaign create rejected with 400 still **committed a ghost row** (meta written before the brief
+  was validated) — an un-runnable card with no brief.
+- `GET /api/state` handed a `member` the org's full run history and spend, which every other route
+  correctly 403s for that role.
+- **HEAD bypassed all routing** (no `do_HEAD`): `/app/campaigns` GET 200 / HEAD 404, `/api/state` GET
+  401 JSON / HEAD 404 HTML, violating two explicit in-code design comments.
+- A nested unknown URL served the landing at 200, so its relative asset URLs answered HTML with a 200.
+- Starting on a busy port dumped a raw `OSError` traceback and left a stray migrated DB behind.
+- Session cookies carried no `Secure` flag on a 30-day credential.
+- `Server: SimpleHTTP/0.6 Python/3.12.13` on every response.
+- `workers.host` was always NULL — the sidecar never sent the field the server accepts.
+- **CLAUDE.md documented a production start command that fails instantly**: `--db` is a TOP-LEVEL flag
+  and must precede the subcommand. Every probe agent tripped on it.
+
 ---
 
 ## Cross-machine deployment gaps still OPEN (not yet fixed)
@@ -334,13 +662,398 @@ fine at PRD scale, revisit Postgres only past a measured throughput ceiling.
 - ~~**Campaign brief not shipped to remote workers** (B4)~~ **CLOSED 2026-08-12** — baked into
   the job spec; per-org platform credentials now fetched on demand (B7). A remote box no longer
   needs the shared SQLite file to resolve a campaign or its credentials.
-- **Shared fleet bootstrap token** (B8): one secret for the whole fleet, so any box holding it can
-  lease any org's job and now reach that org's decrypted credential. Needs per-worker, revocable
-  enrolment tokens.
-- **Spend cap is per-box, not per-campaign** (B9): `total_spend` sums the local `spend_log`, so an
-  unpinned fleet job gets a fresh full budget on each new box.
+- **Shared fleet bootstrap token** (B8): the per-worker enrolment-token mechanism SHIPPED (v22), but
+  the cutover has not run. Every box that first-registered on the shared token is still unclamped and
+  self-declaring, and stays that way until its persisted token is deleted and it re-enrols. Gate on
+  `SELECT id, host FROM workers WHERE revoked_at IS NULL AND enrolment_scope_kind IS NULL` returning
+  empty, then set `AIZU_WORKER_LEGACY_BOOTSTRAP_ENABLED=0`.
+- ~~**Revoking a worker bricks it** (B10)~~ **CLOSED 2026-08-13** — a confirmed 401 clears the token,
+  halts loudly and parks; and a revoked box can no longer walk back in on the shared bootstrap
+  secret, so revocation is durable even before the B8 cutover runs.
+- **Desktop Rust is uncompiled** — `control_client.rs` gained a `#[serde(default)]
+  reenrolment_required` field for B10, but this machine has no cargo/rustc. Statically checked
+  (`rename_all = "camelCase"` matches the wire key, struct derives `Default`, no literal
+  constructions), not built. Run `cargo check` in `desktop/src-tauri/` before packaging.
+- ~~**Spend cap is per-box, not per-campaign** (B9)~~ **CLOSED 2026-08-13** — prior total resolved at
+  lease time + delta rolled up on ack and nack; the box enforces, the cloud's enqueue-time skip fails
+  open. Residual: an attempt on a permanently-dead box that never acks or nacks is never banked.
 - **Live exit gate** (B6): a real `target_leads>=1` run producing leads on a warmed, logged-in
   Chrome has not been verified end-to-end on a worker box.
 - **Windows/Linux packaging**: `.exe`/`.msi`/NSIS need a Windows host; code-signing/notarization
   (Apple Developer ID; Windows Authenticode/EV) unresolved; ad-hoc/unsigned chosen for the
   managed fleet (Gatekeeper `rejected` is expected — strip quarantine / distribute out-of-band).
+
+---
+
+## F. Second live shakedown — 25 agents, two rounds (2026-08-14)
+
+> Round 1 (16 agents) drove all 56 `/api/*` routes, a real `aizu-worker` sidecar, the CLI and the
+> production static serving on isolated ports — **48 verified findings, 1 refuted**. A completeness
+> critic then showed round 1 had never once opened a *pre-existing* database, never run two writers
+> against one file, and never abused the socket layer. Round 2 (9 agents) closed exactly those
+> classes — **17 more findings, 3 refuted**. Every claim was re-run from a clean slate by an
+> independent verifier before being accepted here.
+>
+> **Both suites were fully green throughout (2026 engine + 487 panel).** Section E's meta-lesson
+> repeats and hardens: unit tests prove a function's contract, running the app proves the product's,
+> and only *abusing* the app proves it under load.
+
+### F1. `/api/state` and `/api/dashboard` are unbounded full-table dumps — the panel congestion-collapses at ~6 readers
+**Symptom (measured, reader-only ramp, 100k-lead org, zero writers):**
+`clients=1 p50 2.41s → 2 p50 5.46s → 4 p50 11.28s → 6 p50 24.16s (2/18 over 30s) → 8 p50 63.13s,
+max 123s, 24/24 over 30s`. Throughput *falls* 4.6x from 1 to 8 clients; 8x the clients costs 26x the
+p50. Every request still returned 200 — the bridge never fails, it just stops being usable.
+**Root cause:** both endpoints embed EVERY lead in the org. 47 MB at 100k leads, 239 MB at 500k. The
+panel polls them on a timer from every open tab (`refetchInterval` in `useDashboard.ts` /
+`useCampaigns.ts`), so N tabs = N concurrent multi-megabyte serializations.
+**Not the cause — checked explicitly:** writers are innocent. Re-running the ramp with 1, 4 and 16
+concurrent external SQL writers on the same file changed latency by less than noise (clients=4: 11.28s
+with 0 writers, 8.20s with 16). WAL delivers real writer/reader isolation.
+**A diagnosis the first prober got wrong, and the verifier corrected by measuring:** the collapse was
+attributed to the per-request `Store()` open (a write txn, see F3). That accounts for ~0.27s of a 60s
+request. Fixing only it leaves the collapse essentially unchanged. **Cap/paginate the two endpoints —
+that is the fix that matters.**
+**Reproduced by hand, independently of any agent** (100k seeded leads, own bridge, own harness):
+`/api/state` **60.7 MB**, `/api/dashboard` **60.7 MB**, `/api/leads` 0.0 MB (correctly paginated — only
+those two endpoints are unbounded). Ramp: `conc=1 p50 2.26s → 2 p50 4.36s → 4 p50 8.20s → 6 p50 16.32s,
+max 32.65s`, throughput 0.44 → 0.30 req/s. `conc=8` did not finish 16 requests in 4 minutes. Bridge RSS
+peaked at **1.2 GB**. The very first (cold) `/api/state` took **68.9s**, then 2.26s warm — so the first
+operator to open the panel after a restart waits over a minute.
+**Effective ceiling today:** ~5 simultaneous panel users per bridge process, on a product sold as a
+multi-tenant operator panel. Whether that is fatal depends on real org size, which nobody has measured
+— at 5k leads this is a medium; at 500k it is terminal. **Measure your actual p95 org size before
+pricing the fix.**
+
+### F2. No socket read/idle timeout anywhere — slow-loris pins one unbounded thread per connection
+`BaseHTTPRequestHandler.timeout is None`, and `ThreadingHTTPServer` spawns one unbounded thread per
+connection. Measured: 2000 half-open sockets pinned 2004 threads indefinitely; saturation ceiling
+~12288 threads (recoverable). A single ~200 MB RSS high-water is retained after a large burst —
+bounded by peak concurrency, not a per-request leak, so not a creeping leak.
+**Consequence:** the bridge is safe **only** behind a fully-buffering reverse proxy. Either set a
+socket timeout and a connection cap, or make the proxy a documented hard requirement rather than a
+deployment suggestion.
+**Genuinely hardened, do not re-test:** 100 KB request line → 414; 5000 headers → 431; 10 MB header →
+431; unknown method → 501; a lying 10 MB `Content-Length` rejected before a byte is read; 500 abrupt
+mid-response RSTs → zero tracebacks. The parse layer is fine. Only *blocking reads* are soft.
+
+### F3. `Store.__init__` writes on every request, so a >30s write lock hangs pure READS and then lies about why
+`_init_schema()` runs `CREATE INDEX IF NOT EXISTS …` plus an unconditional
+`UPDATE meta SET value=? WHERE key='schema_version'` on **every single open**, and the bridge builds a
+fresh `Store` per request. Holding `BEGIN EXCLUSIVE` externally for 35s (past `busy_timeout=30000`):
+`GET /api/state → 500 in 31.86s`, `POST /api/campaign → 500 in 31.86s`, log shows
+`OperationalError: database is locked` x4 then a generic `internal server error`. The client waits 32
+seconds and is told nothing useful. The bridge recovers cleanly once the lock clears.
+**Fix:** make `_init_schema` a no-op when the version already matches, and map lock timeouts to a fast,
+named 503 instead of a slow, opaque 500.
+**Unmeasured premise:** nobody demonstrated a real workload that holds a write lock >30s, so the
+production frequency of this is unknown — but the failure *mode* is now known and it is bad.
+
+### F4. `POST /api/status/bulk` is not atomic — two operators tear a batch and both are told it worked
+40 trials, 25 leads each, barrier-released. 2 clients: 80/80 responses `200 {"updated":25,"missing":[]}`,
+**15% of trials ended split across two statuses** (e.g. `{closed:12, interested:13}`). 6 clients: 20%
+torn, some across three. An independent re-run measured 8%/10% — timing-dependent, same phenomenon.
+**Root cause:** `server.py:2777-2784` loops `store.set_status(...)` per item, each its own transaction,
+so two batches interleave lead-by-lead. `updated` counts rows *touched*, not rows that kept the
+caller's value.
+**Bounded honestly:** `lead_status_changes` stayed self-consistent in 80/80 trials, so nothing is
+destroyed and history is recoverable. What is broken is the operator's belief — in the explicitly
+supported multi-user triage workflow, with a false success response.
+
+### F5. `POST /api/campaign` op=create is check-then-act across transactions
+9% of 8-way races produce multiple 200s; **1.5% produce a row with one operator's display name and
+another operator's brief.** Needs a UNIQUE constraint or a single `BEGIN IMMEDIATE` — i.e. exactly the
+`_tx_immediate` discipline D5 already mandates for anything that leases. Note this is a *different*
+defect from E5/E6 (which were about the id namespace), living in the same handler.
+
+### F6. An archived or `ended` campaign is still runnable via `POST /api/run`
+**Reproduced by hand, independently of any agent:** create → `POST /api/campaign/archive
+{archived:true}` → 200 → `POST /api/run` → **202**, and 4 seconds later the campaign shows
+`archivedAt` set AND `leads: 3`. Real rows, written to an archived campaign.
+**Root cause:** `_handle_run` (`server.py:3617`) gates on `campaign is None or not owned` and nothing
+else — no `archived_at`, no `status` — directly beneath a comment claiming *"A single-campaign run must
+be runnable now."* Every OTHER path gates correctly (`RUNNABLE_SQL_PREDICATE` in
+`due_scheduled_campaigns`, the fleet dispatcher, `scope='all'`), and `_handle_campaign_archive`'s own
+docstring asserts "archived campaigns are runnable by no path." The docstring is false.
+**Second half, worker side:** `lease_one_job` never joins `campaign_meta` and `_resolve_campaign`
+prefers `job.campaign_brief` outright, so a campaign archived or paused *between enqueue and lease* is
+handed out with its baked brief and runs anyway. Archive is not a kill switch on either side of the
+fleet boundary.
+**Third half:** an ordinary campaign save re-creates the `(archived, live)` state the archive handler
+documents as unreachable.
+
+### F7. A fleet run has no exit — it cannot be stopped, cancelled, or dead-lettered by anyone
+Three independent holes that compose into "no way out":
+1. `_handle_run_stop/pause/resume` (`server.py:3884/3898/3913`) dispatch only to `self.run_manager`,
+   which knows nothing about fleet jobs. The tenant gets `409 no run is active` while
+   `/api/run/activity` simultaneously reports `running`.
+2. `count_capable_workers` (`store.py:3670`) filters `WHERE revoked_at IS NULL` only — never
+   `last_heartbeat_at` — so `/api/run` returns **202 with zero live workers**. The job then sits
+   `queued`, `pinned_worker_id=NULL`, `attempts=0` forever: `reclaim_offline_jobs`' two passes cover
+   `status IN ('leased','running')` and `status='queued' AND pinned_worker_id IS NOT NULL`, and an
+   **unpinned queued job matches neither**. Every retry then 409s "already running".
+3. There is no tenant- or admin-reachable job-cancel route at all (every `/api` path enumerated).
+**Related, same family:** `/api/admin/jobs/enqueue`'s capability precheck counts workers offline for
+**30 days** as capable, so the guard that exists to prevent exactly this creates it instead.
+
+### F8. The global halt/drain flag is a one-way door that kills the process with rc=0
+`sidecar._loop` returns on `_stop_leasing` and `run()` falls straight through to `return 0`
+(`sidecar.py:1420-1436`). So `{scope:global, halt:true}` **terminates every sidecar process**; clearing
+the flag brings nothing back; and a supervisor reads rc=0 as a clean shutdown and will not restart.
+Same at org/platform/worker scope. The fleet console shows halted boxes as `stale`→`offline`,
+indistinguishable from a crash. Only the *re-enrolment* path parks-and-repolls correctly — that is the
+shape the halt path needs. Neither the halt nor a token revocation writes an admin audit row.
+
+### F9. Three provisioning traps that each produce a green box that cannot work
+1. **`AIZU_SECRET_KEY` is absent from CLAUDE.md's worker-plane env list** but
+   `FernetFileBackend._get_cipher` (`token_backends.py:73`) needs it to persist the token. First boot
+   crashes *after* the server has already minted the identity — so the row reads `online` while the
+   process is dead, and a supervisor crash-loop rotates `worker_token_hash` every iteration.
+2. **`AIZU_WORKER_PLATFORMS` / `AIZU_WORKER_CAPABILITIES` are also absent from that list.**
+   `_parse_capabilities_env` returns `()` when neither is set (`config.py:100`), so the box registers
+   with `capabilities: []` and can never be leased to — **and `fleet_readiness` (`readiness.py:284`)
+   counts online boxes without matching platform, so adding that useless box flips the tenant's
+   readiness banner from an accurate `ready:false` to a false `ready:true`.**
+3. **The box needs its own LLM credential.** `cfg.run_args` runs the engine in a child on the box;
+   without `OPENROUTER_API_KEY` every live job fails at run setup and dead-letters at attempt 5. Also
+   not in the env list.
+**Fix shape:** a `WorkerConfig.from_env` preflight that refuses to register, loudly, naming the missing
+variable — plus capability matching inside `fleet_readiness`.
+
+### F10. The CDP port is ambiguous across the codebase — cheapest high-value fix on this list
+`worker/config.py:269` defaults `cdp_url` to **9222** and CLAUDE.md agrees; `engine/scripts/warm_chrome.sh`
+binds **9333** and `engines.md §9` documents 9333; `chrome_manager.py:19` says in-code *"Port note
+(unresolved policy): the engine default is 9222 but every LIVE run in this repo has used 9333."*
+**Consequence:** a box provisioned per the warming runbook launches Chrome on 9333 while the sidecar
+probes 9222 → `cdp_unreachable` nack on every Instagram/LinkedIn/X job, on a box that looks perfect in
+the fleet console. Pick one value; fix the loser in code, both docs and the warm script.
+
+### F11. Re-enrolling a revoked box takes ~10.5 minutes and then lies about why it recovered
+`_register` (`sidecar.py:741-749`) prefers the persisted token unconditionally, so a fresh enrolment
+token is never presented until B10's confirmation (≥3 401s **and** ≥300s) deletes the file — measured
+**10m29s**. Any single non-401 calls `_note_authorized` and restarts the 300s clock, so a flapping
+bridge extends it indefinitely. Recovery then logs *"the earlier 401s were not a revocation after all"*
+— false. `REENROLMENT_ACTION` (`sidecar.py:116`) never mentions deleting `worker-token.enc`, though
+deleting it first makes the same restart register in 0.1s. The same 10.5-minute path fires for any
+stale token (bridge restored from a snapshot, `--db` re-pointed).
+**This is B10 working as designed colliding with B8's runbook.** The design is right; the precedence is
+wrong: an explicitly-supplied enrolment token should beat a persisted one.
+
+### F12. A crashed fleet job's real cause never leaves the box
+`_read_and_map_result` (`job_runner.py:377-380`) raises `RuntimeError(f"job {id}: {reason}")`, so the
+operator sees `Job <id> crashed (rc=None): RuntimeError` and the tenant sees `reason:"error", events:[]`.
+The per-job postmortem file the crash line points at is **0 bytes**; the real message (`No LLM backend
+configured…`) lives only in `.worker-state/logs/aizu.log` and `run-<runId>.log` on the box. On the
+intended topology — operator PCs running the Tauri shell, which nobody can SSH into — that is
+undiagnosable. Tail `run-<runId>.log`, which is already keyed by the runId the tenant holds.
+
+### F13. Invite email binding is UI-only; offboarding does not revoke minted invites
+`_handle_signup` passes the client-supplied email straight into `store.accept_invite`, which checks only
+token_hash / accepted_at / expires_at and **never reads the invite's own `email` column** — while
+`SignupPage.tsx:73` renders that field `disabled` + `readOnly`, so the product presents invites as
+address-bound. Verified: an invite addressed to `bound@example.com` was redeemed by `attacker@evil.test`
+as a full org **admin**. The invite is a pure bearer credential; a forwarded email or a pasted Slack link
+is a tenant join. Separately, removing a teammate leaves the invites they minted redeemable.
+(The raw token in the `GET /api/invite?token=` query string *is* redacted in the access log — that half
+of the original claim was refuted.)
+
+### F14. The admin audit log is not tamper-evident against truncation, and impersonation is invisible
+`/api/admin/audit/verify` returns `ok:true` after the log is truncated at the tail **or wiped entirely** —
+a hash chain verifies links between rows that exist, and says nothing about rows removed from the end.
+Separately, writes performed while impersonating a tenant are stamped on the *tenant's own user* and
+appear nowhere in the admin audit log: `POST /api/org {"name":"PWNED"}` under impersonation wrote no
+admin row at all. Together these mean the audit trail cannot answer "what did the superadmin do."
+
+### F15. The daytime write guard runs on the *box's* clock
+`Pacer.is_daytime` (`pacing.py:60`) reads `datetime.now().hour` — worker-box local time, with no account
+or org timezone anywhere in the path. A fleet spread across timezones halts a tenant's Instagram/
+LinkedIn/X jobs at hours the tenant considers midday. `AIZU_IGNORE_DAYTIME` is a testing escape hatch and
+is also not in the worker env list. Either thread the org timezone into `PacingConfig` or write down a
+box-placement rule and enforce it at enrolment.
+
+### F16. Dry runs write real leads and permanently burn the tenant's monthly plan cap
+`_handle_run` checks `count_leads_this_period` and clamps the target for **every** mode, and dry runs
+write real `matches` rows. Four dry runs exhaust the whole Free tier, and the only remedy is "wait for
+next month". Severity was initially rated critical on a user journey that does not exist — `RunDrawer.tsx:163`
+hardcodes `mode:'live'`, so there is no dry-run affordance in the shipped panel. **The lesson is the
+error, not the bug:** a severity was assigned from an imagined UI and only a grep caught it.
+
+### F17. Migration of a pre-existing database — mostly excellent, one sharp edge
+**The good news, and it is substantial.** A genuine v21→v22 upgrade of a populated install (24 non-empty
+tables, 2 orgs, 6 users, encrypted secrets) was **clean**: every row count and content hash preserved,
+all 6 users logged in, the Fernet secret still decrypted, zero `*__legacy_v1` / `*__legacy_v6` leftovers,
+and all 14 API responses byte-identical to a HEAD-native control after timestamp normalisation. The v7
+multi-tenancy adoption is **genuinely self-healing** — SIGKILL at 4 points inside it, plus 3 inside the
+v6 rename-aside, all recovered perfectly. The in-code claim at `store.py:1244` holds *for the path it
+describes*.
+**The sharp edge:** the structurally identical **v1→v2** platform reshape has no equivalent
+existence-keyed retry. SIGKILL anywhere in it (5 interposed points + 4 plain wall-clock kills into a
+1.73s migration of a 163 MB / 400,005-row DB) permanently strands every row: the first
+`ALTER TABLE matches RENAME TO matches__legacy_v1` is durable across the kill, so on reopen `matches`
+exists with a platform column, `_needs_platform_migration` returns False, the copy-forward never runs,
+and `meta.schema_version` is stamped **22**. The install comes back up looking healthy and empty.
+**Reachability:** almost certainly nil — this repo's earliest commit already declares v17+, so no
+pre-v2 database plausibly exists in the field. Filed because the code is maintained and the failure is
+silent-total. Give the v1→v2 copy the same existence-keyed retry the v7 path has, and add
+`if prior > SCHEMA_VERSION: raise` (a newer-than-code DB currently opens silently and gets downstamped).
+Also: upgrading a pre-v3 DB never runs the org adoption, so every surviving row is invisible to the panel.
+
+### F18. Smaller confirmed items
+- A >255-byte path segment returns 500 and Rich-renders a full traceback — unauthenticated remote
+  log-flood. **This is E1's family resurfacing at a different entry point**; `_log_path()` bounded the
+  access-log sink, not the error path.
+- Archiving a lead makes `/api/dashboard` contradict `/api/leads` and `/api/reports` — three different
+  counts for the same org.
+- `/api/reports`' Today/Week/Month selector is inert for 4 of 6 tiles, and Today shows all-time spend
+  next to today's leads.
+- Login lockout is keyed by email alone, so any unauthenticated caller can lock out a known account at
+  will; the superadmin plane has the same shape, so the platform's only admin can be locked out.
+- A worker with no capabilities registers as a healthy "online" box (see F9.2).
+- `/api/lead/note` accepts a `commentId` with no lead, and NUL/control characters in the body; a
+  `noteId` past SQLite's INTEGER range 500s with a traceback.
+- `POST /api/integration` accepts `connected:true` with no credential, so the panel shows Connected for
+  an integration that has nothing behind it. (The *impact* claim — that runs then silently spend the
+  operator's shared server-wide key — was never executed and remains unproven.)
+- A signed billing webhook creates a `subscriptions` row for an org id that does not exist.
+- `/api/admin/audit?limit=-1` and `limit=0` silently return exactly one entry.
+- Minting an enrolment token for a nonexistent or negative orgId 500s with a stack trace.
+- `aizu run` on the file brief writes leads with `org_id NULL` — unreachable from every panel view.
+- An unwritable `--db` path dumps a raw sqlite3 traceback instead of the one-line `error:` every other
+  CLI failure uses.
+- `transfer_ownership` is declared in **both** RBAC matrices and implemented nowhere: org ownership is a
+  permanent dead end.
+- `GET /api/state` leaks the whole per-org settings block to member and viewer, who are 403'd on
+  `GET /api/settings`.
+- `_coerce_extract_def` collapses a comma-separated `extractDef` into one field named
+  `handle_budget_city`.
+
+### F19. What these two rounds PROVED works — do not re-test
+- **The write path is not the bottleneck.** 32 parallel writer processes against the live bridge's file:
+  zero errors, zero "database is locked", ~1.5M rows committed. 16 concurrent SQL writers moved HTTP
+  latency less than noise. Nothing here argues for leaving SQLite.
+- **The lease contract holds under real parallelism.** 6 racing worker processes, one queued job, 120
+  barrier-released trials: **exactly one winner in 120/120, zero cross-leases.** D5's `_tx_immediate`
+  discipline works as documented.
+- **Transient DB faults self-heal.** Real ENOSPC and a read-only filesystem both 500 for the duration
+  and return to 200 the instant the fault clears — same PID, no restart, verified over 45s of polling.
+  An earlier "permanent wedge" claim was **refuted**; do not build a watchdog for it.
+- **RBAC is in lockstep.** `rbac.py` and `roles.ts` were diffed action by action: same 19 actions, same
+  role sets, same `canManageTarget`/`canAssignRole` semantics, no disagreement. The server gate was then
+  proven empirically for all four roles across 18 endpoints and matched `rbac.py` exactly every time.
+- **All ten never-driven success paths return 200/202 against real handler code**, including all four
+  branches of `/api/agent/launch-login` (the one route nobody had ever touched) and campaign
+  `generate`/`interview` against a local fake model, with a deliberately ragged reply.
+- **The "Telegram wizard stores an unreadable credential" theory is disproven.** `TelegramLoginManager.verify`
+  returns a dict and the full round-trip through the real getter reads back correctly. The bare-string
+  failure mode exists only for a caller that does not exist.
+- **Refuted outright, ignore them:** the cross-tenant credential reach filed as new (it is B8 verbatim),
+  the permanent read-only wedge, `set_integration_secret` non-dict, `model_comparison_stats` NULL
+  averaging, and the raw invite token reaching the access log.
+
+### F20. Method notes worth keeping
+- **The completeness critic paid for itself.** Round 1 was thorough and still had three whole classes at
+  literally zero coverage — pre-existing databases, concurrent writers, the socket layer. Asking "what
+  did nobody probe?" found more than adding an eighth prober would have.
+- **Verifiers must RUN, not reason.** The verifier's most valuable act was re-measuring F1's *diagnosis*
+  and finding it wrong (0.27s of a 60s request) while the *observation* was right. A confirmed symptom
+  with a wrong cause is how you ship a fix that changes nothing.
+- **Watch for confident impact paragraphs with no probe behind them.** Across round 1 the observations
+  were strong and the impact claims were frequently pure code-reading — and two of them were flatly
+  disproven by a verifier who bothered to look. Round 2 added a `measuredOrInferred` field per finding
+  specifically to force that distinction; keep it.
+- **A plausible number can prove nothing.** One finding's stated root cause rested on
+  `pragma foreign_keys -> 0` read from the prober's *own throwaway connection* — a per-connection pragma,
+  while `store.py:1197` sets `PRAGMA foreign_keys=ON` in `Store.__init__`. The real cause (no
+  `FOREIGN KEY` clause on `accounts.org_id`) was different and only surfaced when someone dumped the schema.
+
+---
+
+## G. Worker launch preflight + first-run setup wizard (2026-08-14)
+
+> Built because the shakedown showed a freshly-installed worker opens a dead dashboard, tells the
+> operator nothing (the only diagnostic was an `eprintln` to stderr a GUI user never sees), and the
+> sole configuration surface was a **hidden dev menu behind 7 taps on the brand logo**. Meanwhile
+> `ChromeManager::ensure_running` proved *attachable*, never *logged in* — a blank Chrome passed.
+> 25 agents across three workflows: design → judge → 5 builders → integrate → 2 adversarial
+> reviewers → 5 repairers → integrate → verify.
+
+### G1. The design decisions worth keeping
+- **"Fatal is never terminal."** No preflight outcome exits the process — F8 already proved `rc=0`
+  makes a supervisor treat a config error as a clean shutdown and never restart. Fatal withholds
+  *capabilities and leasing*, re-probes every 30s, self-heals. A red box stays up and keeps saying why.
+- **The wizard blocks; the launch preflight informs.** A human at the wizard may be held until Chrome
+  is signed in. A 4am unattended relaunch must never be blocked by a login classifier nobody has
+  validated against a live session (linkedin `li_at` / x `auth_token` are exactly that).
+- **Fatal checks probe MECHANISMS, never env-var names.** Token persistence is a real save/load/clear
+  through whichever backend is configured; the LLM check uses the identical predicate
+  `cli._build_run_io` raises on. An env-name check is wrong in one direction on a keyring box and the
+  other on a local-Ollama box.
+- **The preflight's own bugs are warnings.** `run_preflight` never raises; a test asserts a *raising*
+  preflight leaves the box leasing at FULL capability.
+- **CDP port resolved: 9333 is canonical**, unified across code + both docs + the warm script in one
+  landing. Not a silent flip: an explicit wrong pin is a named fatal
+  (`Chrome is on 9222 but this worker is configured for 9333`), an *unset* port prefers 9333 but still
+  adopts 9222 with a logged receipt. No box that worked before stops working.
+
+### G2. Bugs the LIVE proof caught that no reviewer or spec did
+- **`_register()` could raise, defeating the entire point of check #1.** With an unwritable state dir
+  the preflight correctly reported `state_dir_writable` fatal *with its remedy* — and the process died
+  on the very next line inside `cfg.machine_id`, taking down the only channel that could have shown an
+  operator that report, and handing a supervisor a crash-loop. **The check named the problem and
+  changed nothing**, because parking happened *after* register. Now `_register` is a never-raising
+  guard and a blocking preflight with no worker id parks instead of returning.
+- **The probe could destroy a live credential.** An unconditional `finally: clear()` on the token
+  round-trip turned "set `AIZU_SECRET_KEY` back and it works" into a hand-minted enrolment token and an
+  operator visit (B10). `FernetFileBackend.save()` resolves the cipher *before* opening any file, so a
+  box that merely lost the key raises with its blob intact — and the cleanup then unlinked it.
+
+### G3. B4 shipped a FOURTH time — one hop further out each round
+`fleet_readiness` grew `platforms=` and `server.py:3650` never passed it, so the F9.2 fix was dead in
+production. Repaired server-side and proven over HTTP with a real socket… and it was **still inert**,
+because `AgentReadinessOptions` carried only `refresh` and no shipped client could send `?campaign=`.
+The narrowing was reachable by curl and by test, and unreachable by the product.
+**The pattern, now four for four:** B4 (job spec → lease whitelist), E7 (fix keyed on an `op`
+discriminator the panel never sends), F-10a (server never passes the argument), F-10b (no client sends
+the parameter). **A fix is not done at the layer you edited — it is done at the layer a user reaches.**
+Closed by threading it to `RunDrawer`, the one component where a campaign is genuinely in scope; the
+global banner has none and correctly stays unscoped.
+
+### G4. Cheap checks that repaid the whole exercise
+- `tsc` passed and `npm run lint` failed — TS narrows through a boolean const, so a `?.` I wrote was
+  redundant under `@typescript-eslint/no-unnecessary-condition`. **Second time this session** that
+  type-aware lint caught what `tsc` could not (see C5). Always run both.
+- A **revert-check** on every new test: temporarily undo the fix, confirm the test fails, restore.
+  Done for the redaction tests (2 failed reverted / 16 passed restored). A test that passes either way
+  is documentation, not a gate.
+- The rule-5 leak nobody flagged for a round: `check_dispatch_credential` interpolated
+  `cfg.dispatch_base_url` into a `detail` that rides `to_upstream_wire()` to the cloud — in the module
+  whose docstring promises **no secret values in any wire field**. A URL with `user:pass@` leaked to
+  the fleet console. `_redact_userinfo` now strips userinfo and keeps the host readable.
+
+### G5. A verifier finding that was WRONG — check the loop under the explicit calls
+The final verifier claimed a GUI-managed box "cannot declare warming-only at all" because
+`sidecar_supervisor.rs` has no `cmd.env("AIZU_WORKER_WARMING_ONLY", …)`. False: `read_worker_secrets`
+is a **generic passthrough of every key in `worker-secrets.env`**, not a whitelist, so any worker flag
+can be set there. It read the explicit `cmd.env` calls and missed the loop directly beneath them.
+A comment now says so, to stop the next reader adding a redundant per-key line on the same reasoning.
+**Adversarial reviewers are high-value and still wrong sometimes — verify their claims too.**
+
+### G6. A correction I made to my own repair
+I first demoted the LLM check to warn when `AIZU_WARMING_ENABLED=1`, reasoning that promoting an
+existing field box from amber to fatal would dark it overnight. **Reverted: the test was right and the
+edit was wrong.** A box with no LLM backend that leases harvest jobs *is* broken — every live job
+dead-letters at attempt 5 with the cause never leaving the machine, which is F9.3 verbatim. Parking it
+loudly with a named remedy is the whole purpose. The message now names which of the two
+confusingly-similar flags (`AIZU_WARMING_ENABLED` vs `AIZU_WORKER_WARMING_ONLY`) the operator wants.
+
+### G7. Still owed
+- **The desktop Rust has never been compiled.** No cargo/rustc on this machine and CI does not build it
+  either. The wizard — the half that runs on an operator's PC with no terminal — is source no compiler
+  has read. `cargo check && cargo test` in `desktop/src-tauri/` is the first thing to run.
+- **A wedged attach now demotes to `unknown [warn]`** rather than parking (rule 6). Deliberate, but it
+  means B6/D3's degraded-Chrome case splits: "answers HTTP then errors" parks, "answers HTTP then
+  hangs" does not, and surfaces at job time instead.
+- `import aizu.worker.sidecar` still pulls Playwright via `core/pacing → core/human → core/pw_owner`,
+  which imports the real `TimeoutError` on purpose. The "cheap to import on an API-only box" goal is
+  met for `config`, `preflight` and `cli`, not for the module that actually runs the preflight.
+- **A green preflight means "nothing known-broken on this machine", NOT "this box can harvest."**
+  B6's live exit gate is untouched.

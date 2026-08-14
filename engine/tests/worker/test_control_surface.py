@@ -18,10 +18,20 @@ from aizu.worker.control_surface import (ControlSurfaceConfig,
 # ----- validate_command --------------------------------------------------------
 
 @pytest.mark.parametrize("action", ["pause", "resume", "stopCurrentJob",
-                                    "focusWarmedChrome"])
-def test_validate_accepts_each_action(action):
+                                    "focusWarmedChrome", "runPreflight"])
+def test_validate_accepts_each_zero_argument_action(action):
     clean, err = validate_command({"action": action})
     assert err is None and clean["action"] == action
+
+
+def test_openLoginTab_requires_a_WHITELISTED_platform():
+    """The one field on this surface with any reach: it is handed to a browser-driving
+    seam, so it is whitelisted against CDP_PLATFORMS rather than merely type-checked."""
+    clean, err = validate_command({"action": "openLoginTab", "platform": "instagram"})
+    assert err is None and clean["platform"] == "instagram"
+    assert validate_command({"action": "openLoginTab"})[0] is None          # missing
+    assert validate_command({"action": "openLoginTab", "platform": "youtube"})[0] is None
+    assert validate_command({"action": "openLoginTab", "platform": "../x"})[0] is None
 
 
 def test_validate_rejects_unknown_and_non_dict():
@@ -62,6 +72,38 @@ def test_status_to_wire_null_job():
     assert status_to_wire(snap)["currentJob"] is None
 
 
+def test_status_to_wire_carries_reenrolment_required():
+    """B10: a revoked box must be VISIBLE to the desktop app — otherwise it reads as a
+    plain idle worker that silently never leases again. Defaults False so an untouched
+    snapshot (and the older desktop binary reading it) is unchanged."""
+    assert status_to_wire(StatusSnapshot(worker_id="w1"))["controls"][
+        "reenrolmentRequired"] is False
+    revoked = StatusSnapshot(worker_id="w1", reenrolment_required=True)
+    assert status_to_wire(revoked)["controls"]["reenrolmentRequired"] is True
+
+
+def test_status_to_wire_carries_the_preflight_block_verbatim():
+    """The ONLY channel the desktop shell has. It rides as an already-serialized dict so
+    this pure read model stays import-free of preflight.py (which pulls in the
+    readiness/Playwright seams)."""
+    report = {"ok": False, "blocking": True, "enforced": True, "ranAt": 1.0,
+              "durationMs": 8421,
+              "checks": [{"id": "capabilities", "title": "Platforms this box advertises",
+                          "severity": "fatal", "status": "fail",
+                          "detail": "neither AIZU_WORKER_PLATFORMS nor "
+                                    "AIZU_WORKER_CAPABILITIES is set",
+                          "remedy": "Set AIZU_WORKER_PLATFORMS=all"}]}
+    wire = status_to_wire(StatusSnapshot(worker_id="w1", preflight=report))
+    assert wire["preflight"] == report
+
+
+def test_status_to_wire_preflight_is_null_until_the_first_run_finishes():
+    """null means 'checking…', NEVER 'healthy' — a box whose preflight has not finished
+    has not been cleared of anything. Defaulting to None also keeps an older desktop
+    binary reading this feed unchanged."""
+    assert status_to_wire(StatusSnapshot(worker_id="w1"))["preflight"] is None
+
+
 # ----- ControlSurfaceConfig loopback guard -------------------------------------
 
 def test_config_rejects_non_loopback_host():
@@ -95,6 +137,7 @@ def test_cdp_status_disconnected_when_probe_none_or_raises():
 class FakeSource:
     def __init__(self):
         self.calls = []
+        self.done = threading.Event()   # the two DETACHED actions signal completion here
 
     def get_status(self):
         return StatusSnapshot(worker_id="wX", generated_at=1.0)
@@ -112,6 +155,16 @@ class FakeSource:
     def focus_warmed_chrome(self):
         self.calls.append("focus")
         return False
+
+    def run_preflight(self):
+        self.calls.append("preflight")
+        self.done.set()
+        return True
+
+    def open_login_tab(self, platform):
+        self.calls.append(f"login:{platform}")
+        self.done.set()
+        return True
 
 
 @pytest.fixture
@@ -167,6 +220,43 @@ def test_each_command_dispatches(live_surface):
         status, data = _req(port, "POST", "/command", body={"action": action})
         assert status == 200 and data["ok"] is True
     assert source.calls == ["pause", "resume", "stop", "focus"]
+
+
+@pytest.mark.parametrize("body,expected", [
+    ({"action": "runPreflight"}, "preflight"),
+    ({"action": "openLoginTab", "platform": "linkedin"}, "login:linkedin"),
+])
+def test_the_detached_commands_answer_ACCEPTED_and_still_reach_the_source(
+        live_surface, body, expected):
+    """Both do real I/O (a CDP probe, a Playwright attach) that comfortably outlives the
+    desktop client's 3s timeout, so the contract is 'accepted', not 'completed' — answering
+    inline would time the caller out and make a WORKING command look broken. The operator's
+    feedback is the next 1500ms /status poll."""
+    port, source = live_surface
+
+    status, data = _req(port, "POST", "/command", body=body)
+
+    assert status == 200 and data["data"]["accepted"] is True
+    assert source.done.wait(5.0), "the detached thread never reached the source"
+    assert source.calls == [expected]
+
+
+def test_a_raising_detached_command_never_escapes_to_stderr(live_surface):
+    """`_swallow` exists because threading's default excepthook writes to stderr, which a
+    GUI operator never sees — the exact failure mode this whole preflight work ends."""
+    port, source = live_surface
+
+    def _boom():
+        source.done.set()
+        raise RuntimeError("probe exploded")
+
+    source.run_preflight = _boom
+    status, data = _req(port, "POST", "/command", body={"action": "runPreflight"})
+
+    assert status == 200 and data["data"]["accepted"] is True
+    assert source.done.wait(5.0)
+    # ...and the surface is still serving afterwards.
+    assert _req(port, "GET", "/status")[0] == 200
 
 
 def test_invalid_command_is_rejected(live_surface):

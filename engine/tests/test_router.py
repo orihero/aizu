@@ -4,6 +4,7 @@ import tempfile
 from aizu.core.router import (OpenRouterRouter, _content_or_none,
                               _extract_json, _decision_from_payload)
 from aizu.core.store import Store
+from aizu.worker.job_runner import _effective_spend_cap
 
 
 def test_router_model_resolves_explicit_then_env_then_default(monkeypatch):
@@ -68,6 +69,35 @@ def test_spend_guard_degrades_over_cap():
     assert d.tier == "degraded" and d.confidence == 0.0
     flags = store.open_flags()
     assert any(f["kind"] == "spend_cap" for f in flags)
+
+
+def test_spend_guard_honours_a_b9_adjusted_cap():
+    """B9: the guard compares against the BOX-LOCAL total, so the effective cap handed
+    to a run is re-based (`local + headroom`). A box that has spent $1 locally on a
+    campaign already $18 into a $20 ceiling gets an effective cap of $2 — one more
+    dollar of headroom — and the guard must trip on the very next dollar, not at $20."""
+    fd, path = tempfile.mkstemp(suffix=".db"); os.close(fd)
+    store = Store(path)
+    store.log_spend("c", "match", 1.0)                 # this box's own local spend
+    effective = _effective_spend_cap(1.0, 18.0, 20.0)  # = 1.0 + (20 - 18) = 3.0
+    r = OpenRouterRouter(store=store, api_key="x", spend_cap_usd=effective,
+                         sleep=lambda _t: None)
+    assert r._spend_guard("c") is True                 # $1 local < $3 effective
+    store.log_spend("c", "match", 2.0)                 # local now $3 == effective
+    assert r._spend_guard("c") is False
+    assert any(f["kind"] == "spend_cap" for f in store.open_flags())
+
+
+def test_spend_guard_blocks_immediately_on_an_exhausted_budget():
+    """An effective cap of exactly 0.0 must BLOCK, not read as 'uncapped' — the guard
+    short-circuits only on `spend_cap_usd is None`."""
+    fd, path = tempfile.mkstemp(suffix=".db"); os.close(fd)
+    store = Store(path)
+    effective = _effective_spend_cap(0.0, 25.0, 20.0)
+    assert effective == 0.0
+    r = OpenRouterRouter(store=store, api_key="x", spend_cap_usd=effective,
+                         sleep=lambda _t: None)
+    assert r._spend_guard("c") is False                # fresh box, $0 spent, still blocked
 
 
 def test_post_retries_malformed_200_then_succeeds(monkeypatch):

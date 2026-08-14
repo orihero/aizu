@@ -12,10 +12,17 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Optional, Protocol
 
-# The four zero-argument operator intents the desktop shell can POST.
-VALID_COMMANDS = ("pause", "resume", "stopCurrentJob", "focusWarmedChrome")
+from ..core.config import CDP_PLATFORMS
+
+# The operator intents the desktop shell can POST. The first four are zero-argument;
+# ``openLoginTab`` is the one that carries a `platform` (the setup wizard's Sign-in step).
+VALID_COMMANDS = ("pause", "resume", "stopCurrentJob", "focusWarmedChrome",
+                  "runPreflight", "openLoginTab")
 # Cap an optional audit reason so a client can't push an unbounded string.
 _MAX_REASON_LEN = 500
+# Sorted for a STABLE error message (CDP_PLATFORMS is a frozenset, whose repr order is
+# not guaranteed — an operator-facing string must not shuffle between runs).
+_CDP_PLATFORM_NAMES = tuple(sorted(CDP_PLATFORMS))
 
 
 @dataclass(frozen=True)
@@ -54,6 +61,20 @@ class StatusSnapshot:
     update_required: bool = False
     chrome: Optional[ChromeStatusView] = None
     paused: bool = False
+    # Ledger B10: the dispatch rejected this box's bearer token (401), so the persisted
+    # token was cleared and the pull loop stopped. Terminal until an operator re-enrols
+    # the box — surfaced here so the desktop app can SAY that instead of showing an idle
+    # worker that silently never leases. Defaults False → an untouched snapshot is
+    # unchanged for every existing caller.
+    reenrolment_required: bool = False
+    # The launch preflight's last report, ALREADY SERIALIZED by the caller
+    # (``PreflightReport.to_wire()``). Kept as a plain dict on purpose: this module is the
+    # pure read model and must stay import-free of ``preflight.py`` (which pulls in
+    # readiness/playwright seams), so the DTO shape lives in one place and the dependency
+    # stays one-way. ``None`` means "the first run has not finished yet" — both UIs render
+    # that as 'checking…', NEVER as healthy (a box whose preflight is still running has
+    # not been cleared of anything).
+    preflight: Optional[dict] = None
     generated_at: float = 0.0
 
 
@@ -67,12 +88,23 @@ class ControlSurfaceSource(Protocol):
     def resume(self) -> None: ...
     def stop_current_job(self) -> bool: ...
     def focus_warmed_chrome(self) -> bool: ...
+    # Both of these are 'accepted', never 'completed': each takes seconds (a CDP probe,
+    # a Playwright attach) — far longer than the desktop client's 3s HTTP timeout — so
+    # they run detached and the operator's feedback is the NEXT status poll, not this
+    # response. See control_surface._dispatch.
+    def run_preflight(self) -> bool: ...
+    def open_login_tab(self, platform: str) -> bool: ...
 
 
 def validate_command(payload: Any) -> tuple:
     """Boundary validation (mirrors server.py's _validate_* shape). Returns
     ``(clean_dict, None)`` on success or ``(None, error_message)`` — never raises, never
-    trusts the caller."""
+    trusts the caller.
+
+    ``platform`` is optional in general (the zero-argument commands ignore it) but
+    REQUIRED for ``openLoginTab``, and is whitelisted against ``CDP_PLATFORMS`` — the
+    value is handed to a browser-driving seam, so an unvalidated string is the one field
+    here with any reach at all."""
     if not isinstance(payload, dict):
         return (None, "body must be a JSON object")
     action = payload.get("action")
@@ -83,7 +115,15 @@ def validate_command(payload: Any) -> tuple:
         if not isinstance(reason, str):
             return (None, "reason must be a string")
         reason = reason[:_MAX_REASON_LEN]
-    return ({"action": action, "reason": reason}, None)
+    platform = payload.get("platform")
+    if platform is not None and not isinstance(platform, str):
+        return (None, "platform must be a string")
+    if action == "openLoginTab":
+        if not platform:
+            return (None, "openLoginTab requires a platform")
+        if platform not in CDP_PLATFORMS:
+            return (None, f"platform must be one of {_CDP_PLATFORM_NAMES}")
+    return ({"action": action, "reason": reason, "platform": platform}, None)
 
 
 def status_to_wire(snap: StatusSnapshot) -> dict:
@@ -104,8 +144,13 @@ def status_to_wire(snap: StatusSnapshot) -> dict:
         "controls": {
             "drain": snap.drain, "halt": snap.halt, "haltReason": snap.halt_reason,
             "updateRequired": snap.update_required, "paused": snap.paused,
+            "reenrolmentRequired": snap.reenrolment_required,
         },
         "chrome": _chrome_to_wire(snap.chrome),
+        # Already-serialized preflight report (see StatusSnapshot.preflight). Leak-safe by
+        # construction: every `detail` names a VARIABLE, a path or a URL — never a secret
+        # VALUE (preflight rule 8), and this choke point adds nothing of its own.
+        "preflight": snap.preflight,
         "generatedAt": snap.generated_at,
     }
 
