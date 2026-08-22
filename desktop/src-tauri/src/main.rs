@@ -1,11 +1,5 @@
 //! AIZU Worker — desktop shell entry point (BUILD-PLAN Phase 6, C3 option A).
 //!
-//! # SCAFFOLD SOURCE ONLY — UNCOMPILED
-//! No cargo/rustc in this environment. This file is written to Tauri 2.x conventions but
-//! has NOT been type-checked. An engineer with the toolchain must run `cargo check` and
-//! `cargo tauri dev`; expect to adjust plugin builder calls and API surfaces to the exact
-//! installed crate versions.
-//!
 //! # What this app is (and is NOT)
 //! A thin Tauri shell that runs on a managed worker PC and supervises the Python
 //! **`aizu-worker`** sidecar binary (= `aizu.worker.sidecar:main`) as a managed
@@ -95,9 +89,33 @@ pub struct AppState {
     /// A std mutex because every `ChromeManager` call is blocking (subprocess spawn, CDP
     /// probe) and is run on the blocking pool; nothing awaits while holding it.
     pub chrome: Arc<Mutex<ChromeManager>>,
-    /// The one startup failure an operator would otherwise never learn about. Surfaced
-    /// through `get_setup_state`, rendered in the wizard and in the dashboard health strip.
+    /// The one startup failure an operator would otherwise never learn about — a
+    /// `config.toml` that would not load, or an `init_app` that did not finish. Surfaced
+    /// through `get_setup_state` (the wizard footer) and `get_shell_note` (the dashboard's
+    /// shell-problem strip).
+    ///
+    /// Chrome does NOT land here any more (see `chrome_boot_error`). It used to, and that
+    /// is defect D: one slot held two unrelated facts, so nothing could retire either one
+    /// without risking erasing the other — and a boot Chrome failure the operator had since
+    /// fixed stayed pinned in the wizard footer for the life of the process.
     startup_error: RwLock<Option<String>>,
+    /// BOOT's attempt at the warmed Chrome failed (no binary, a launch that never became
+    /// attachable, or the grace running out).
+    ///
+    /// Its own slot for the same reason `chrome_degraded` is: each of these three facts must
+    /// be able to clear without erasing the others. This one is retired — or overwritten —
+    /// by the next COMPLETED launch attempt (`commands::boot_error_after_launch`), which is
+    /// a newer first-hand observation of exactly the thing boot could not do, while a
+    /// malformed config.toml beside it stays on screen untouched. An attempt that does NOT
+    /// complete leaves it alone: it learned nothing to replace it with.
+    chrome_boot_error: RwLock<Option<String>>,
+    /// A Chrome that came up DEGRADED — resolution fell through to the system browser
+    /// (`chrome_manager::ChromeReady::degradation`). Kept separate from `startup_error`
+    /// because the two are independent and each must be able to clear without erasing the
+    /// other: an operator who downloads the browser must stop seeing this note even though
+    /// their config.toml is still malformed, and vice versa. They are shown together — see
+    /// [`visible_problem`].
+    chrome_degraded: RwLock<Option<ChromeNote>>,
     /// Browser platforms the operator pressed **Skip** on in the wizard's Sign-in step.
     ///
     /// In MEMORY only — never written to config.toml, never sent upstream, and gone on the
@@ -109,6 +127,26 @@ pub struct AppState {
     login_skips: RwLock<BTreeSet<String>>,
 }
 
+/// A note about the Chrome this box actually started.
+///
+/// One kind now. It used to carry a `brand_conflict` flag so that
+/// `install_chrome_browser` could tell an irreversible-data-loss warning from routine
+/// follow-up advice and refrain from overwriting the first — a distinction that stopped
+/// existing when the profile directory became a function of the browser brand: there is no
+/// refusal left to warn about, and every note in here describes a browser we did start.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ChromeNote {
+    pub text: String,
+}
+
+impl ChromeNote {
+    /// A degraded launch: a Chrome came up, but not the one the engine may be able to
+    /// attach to. Transient, self-correcting, and safe to update in place.
+    pub fn degraded(text: String) -> Self {
+        Self { text }
+    }
+}
+
 impl AppState {
     pub fn startup_error(&self) -> Option<String> {
         match self.startup_error.read() {
@@ -116,11 +154,65 @@ impl AppState {
             Err(poisoned) => poisoned.into_inner().clone(),
         }
     }
-    fn set_startup_error(&self, msg: Option<String>) {
+    /// Record (or clear) the config/init startup failure. `None` retires it — which is
+    /// only ever correct once the file it describes has provably been rewritten.
+    pub fn set_startup_error(&self, msg: Option<String>) {
         match self.startup_error.write() {
             Ok(mut g) => *g = msg,
             Err(poisoned) => *poisoned.into_inner() = msg,
         }
+    }
+    /// Boot's own Chrome failure, if any.
+    pub fn chrome_boot_error(&self) -> Option<String> {
+        match self.chrome_boot_error.read() {
+            Ok(g) => g.clone(),
+            Err(poisoned) => poisoned.into_inner().clone(),
+        }
+    }
+    /// Record (or clear) boot's Chrome failure. Passing `None` is the clearing path defect
+    /// D was missing: a launch attempt that SUCCEEDED retires it, because that attempt is a
+    /// fresher first-hand answer to the same question. It touches nothing else — a malformed
+    /// config.toml and a degraded-Chrome note both survive it. Who calls it with what is
+    /// `commands::boot_error_after_launch`, which is pure so the rule can be tested.
+    pub fn set_chrome_boot_error(&self, msg: Option<String>) {
+        match self.chrome_boot_error.write() {
+            Ok(mut g) => *g = msg,
+            Err(poisoned) => *poisoned.into_inner() = msg,
+        }
+    }
+    /// The current Chrome note's text, if any.
+    pub fn chrome_degraded(&self) -> Option<String> {
+        self.chrome_note().map(|n| n.text)
+    }
+    /// The whole note, kind included. The kind is load-bearing: a brand-conflict note warns
+    /// about irreversible data loss and nothing may quietly overwrite it (defect E).
+    pub fn chrome_note(&self) -> Option<ChromeNote> {
+        match self.chrome_degraded.read() {
+            Ok(g) => g.clone(),
+            Err(poisoned) => poisoned.into_inner().clone(),
+        }
+    }
+    /// Record (or clear) the degraded-Chrome note. Called after EVERY `ensure_running` —
+    /// boot's and the wizard's — so it always describes the last resolution, and after a
+    /// successful browser download, which advances it to the step still outstanding (the
+    /// download changes what is on DISK, never which browser currently holds the port).
+    pub fn set_chrome_degraded(&self, msg: Option<String>) {
+        self.set_chrome_note(msg.map(ChromeNote::degraded));
+    }
+    pub fn set_chrome_note(&self, note: Option<ChromeNote>) {
+        match self.chrome_degraded.write() {
+            Ok(mut g) => *g = note,
+            Err(poisoned) => *poisoned.into_inner() = note,
+        }
+    }
+    /// What the wizard footer and the dashboard's shell-problem strip show — the latter via
+    /// [`commands::get_shell_note`]. See [`visible_problem`].
+    ///
+    /// Folded in two passes rather than one three-argument function so the de-duplication
+    /// rule below applies to every pair: one launch failure can reach BOTH the boot slot and
+    /// the Chrome note, and printing it twice reads as two problems.
+    pub fn visible_problem(&self) -> Option<String> {
+        visible_problems(self.startup_error(), self.chrome_boot_error(), self.chrome_degraded())
     }
     /// The operator's current Sign-in skips, sorted.
     pub fn login_skips(&self) -> Vec<String> {
@@ -139,6 +231,42 @@ impl AppState {
     }
 }
 
+/// Fold the two independent "something is wrong with this box" facts into the ONE string
+/// the UI renders, keeping both.
+///
+/// A pure function so the composition is testable without an `AppHandle`. It matters
+/// because each source alone has already been a silent failure: the startup error was an
+/// `eprintln!` on a GUI process until the wizard learned to show it, and the degraded-Chrome
+/// note was one until now. Dropping either one behind the other would just move the silence.
+fn visible_problem(startup: Option<String>, chrome_degraded: Option<String>) -> Option<String> {
+    match (startup, chrome_degraded) {
+        // …but not the SAME fact twice. One launch failure can reach both sinks — boot
+        // records it, a wizard "Launch warmed Chrome" records the same wording again — and
+        // it is one long sentence. Printing it twice, joined by a dash, reads as two
+        // different problems and buries the way out.
+        (Some(a), Some(b)) if a == b => Some(a),
+        (Some(a), Some(b)) => Some(format!("{a} — {b}")),
+        (Some(a), None) => Some(a),
+        (None, Some(b)) => Some(b),
+        (None, None) => None,
+    }
+}
+
+/// The three independent "something is wrong with this box" facts, folded into the ONE
+/// string the UI renders — pairwise, so the de-duplication rule below applies to every pair.
+///
+/// Three slots rather than one is the shape defect D asked for: a fact that shares a slot
+/// with an unrelated fact can never be retired, because retiring it risks erasing the other.
+/// Each of these clears on its own evidence — a config rewrite, a completed launch attempt,
+/// a successful attach — and none of them clears the others.
+fn visible_problems(
+    startup: Option<String>,
+    chrome_boot: Option<String>,
+    chrome_note: Option<String>,
+) -> Option<String> {
+    visible_problem(visible_problem(startup, chrome_boot), chrome_note)
+}
+
 /// How often the shell polls `GET /status`. The control surface is cheap and loopback-only,
 /// so a short cadence keeps the UI responsive without hammering anything real. The wizard's
 /// green badges are driven by this same beat — the operator signs in inside the real Chrome
@@ -147,14 +275,24 @@ const STATUS_POLL_INTERVAL_MS: u64 = 1_500;
 
 /// How long boot waits for the managed Chrome before starting the sidecar ANYWAY.
 ///
-/// It has to exceed everything `ChromeManager::ensure_running` can spend on the slow path
-/// (an ~0.8s TCP pre-check, a ~5s attach probe, then a 15s launch-attach deadline), or the
-/// cap would re-create the very race it exists to close. It is a CEILING, not a wait: the
-/// normal path returns the moment Chrome is attachable. Nothing beyond it is fatal — a
-/// Chrome that never came up must still get a sidecar, because the control surface is how
-/// the operator finds out why (rule 3), and because a sidecar that never starts is a box
-/// that never self-heals (rule 1).
-const CHROME_BOOT_GRACE_SEC: u64 = 30;
+/// It has to exceed everything `ChromeManager::ensure_running` can spend on the slow path,
+/// or the cap would re-create the very race it exists to close (F-2: the sidecar's preflight
+/// beating Chrome up). That worst case is **29.6s** — a TCP pre-check, BOTH
+/// Chrome-for-Testing helper tiers with their stdout graces, then the 15s launch-attach
+/// deadline; `chrome_manager::CFT_SIDECAR_TIMEOUT_SEC` carries the itemised table, and
+/// `chrome_manager`'s `the_worst_case_launch_budget_fits_under_the_boot_grace` fails the
+/// build if anyone raises a row past this ceiling.
+///
+/// It was 30s against a claimed 28.8s, except the code could not honour that claim: the
+/// CDP probe shelled a Python subprocess with NO timeout, inside a loop whose deadline was
+/// only tested at loop ENTRY. Both are bounded now; this is the margin that keeps a slow
+/// (not wedged) box from tripping the cap by a second.
+///
+/// It is a CEILING, not a wait: the normal path returns the moment Chrome is attachable.
+/// Nothing beyond it is fatal — a Chrome that never came up must still get a sidecar,
+/// because the control surface is how the operator finds out why (rule 3), and because a
+/// sidecar that never starts is a box that never self-heals (rule 1).
+const CHROME_BOOT_GRACE_SEC: u64 = 35;
 
 /// Which boot order this box needs.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -267,7 +405,7 @@ fn init_app(app: &mut tauri::App) -> Result<(), DesktopError> {
         control_token.clone(),
         handle.clone(),
     ));
-    let chrome = Arc::new(Mutex::new(ChromeManager::new(config.clone())));
+    let chrome = Arc::new(Mutex::new(ChromeManager::new(config.clone(), handle.clone())));
 
     app.manage(AppState {
         config: config.clone(),
@@ -276,6 +414,8 @@ fn init_app(app: &mut tauri::App) -> Result<(), DesktopError> {
         supervisor: supervisor.clone(),
         chrome: chrome.clone(),
         startup_error: RwLock::new(load_error),
+        chrome_boot_error: RwLock::new(None),
+        chrome_degraded: RwLock::new(None),
         login_skips: RwLock::new(BTreeSet::new()),
     });
 
@@ -292,6 +432,11 @@ fn init_app(app: &mut tauri::App) -> Result<(), DesktopError> {
     let plan = boot_plan(configured, wizard_settled);
     let chrome_boot = chrome.clone();
     let boot_handle = handle.clone();
+    // A handle for the launcher closure itself: a DEGRADED success (we started the system
+    // Chrome because there is no Chrome-for-Testing on the box) is still an `Ok`, so it
+    // cannot ride the `ChromeBoot::Failed` path below — and it is exactly the case that used
+    // to reach the operator nowhere at all.
+    let degraded_handle = handle.clone();
     let boot_supervisor = supervisor.clone();
     // A second handle so the start closure OWNS one: it is held across the Chrome wait, and
     // an owned `Arc` keeps that future trivially `Send` for `spawn`.
@@ -317,7 +462,12 @@ fn init_app(app: &mut tauri::App) -> Result<(), DesktopError> {
                 })
                 .await;
                 match joined {
-                    Ok(Ok(url)) => Ok(url),
+                    Ok(Ok(ready)) => {
+                        if let Some(state) = degraded_handle.try_state::<AppState>() {
+                            state.set_chrome_degraded(ready.degradation);
+                        }
+                        Ok(ready.cdp_url)
+                    }
                     Ok(Err(e)) => Err(e.to_string()),
                     Err(_) => Err("the Chrome launch task did not complete".to_string()),
                 }
@@ -326,8 +476,8 @@ fn init_app(app: &mut tauri::App) -> Result<(), DesktopError> {
         )
         .await;
 
-        // Recorded, not swallowed: the dashboard health strip and the wizard both read
-        // this. The sidecar preflight independently reports the same condition as
+        // Recorded, not swallowed: the dashboard's shell-problem strip and the wizard footer
+        // both read this. The sidecar preflight independently reports the same condition as
         // `cdp_reachable` / `cdp_attachable` — this is the local half, and it is the only
         // place the launcher's own error (no binary, unwritable profile dir) exists.
         let detail = match outcome {
@@ -341,7 +491,11 @@ fn init_app(app: &mut tauri::App) -> Result<(), DesktopError> {
         if let Some(detail) = detail {
             eprintln!("[aizu-worker] Chrome not ready (continuing): {detail}");
             if let Some(state) = boot_handle.try_state::<AppState>() {
-                state.set_startup_error(Some(detail));
+                // Its OWN slot, not `startup_error`: this is the fact the operator goes and
+                // fixes (quit a stale browser, download the right one, answer the profile
+                // question), so it has to be retirable without taking a config error with
+                // it. `commands::launch_chrome` is what retires it.
+                state.set_chrome_boot_error(Some(detail));
             }
         }
     });
@@ -401,6 +555,7 @@ fn run() -> Result<(), DesktopError> {
             commands::set_capacity_override,
             commands::get_config,
             commands::save_config,
+            commands::get_shell_note,
             // first-run setup wizard
             commands::get_setup_state,
             commands::save_setup_step,
@@ -408,6 +563,7 @@ fn run() -> Result<(), DesktopError> {
             commands::save_enrolment_token,
             commands::generate_secret_key,
             commands::launch_chrome,
+            commands::install_chrome_browser,
             commands::run_preflight,
             commands::open_login_tab,
             commands::probe_dispatch,
@@ -542,6 +698,95 @@ mod tests {
         .await;
         assert_eq!(seen(&t), vec!["sidecar"]);
         assert_eq!(outcome, ChromeBoot::Skipped);
+    }
+
+    /// A degraded Chrome (we started the SYSTEM browser because the box has no
+    /// Chrome-for-Testing) is an `Ok`, so it can never ride `ChromeBoot::Failed`. It must
+    /// still reach the operator, and it must not evict a config-load error to do it:
+    /// before this, the fall-through reached the UI NOWHERE — boot computed
+    /// `ChromeBoot::Ready`, `startup_error` stayed null, the wizard painted the Chrome step
+    /// green, and the operator was left retrying a remedy that cannot work.
+    #[test]
+    fn both_startup_problems_survive_being_shown_together() {
+        assert_eq!(visible_problem(None, None), None);
+        assert_eq!(visible_problem(Some("bad toml".into()), None), Some("bad toml".into()));
+        assert_eq!(
+            visible_problem(None, Some("system Chrome".into())),
+            Some("system Chrome".into())
+        );
+        let both = visible_problem(Some("bad toml".into()), Some("system Chrome".into()))
+            .expect("both problems are live");
+        assert!(both.contains("bad toml"), "the config error was dropped: {both}");
+        assert!(both.contains("system Chrome"), "the Chrome note was dropped: {both}");
+    }
+
+    /// …and the one fact that legitimately lands in BOTH sinks is shown once.
+    ///
+    /// A box with no browser on it fails boot's launch, and fails the wizard's "Launch
+    /// warmed Chrome" the same way ten seconds later — the same paragraph, verbatim, in two
+    /// slots. Folded blindly it renders twice with a dash between, which reads as two
+    /// separate problems and pushes the remedy off the end of the footer.
+    #[test]
+    fn one_problem_recorded_in_both_sinks_is_shown_once() {
+        let failure = "No Chrome on this box at all — neither Playwright's \
+                       Chrome-for-Testing nor a system Chrome."
+            .to_string();
+        assert_eq!(
+            visible_problem(Some(failure.clone()), Some(failure.clone())),
+            Some(failure)
+        );
+    }
+
+    // --- defect D: a fact nobody can retire is a fact that outlives its fix ------------
+
+    /// Three slots, three independent clearing paths. This is the whole reason the boot
+    /// Chrome failure moved out of `startup_error`: retiring it must not take a malformed
+    /// config.toml with it, and repairing the config must not hide a Chrome that is still
+    /// broken.
+    #[test]
+    fn each_startup_fact_clears_without_erasing_the_others() {
+        let cfg = || Some("TOML parse error: line 3".to_string());
+        let chrome = || Some("Chrome did not become available within 30s".to_string());
+        let note = || Some("Chrome for Testing is not installed on this box".to_string());
+
+        // All three live: all three are shown. Losing one behind another just moves the
+        // silence this whole surface exists to end.
+        let all = visible_problems(cfg(), chrome(), note()).expect("all three");
+        assert!(all.contains("TOML parse error"), "{all}");
+        assert!(all.contains("did not become available"), "{all}");
+        assert!(all.contains("not installed"), "{all}");
+
+        // The operator launches Chrome successfully: the boot verdict goes, the config
+        // error stays. This is the case that was impossible before — a Chrome failure at
+        // start-up was pinned in the wizard footer for the life of the process.
+        let after_launch = visible_problems(cfg(), None, None).expect("config error survives");
+        assert!(after_launch.contains("TOML parse error"));
+        assert!(!after_launch.contains("did not become available"));
+
+        // …and the mirror image: the wizard rewrites config.toml, the Chrome facts stay.
+        let after_save = visible_problems(None, chrome(), note()).expect("chrome facts survive");
+        assert!(!after_save.contains("TOML parse error"));
+        assert!(after_save.contains("did not become available"), "{after_save}");
+
+        assert_eq!(visible_problems(None, None, None), None, "a healthy box says nothing");
+    }
+
+    /// The de-duplication still applies to every pair once there are three. One launch
+    /// failure genuinely lands in two slots — boot records it, a wizard Launch re-records
+    /// it — and printing one long sentence twice, joined by a dash, reads as two problems.
+    #[test]
+    fn the_same_failure_in_two_of_three_slots_is_still_shown_once() {
+        let failure = "No Chrome on this box at all — neither Playwright's \
+                       Chrome-for-Testing nor a system Chrome."
+            .to_string();
+        assert_eq!(
+            visible_problems(None, Some(failure.clone()), Some(failure.clone())),
+            Some(failure.clone())
+        );
+        assert_eq!(
+            visible_problems(Some(failure.clone()), Some(failure.clone()), None),
+            Some(failure)
+        );
     }
 
     /// A future that never resolves — `std::future::pending` typed to the launcher's shape.

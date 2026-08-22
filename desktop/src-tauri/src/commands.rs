@@ -1,4 +1,4 @@
-//! Tauri commands invoked from the UI (Phase 6 SCAFFOLD, UNCOMPILED).
+//! Tauri commands invoked from the UI (BUILD-PLAN Phase 6).
 //!
 //! Thin adapters over the control-surface client, the supervisor, the Chrome manager and
 //! the on-disk config. Every command:
@@ -219,9 +219,36 @@ pub struct SetupStateDto {
     /// renders "checking…", NEVER healthy.
     pub preflight: Option<serde_json::Value>,
     /// A startup failure the operator would otherwise never see (a malformed config.toml,
-    /// a Chrome that would not start). This is the fix for the silent first run: the old
-    /// shell wrote these to stderr, which a GUI user has no way to read.
+    /// a Chrome that would not start, or a Chrome that started as the WRONG browser). This
+    /// is the fix for the silent first run: the old shell wrote these to stderr, which a GUI
+    /// user has no way to read. Several can be live at once — see `main::visible_problem`.
     pub startup_error: Option<String>,
+    /// Where the warmed Chrome keeps its per-brand profiles.
+    pub chrome_profile: ChromeProfileDto,
+}
+
+/// The warmed-Chrome profile locations, as the wizard's Chrome step shows them.
+///
+/// There is nothing to decide here any more: the `--user-data-dir` is a function of the
+/// browser brand (`chrome_manager::profile_dir_for`), so this is pure orientation — where
+/// each browser's logins live, plus the one-off note about a profile left behind by the
+/// design this replaced. Both derived directories are listed rather than the one that will
+/// be used, because knowing that would mean resolving a binary on a 1.5s poll.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ChromeProfileDto {
+    /// The configured base. NOT a profile — no browser is ever launched against it.
+    pub base: String,
+    pub chrome_for_testing_dir: String,
+    pub chrome_dir: String,
+    /// A pre-redesign profile sits directly in the base. Informational and NEVER blocking:
+    /// nothing opens it, nothing moves it, and the app does not guess which browser warmed
+    /// it — guessing is the mistake three previous rounds made.
+    pub legacy_notice: Option<String>,
+    /// A warmed profile at the shell's FORMER default location (`<app data>/chrome-profile`),
+    /// which nothing opens since the base was unified. Same rules: informational, never
+    /// blocking, never moved, never guessed at.
+    pub former_default_notice: Option<String>,
 }
 
 /// One `KEY=VALUE` upsert for `worker-secrets.env`. An empty `value` DELETES the key.
@@ -296,6 +323,11 @@ pub async fn save_setup_step(
     )
     .map_err(sanitize)?;
     state.config.set(next);
+    // The other half of defect D. `startup_error` holds exactly one fact — "config.toml
+    // would not load" — and `update_config` has just round-tripped the whole file through
+    // the same parser and validator, so that fact is provably stale. Nothing else lives in
+    // this slot, and the Chrome notes are untouched.
+    state.set_startup_error(None);
     restart_worker(&state).await;
     Ok(build_setup_state(&app, &state).await)
 }
@@ -365,11 +397,123 @@ pub async fn launch_chrome(state: State<'_, AppState>) -> Result<String, String>
         guard.ensure_running()
     })
     .await;
+    // What this attempt did to BOOT's pinned Chrome verdict, decided BEFORE anything is
+    // written — see [`boot_error_after_launch`] for why the order is the whole point.
+    let attempt = match &joined {
+        Ok(Ok(_)) => Some(Ok(())),
+        Ok(Err(e)) => Some(Err(sanitize_ref(e))),
+        Err(_) => None,
+    };
+    if let Some(next) = boot_error_after_launch(attempt) {
+        state.set_chrome_boot_error(next);
+    }
     match joined {
-        Ok(Ok(url)) => Ok(url),
-        Ok(Err(e)) => Err(sanitize(e)),
+        Ok(Ok(ready)) => {
+            // A DEGRADED success — a Chrome came up, but it is the system browser the
+            // engine may not be able to attach to. Recorded either way (a `None` clears a
+            // note the operator has since fixed), because the UI paints this step's own
+            // message green off the returned url and the honest half of the answer would
+            // otherwise vanish exactly as it used to.
+            state.set_chrome_degraded(ready.degradation);
+            Ok(ready.cdp_url)
+        }
+        Ok(Err(e)) => {
+            // The failure now lives in `chrome_boot_error` (above), which the footer and the
+            // dashboard strip both render. The degradation note is about a browser we
+            // STARTED, so a launch that produced none must not leave a stale one describing
+            // one that is not there.
+            state.set_chrome_degraded(None);
+            Err(sanitize(e))
+        }
         Err(_) => Err("Chrome launch task did not complete.".into()),
     }
+}
+
+/// What a wizard launch attempt should do to BOOT's pinned Chrome error
+/// (`AppState::chrome_boot_error`).
+///
+/// `Some(None)` retires it, `Some(Some(text))` replaces it with this attempt's own failure,
+/// and `None` leaves it exactly as it was.
+///
+/// The last case is the fix. This used to be an unconditional `set_chrome_boot_error(None)`
+/// fired BEFORE the outcome was known, on the reasoning that any completed attempt is a
+/// fresher first-hand answer than boot's. It is — but the task join failing is not a
+/// completed attempt: it establishes nothing about the box, and clearing on it wiped a
+/// still-live record and left the operator with an empty footer under a Chrome that is
+/// still broken. A failure that DID complete replaces the old text rather than clearing it,
+/// for the same reason: the box still has the problem, and the newer wording is the true one.
+///
+/// Pure so the ordering rule is pinned by a test — an `AppHandle` cannot be constructed in
+/// one (see the note at the top of `mod tests`).
+fn boot_error_after_launch(attempt: Option<Result<(), String>>) -> Option<Option<String>> {
+    match attempt {
+        Some(Ok(())) => Some(None),
+        Some(Err(text)) => Some(Some(text)),
+        None => None,
+    }
+}
+
+/// Setup → Chrome: download Playwright's Chrome-for-Testing onto this box (≈356 MB).
+///
+/// The remedy for the fall-through `launch_chrome` reports. On a packaged box this is the
+/// ONLY one that exists: the app ships no browsers and there is no interpreter to run
+/// `playwright install chromium` with, so the frozen sidecar drives its own bundled
+/// Playwright driver instead (`-m aizu.worker.chrome_path --install`).
+///
+/// Returns the installed browser's path. Progress is pushed to the UI as
+/// `chrome-install-progress` events (one per line the installer writes) — a multi-minute
+/// action with no output is indistinguishable from a hung one.
+///
+/// It deliberately does NOT take the Chrome lock and is not on any boot path: a download
+/// this long holding the mutex that app-exit and every wizard Chrome action block on would
+/// freeze the app for the duration.
+#[tauri::command]
+pub async fn install_chrome_browser(
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> Result<String, String> {
+    let sidecar_path = state.config.get().sidecar_binary_path.clone();
+    let handle = app.clone();
+    let joined = tauri::async_runtime::spawn_blocking(move || {
+        crate::chrome_manager::install_chrome_for_testing(&handle, &sidecar_path)
+    })
+    .await;
+    match joined {
+        Ok(Ok(path)) => {
+            // Do NOT clear the note here. The download changed what is ON DISK; it did not
+            // change which browser is on the CDP port right now — and the note only exists
+            // because a Launch already started the wrong one. Clearing it would delete a
+            // statement that is still true and leave the operator reading "Chrome is
+            // solved" next to a red `cdp_attachable` with nothing joining them up.
+            // Instead, advance it to the one action that is now actually outstanding.
+            if state.chrome_note().is_some() {
+                state.set_chrome_degraded(Some(
+                    "Chrome for Testing is installed. The browser still running on this \
+                     box is the old one the engine cannot attach to — quit it completely, \
+                     then press “Launch warmed Chrome” again."
+                        .into(),
+                ));
+            }
+            Ok(path.display().to_string())
+        }
+        Ok(Err(e)) => Err(sanitize(e)),
+        Err(_) => Err("The browser download task did not complete.".into()),
+    }
+}
+
+/// The shell's OWN "something is wrong with this box" line, for the dashboard.
+///
+/// `get_setup_state` already carries it as `startup_error`, but that command is only polled
+/// while the wizard is open — so a malformed config.toml, a Chrome that would not start, or
+/// a degraded browser existed on screen in exactly one place, the wizard footer, where the
+/// "a job is running" branch outranked it. Both `main::AppState::visible_problem` and this
+/// module claimed the dashboard health strip showed it; the strip renders the sidecar's
+/// preflight report and nothing else. This is the command that makes the claim true: it is
+/// a lock read with no IO, so the dashboard can poll it on the same 1.5s status beat
+/// without doubling the loopback traffic `build_setup_state` costs.
+#[tauri::command]
+pub async fn get_shell_note(state: State<'_, AppState>) -> Result<Option<String>, String> {
+    Ok(state.visible_problem())
 }
 
 /// Ask the sidecar to re-run its launch preflight now. ACCEPTED, not completed — the
@@ -556,7 +700,33 @@ async fn build_setup_state(app: &AppHandle, state: &AppState) -> SetupStateDto {
             .unwrap_or(false),
         job_active: status.as_ref().map(|s| s.current_job.is_some()).unwrap_or(false),
         preflight,
-        startup_error: state.startup_error(),
+        startup_error: state.visible_problem(),
+        chrome_profile: chrome_profile_dto(
+            &cfg.chrome_profile_base,
+            crate::config::former_default_chrome_profile_base(app).as_deref(),
+        ),
+    }
+}
+
+/// Compose the Chrome-profile DTO from the configured BASE. Split out so the derivation is
+/// unit-testable — an `AppHandle` cannot be constructed in a test (see the note at the top
+/// of `mod tests`).
+fn chrome_profile_dto(
+    base: &std::path::Path,
+    former_base: Option<&std::path::Path>,
+) -> ChromeProfileDto {
+    use crate::chrome_manager::{
+        former_default_profile_notice, legacy_profile_notice, profile_dir_for,
+    };
+    ChromeProfileDto {
+        base: base.display().to_string(),
+        chrome_for_testing_dir: profile_dir_for(base, "chrome-for-testing")
+            .display()
+            .to_string(),
+        chrome_dir: profile_dir_for(base, "chrome").display().to_string(),
+        legacy_notice: legacy_profile_notice(base),
+        former_default_notice: former_base
+            .and_then(|former| former_default_profile_notice(former, base)),
     }
 }
 
@@ -770,6 +940,13 @@ async fn refuse_while_job_running(state: &AppState) -> Result<(), String> {
 /// construction (variants carry ports/host context, never tokens); this is the single
 /// choke point where an engineer can further redact if a variant ever grows a path.
 fn sanitize(e: crate::errors::DesktopError) -> String {
+    sanitize_ref(&e)
+}
+
+/// Same, by reference — for the caller that has to read an error's text before deciding
+/// whether to consume it (`launch_chrome`, which must know the outcome before it touches
+/// the pinned boot verdict).
+fn sanitize_ref(e: &crate::errors::DesktopError) -> String {
     e.to_string()
 }
 
@@ -777,6 +954,121 @@ fn sanitize(e: crate::errors::DesktopError) -> String {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    // --- the Chrome profile block: orientation, never a question ----------------------
+
+    /// A throwaway profile base (the crate has no dev-dependencies, so no `tempfile`).
+    struct TempProfile {
+        path: std::path::PathBuf,
+    }
+
+    impl TempProfile {
+        fn new(name: &str) -> Self {
+            let path = std::env::temp_dir().join(format!(
+                "aizu-profile-dto-{}-{}-{}",
+                std::process::id(),
+                name,
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map(|d| d.as_nanos())
+                    .unwrap_or(0)
+            ));
+            std::fs::create_dir_all(&path).expect("create profile dir");
+            Self { path }
+        }
+        /// Make it look like a base a browser ran against BEFORE the per-brand split.
+        fn used(self) -> Self {
+            std::fs::create_dir_all(self.path.join("Default")).expect("create Default");
+            self
+        }
+    }
+
+    impl Drop for TempProfile {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.path);
+        }
+    }
+
+    /// The step shows WHERE each browser's logins live. Both directories, because which one
+    /// gets used depends on the binary that resolves, and resolving one on a 1.5s poll would
+    /// shell out to Playwright every one and a half seconds.
+    #[test]
+    fn the_chrome_step_shows_a_directory_per_brand_under_the_base() {
+        let dir = TempProfile::new("modern");
+        let dto = chrome_profile_dto(&dir.path, None);
+        assert_eq!(dto.base, dir.path.display().to_string());
+        assert!(dto.chrome_for_testing_dir.ends_with("chrome-for-testing"), "{dto:?}");
+        assert!(dto.chrome_dir.ends_with("chrome"), "{dto:?}");
+        assert_ne!(dto.chrome_for_testing_dir, dto.chrome_dir);
+        assert_ne!(dto.chrome_for_testing_dir, dto.base, "the base is not a profile");
+        assert_ne!(dto.chrome_dir, dto.base);
+        // Nothing is wrong with this box, so it is told nothing.
+        assert_eq!(dto.legacy_notice, None);
+        assert_eq!(dto.former_default_notice, None);
+    }
+
+    /// The two notices are INDEPENDENT. A box can have a pre-split profile in its current
+    /// base and warmed logins at the shell's old default, and reporting only one of them
+    /// leaves real sign-ins sitting unused with no explanation — which is how a perfectly
+    /// good box reads as merely signed-out.
+    #[test]
+    fn a_former_default_profile_is_reported_alongside_a_pre_split_one() {
+        let current = TempProfile::new("current").used();
+        let former = TempProfile::new("former").used();
+        let dto = chrome_profile_dto(&current.path, Some(&former.path));
+        assert!(dto.legacy_notice.is_some(), "the pre-split profile in the base");
+        let moved = dto.former_default_notice.expect("the profile at the old default");
+        assert!(moved.contains(&former.path.display().to_string()), "{moved}");
+        // Both are left exactly as they were — these are reports, not migrations.
+        assert!(current.path.join("Default").is_dir());
+        assert!(former.path.join("Default").is_dir());
+    }
+
+    /// A base warmed before the per-brand split carries the one thing left to say — and it
+    /// is a statement, not a question. Three rounds of asking the operator which browser
+    /// warmed a profile ended with an answer no launch site read; this only reports.
+    #[test]
+    fn a_pre_split_profile_is_reported_once_and_blocks_nothing() {
+        let dir = TempProfile::new("legacy").used();
+        let dto = chrome_profile_dto(&dir.path, None);
+        let notice = dto.legacy_notice.expect("the operator has to be told it is there");
+        assert!(notice.contains(&dto.base), "which directory? {notice}");
+        assert!(notice.contains(&dto.chrome_for_testing_dir), "destination 1: {notice}");
+        assert!(notice.contains(&dto.chrome_dir), "destination 2: {notice}");
+        // There is no flag on this DTO that can stop a launch. The old one had two.
+        assert!(dir.path.join("Default").is_dir(), "and it was left exactly as it was");
+    }
+
+    // --- carry-over 2: a launch attempt may only retire what it actually answered ------
+
+    /// A launch that SUCCEEDED retires boot's pinned Chrome error: it is a first-hand
+    /// answer to the same question, minutes later, from a box the operator has been to.
+    #[test]
+    fn a_successful_launch_retires_boots_chrome_error() {
+        assert_eq!(boot_error_after_launch(Some(Ok(()))), Some(None));
+    }
+
+    /// A launch that FAILED replaces it with its own words. The box still has a problem, so
+    /// clearing would leave the footer and the dashboard strip empty under a Chrome that
+    /// still does not start.
+    #[test]
+    fn a_failed_launch_replaces_boots_chrome_error_with_its_own() {
+        assert_eq!(
+            boot_error_after_launch(Some(Err("No Chrome on this box at all".into()))),
+            Some(Some("No Chrome on this box at all".into()))
+        );
+    }
+
+    /// …and an attempt that never COMPLETED touches nothing.
+    ///
+    /// This is the defect. The clear used to fire before the outcome was known, on the
+    /// reasoning that any attempt is fresher than boot's — but a blocking task that never
+    /// joined establishes nothing about the box, and clearing on it deleted a live record
+    /// and left the operator with an empty footer and a Chrome that is still broken.
+    #[test]
+    fn an_attempt_that_never_completed_leaves_boots_verdict_alone() {
+        assert_eq!(boot_error_after_launch(None), None);
+    }
 
     /// Build a preflight report body with the given (id, severity, status) rows.
     fn report(rows: &[(&str, &str, &str)]) -> serde_json::Value {

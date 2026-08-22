@@ -156,6 +156,19 @@
       <button id="reenrol-fix" class="btn btn-mini" type="button">Open Setup → Enrol</button>
     </div>
 
+    <!-- SHELL PROBLEM STRIP — the desktop shell's OWN bad news, which the sidecar's
+         preflight cannot know about: a config.toml that would not parse, a Chrome that
+         would not start, a Chrome that started as the wrong browser. It used to exist in
+         exactly one place, the wizard footer, where the "a job is running" branch outranked
+         it — while main.rs and commands.rs both claimed the dashboard showed it. It does
+         now. Separate from the preflight strip below because the two have different
+         authors and clear on different evidence. -->
+    <section class="update-strip danger-strip hidden" id="shell-strip">
+      <span class="pill pill-danger">this app</span>
+      <span id="shell-strip-text"></span>
+      <button id="shell-strip-setup" class="btn btn-mini" type="button">Open setup</button>
+    </section>
+
     <!-- PREFLIGHT HEALTH STRIP — the steady-state face of the SAME report the wizard
          walks. Green "ready" / amber "N warnings" / red "PARKED — <first fatal>" / grey
          "checking…" when the first pass has not finished. A null report is NEVER healthy.
@@ -480,11 +493,51 @@
           profile so your everyday browser is untouched.
         </p>
 
+        <!-- The browser BINARY. The installer is ~30 MB because it does NOT carry one, and
+             a packaged worker cannot borrow the browser a developer's checkout downloaded
+             — so on a fresh PC this runs once, before "Launch warmed Chrome" below has
+             anything to start. It lands in your user cache, never inside the app, so an
+             app update never throws it away. -->
+        <p class="wz-note">
+          First this PC needs the browser itself — a one-time <b>356 MB</b> download this
+          app deliberately does not ship. It is kept outside the app, in your own user
+          cache, so updating the app never costs you a second one. If it is already there,
+          this finishes in seconds.
+        </p>
+        <div class="wz-inline-actions">
+          <button id="wz-install-chrome" class="btn btn-small" type="button">Download browser · 356 MB</button>
+          <span class="small muted" id="wz-install-msg" aria-live="polite"></span>
+        </div>
+        <pre class="wz-progress hidden" id="wz-install-progress" tabindex="0"
+             role="region" aria-label="Browser download progress"></pre>
+
         <!-- Port-drift banner: the F10 case, with the one-click repair. -->
         <div class="wz-banner hidden" id="wz-drift-banner">
           <span class="pill pill-warn">port mismatch</span>
           <span id="wz-drift-text"></span>
           <button id="wz-drift-fix" class="btn btn-mini" type="button">Use it</button>
+        </div>
+
+        <!-- Where the logins live. Each browser gets its OWN directory under the base,
+             derived from the binary that resolves — two Chrome builds unlock their cookies
+             with different system keys, so sharing one directory deletes every login in it.
+             There is nothing to choose here and no question to answer: the path is computed,
+             not configured. -->
+        <p class="wz-note">
+          Each browser keeps its own profile, so signing in once sticks and no browser can
+          ever open another's saved logins:
+        </p>
+        <p class="small mono muted" id="wz-profile-dirs"></p>
+
+        <!-- A profile from BEFORE the per-browser split. Informational and never blocking:
+             it is left exactly as it is, because nothing on disk records which browser
+             warmed it and guessing wrong deletes every cookie in it. -->
+        <div class="wz-legacy hidden" id="wz-legacy-block">
+          <div class="wz-row">
+            <span class="pill pill-warn">older profile found</span>
+            <b>An earlier Chrome profile is still sitting here</b>
+          </div>
+          <p class="small" id="wz-legacy-text"></p>
         </div>
 
         <div class="wz-inline-actions">

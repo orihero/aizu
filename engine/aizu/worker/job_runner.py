@@ -254,7 +254,9 @@ def run_one_job(store, job: JobSpec, *, cfg: WorkerConfig, halt: threading.Event
         )
         _write_pidfile(pid_path, proc.pid)
         outcome = _supervise(proc, job=job, cfg=cfg, run_id=run_id, halt=halt,
-                             job_log=job_log, sleep=sleep, monotonic=monotonic)
+                             job_log=job_log,
+                             progress_logs=_progress_logs(job_log, run_id),
+                             sleep=sleep, monotonic=monotonic)
         if outcome is not None:
             return outcome  # halt/timeout — child already terminated
         return _read_and_map_result(result_path, job=job, run_id=run_id,
@@ -275,6 +277,7 @@ def run_one_job(store, job: JobSpec, *, cfg: WorkerConfig, halt: threading.Event
 
 def _supervise(proc, *, job: JobSpec, cfg: WorkerConfig, run_id: str,
                halt: threading.Event, job_log: Path,
+               progress_logs: tuple[Path, ...] = (),
                sleep: Callable[[float], None],
                monotonic: Callable[[], float]) -> Optional[dict]:
     """Poll the child until it exits, a halt fires, the duration cap passes, or it STALLS
@@ -288,10 +291,23 @@ def _supervise(proc, *, job: JobSpec, cfg: WorkerConfig, run_id: str,
     deadline can't be: a blocked synchronous Playwright/CDP call never returns control to
     the loop that checks that deadline, so only killing the child from OUT here (the parent)
     can break a wedge. Log growth is the liveness signal — a healthy run appends relevance/
-    CDP/heartbeat lines continuously; a wedged one goes silent. A value <= 0 disables it."""
+    CDP/heartbeat lines continuously; a wedged one goes silent. A value <= 0 disables it.
+
+    WHICH log is load-bearing, and it was wrong (fleet runs 2026-08-20). The child's
+    stdout/stderr go to ``job_log``, but the engine logs through ``core.logsetup``, which
+    writes to ``aizu.log`` and the per-run ``run-<run_id>.log`` — NOT to stdout. So
+    ``job_log`` received a one-time Playwright/Node preamble and then never grew again:
+    1491 bytes, byte-identical across two different jobs. Every job therefore looked
+    wedged after exactly ``stall_timeout_sec`` no matter how healthy, giving fleet jobs a
+    hard 5-minute ceiling. job-2099fb29e88b and job-19eaf089da2e both dead-lettered at
+    5/5 attempts that way — the second one while actively producing leads. Liveness is now
+    the max size across EVERY log the child may append to, so the signal watches the file
+    the child actually writes. Same class as ledger A13: a check whose subject was a path
+    nothing in the tree ever wrote to still reads green/red with total confidence."""
     deadline = monotonic() + _effective_minutes(job, cfg) * 60 + TIMEOUT_GRACE_MIN * 60
     stall_sec = cfg.stall_timeout_sec
-    last_size = _log_size(job_log)
+    watched = (job_log,) + tuple(progress_logs)
+    last_size = _log_sizes(watched)
     last_progress_at = monotonic()
     while True:
         if proc.poll() is not None:
@@ -308,7 +324,7 @@ def _supervise(proc, *, job: JobSpec, cfg: WorkerConfig, run_id: str,
                         job.id)
             return {"run_id": run_id, "job_id": job.id, "halt_reason": "worker_timeout"}
         if stall_sec > 0:
-            size = _log_size(job_log)
+            size = _log_sizes(watched)
             now = monotonic()
             if size != last_size:
                 last_size = size
@@ -319,6 +335,28 @@ def _supervise(proc, *, job: JobSpec, cfg: WorkerConfig, run_id: str,
                             job.id, stall_sec)
                 return {"run_id": run_id, "job_id": job.id, "halt_reason": "worker_stall"}
         sleep(SUPERVISOR_POLL_SEC)
+
+
+def _progress_logs(job_log: Path, run_id: str) -> tuple[Path, ...]:
+    """Every file the child may append to, besides its stdout capture. `run_log_path` is
+    the single source of truth for the per-run file (the sidecar already resolves it the
+    same way), and the shared `aizu.log` in the same directory is the fallback for lines
+    written before the per-run handler attaches."""
+    try:
+        from ..core.logsetup import run_log_path
+        resolved = run_log_path(run_id, log_file=str(job_log.parent / "aizu.log"))
+    except Exception:  # noqa: BLE001 — liveness must never be the thing that crashes a job
+        resolved = None
+    paths = [job_log.parent / "aizu.log"]
+    if resolved is not None:
+        paths.append(Path(resolved))
+    return tuple(paths)
+
+
+def _log_sizes(paths: tuple[Path, ...]) -> int:
+    """Total bytes across every watched log. A sum (not a max) so growth in ANY of them
+    counts as progress, and so a file appearing late cannot look like a shrink."""
+    return sum(_log_size(p) for p in paths)
 
 
 def _log_size(job_log: Path) -> int:

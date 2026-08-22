@@ -13,6 +13,263 @@ Grouped by area. Each entry: **Symptom** (what you observe) → **Root cause** �
 
 ## A. Desktop worker app (Tauri 2 + PyInstaller freeze)
 
+### A12. Three rounds of guard could not hold an invariant the DIRECTORY holds for free
+**Symptom:** The underlying defect never changed: open a warmed Chrome profile with the *other*
+browser brand and every cookie in it is **deleted** (A9). What changed three times was the
+guard, and each version failed in front of an operator. Round 1: after upgrading, "Launch warmed
+Chrome" refused on **every box that had ever launched Chrome through the app**, permanently, and
+named a way out that had no UI behind it. Round 2 fixed that and mis-detected Chrome for Testing
+on Linux/Windows, i.e. *vouched* for the crossing. Round 3 shipped the wizard's declaration —
+`[ Chrome ] [ Chrome for Testing ]` — the operator clicked their answer, the marker was written,
+and the next launch **refused again**: `resolve_chrome_binary` never read the marker, so it
+re-resolved Chrome for Testing regardless. The button was a dead end from the commit that added
+it.
+**Root cause:** Two layers, and only the first one is a bug.
+1. *The real defect.* On macOS the cookie-encryption key lives in a **branded** Keychain item:
+   Playwright's Chrome for Testing reads `Chromium Safe Storage`, system Google Chrome writes
+   `Chrome Safe Storage`. The wrong key does not fail softly — Chrome **deletes** every row it
+   cannot decrypt instead of quarantining it, and the move-aside/snapshot machinery that would
+   have saved the profile (`DowngradeManager`) is `#if BUILDFLAG(IS_WIN)`; on macOS nothing is
+   set aside. Measured on a **clone** of a warmed profile: 18 cookies → 0, live Instagram
+   `sessionid` included, unreadable by any browser afterwards. The controlled half of the
+   experiment ruled out the version gap as the cause: the *same* system Chrome 151.0.7922.138
+   relaunched against the clone with `--use-mock-keychain` (identical build, deliberately wrong
+   key) lost exactly as much.
+2. *The design.* We kept trying to make **two brands share one directory safely**. Nothing
+   inside a Chrome profile records which brand wrote it, so that goal requires: a marker file we
+   invent, a decision table with a row nobody can resolve (used profile, no marker), a refusal,
+   an operator declaration to escape the refusal, a UI to ask the question, and the identical
+   contract implemented three times in Rust, Python and bash. Every one of those is a place to
+   be wrong, and every round was wrong in a new one. The guard grew; the invariant never got
+   safer.
+**Fix:** Make the **directory a function of the brand**. `AIZU_CHROME_PROFILE` names a *base*;
+every launch site opens `profile_dir_for(base, brand) = <base>/<brand>` —
+`~/.aizu-cft-profile/chrome-for-testing` or `~/.aizu-cft-profile/chrome`. The path **is** the
+ownership record, so two brands can never open one directory *by construction*: nothing to mark,
+nothing to police, no refusal, no declaration, no question anyone can answer wrong. `brand_of`
+survives unchanged in all three languages — it now **chooses** a directory instead of policing
+one (and resolves symlinks first, since a wrapper or a `google-chrome` symlink into Playwright's
+cache is how a CfT binary reaches a launch site under another name). **Deleted**, not deprecated:
+the `.aizu-browser-brand` marker read *and* write, `BrandDecision`, the refusal error variants,
+the declaration commands, the wizard's brand block and its buttons, the "use a fresh profile
+directory" command, the bash guard and its decision table, and all of their tests. The one
+judgement call left is the **legacy profile** — a base that itself holds a `Default/`, warmed
+before this change by an unknown brand. It is never opened, moved, renamed, copied, backed up or
+deleted; each launch site surfaces it once, informationally and never blocking, and prints
+**both** candidate destination paths so an operator who knows which browser warmed it can move it
+themselves. Nothing guesses. That guess is what the whole arc was about.
+**How to avoid/detect:** The general lesson, and it is the point of this entry: **when a guard
+needs a marker file, a decision table, a UI and a three-language contract to hold an invariant
+up, stop hardening the guard and change the shape so the invariant cannot be violated.** An
+invariant that is structural needs no tests for its refusal path, no migration for boxes that
+already exist, and cannot drift between implementations — `profile_dir_for` is four lines in each
+of the three languages and it deleted far more than it added in all three. Two concrete detectors that would each have caught a round
+of this: (1) before shipping a guard, ask what it does on a box that **already exists** — round
+1's answer was "refuses forever"; (2) for every affordance you put in front of a user, grep for
+the **reader** of the value it writes. The declaration button wrote `.aizu-browser-brand`;
+grepping that constant's readers would have shown the only one was the guard — never
+`resolve_chrome_binary`, which is what actually decides the browser — so the click could not
+change the outcome it promised to change. That is the
+**sixth** time this ledger records a fix landing at a layer no user reaches (B4, E7, F-10a,
+F-10b, `warm_chrome.sh` in A11c, and now the declaration button); G3 counted four, A11 made it
+five. The recurrence is the finding.
+
+### A13. One setting, two spellings — a preflight row that watched a directory nothing warms
+**Symptom:** The worker preflight's profile row reported on `~/.aizu-chrome-profile` while the
+launcher the docs hand operators (`engine/scripts/warm_chrome.sh`) warms `~/.aizu-cft-profile`.
+On every box in existence the row was therefore about an empty or absent directory — it could
+never see the profile that was actually at risk, and it read as "checked, fine".
+**Root cause:** The same setting acquired two names and two defaults, each introduced in the
+component that needed it: `AIZU_CHROME_PROFILE_DIR` (worker, default `~/.aizu-chrome-profile`)
+vs `AIZU_CHROME_PROFILE` (shell, default `~/.aizu-cft-profile`). Different variable **and**
+different default, so nothing collides loudly — the two halves simply describe different disks.
+`CHROME_BIN` (desktop shell, `warm_chrome.sh`) vs `AIZU_CHROME_BINARY` (worker) is the same split
+one layer over, and under A12 it is no longer cosmetic: the binary now **chooses the profile
+directory**, so an operator who pins one browser in one process and gets the other in the next
+lands in a different profile dir and sees a box that is silently signed out.
+**Fix:** One name and one default repo-wide: **`AIZU_CHROME_PROFILE`**, default
+**`~/.aizu-cft-profile`** (the path that exists on real boxes and the one `.env.example` already
+documented); `AIZU_CHROME_PROFILE_DIR` is gone. **`AIZU_CHROME_BINARY`** is canonical for the
+binary, with `CHROME_BIN` still read as a fallback — it is what every runbook and the desktop
+shell have said for months and dropping it would silently move an operator's pinned browser. The
+table lives in `docs/ops/desktop-packaging.md` §3.1 so the next component has one place to copy
+from.
+**How to avoid/detect:** A check whose subject is a filesystem path must **print the path it
+inspected**, and a reviewer should be able to grep the repo for something that *writes* that
+path. If no component in the tree ever creates it, the check is watching a directory nothing
+warms and its green means nothing. More bluntly: two env vars whose names differ only by a
+suffix are one setting until proven otherwise — grep for `AIZU_[A-Z_]*CHROME[A-Z_]*` across
+`engine/`, `desktop/` and `scripts/` before adding the third.
+
+### A11. The brand guard's FIRST version bricked every existing box — and missed a third launch site
+**Symptom:** Three separate failures from one round of work, all found in review before shipping:
+(a) after upgrading, the desktop app's "Launch warmed Chrome" refused on **every box that had
+ever launched Chrome through the app**, permanently — the refusal named a way out ("point this
+browser at a DIFFERENT profile directory") that had no UI behind it (`grep -n profile
+desktop/ui/main.js` → 0 hits); (b) on Linux and Windows the guard would happily stamp
+Playwright's Chrome-for-Testing as `chrome`, i.e. *vouch* for exactly the cross-brand launch it
+exists to prevent; (c) `engine/scripts/warm_chrome.sh` — the launch site the docs actually hand
+operators — had no guard at all, so on the machine this was written on the documented command
+would have opened Chrome-for-Testing against a system-Chrome-warmed `~/.aizu-cft-profile` and
+deleted its 18 live cookies (A9).
+**Root cause:** The guard itself (`<profile>/.aizu-browser-brand`, decision table in A9's
+resolution) is right; each defect is a hole around it.
+(a) The marker is written *after* the guard passes (`chrome_manager.rs`'s
+`write_brand_marker`), so nothing ever backfills one. The app's default profile is
+`<app data>/chrome-profile`, which on any box in service already holds a `Default/` — the
+"used, unmarked ⇒ refuse" row, forever, with no affordance to change the profile dir.
+(b) `brand_of` tested for the substring `chrome for testing`, which appears **only** in
+Playwright's macOS `.app` bundle. Read off the installed driver's own `EXECUTABLE_PATHS`
+(`playwright/driver/package/lib/coreBundle.js`): chromium is `chrome-linux64/chrome`
+(linux-x64), `chrome-linux/chrome` (linux-arm64), `chrome-win64\chrome.exe` (win-x64). A
+"detector" that is correct on the developer's OS and inverted elsewhere is worse than none:
+it writes a marker that later launches *trust*.
+(c) The first pass guarded the two launch sites we were editing (Rust shell, Python worker) and
+documented the danger in `warm_chrome.sh`'s header — 200 lines above a launch that still had no
+check. This is the **fifth** time the ledger records the lesson G3 already counted four for four
+(B4, E7, F-10a, F-10b): **a fix is not done at the layer you edited — it is done at the layer a
+user reaches**, and the layer an operator reaches for a warmed browser is this shell script.
+**Fix:** (a) **The operator declares the brand.** On an unmarked-but-used profile the wizard's
+Chrome step asks which browser warmed it and offers `[ Chrome ] [ Chrome for Testing ]
+[ Use a fresh profile directory ]`; the first two write the marker, the third points
+`chrome_profile_dir` at a new empty dir and leaves the old profile untouched (that third choice
+is also the affordance the refusal copy was already promising). The question states the cost of
+a wrong answer — every saved login in that profile, unrecoverably. The app never guesses.
+(b) `brand_of` gains a second rule, identical in Rust, Python and bash: any path **segment**
+matching `^chromium(_headless_shell)?-[0-9]+$` is Chrome for Testing. That is Playwright's
+browsers-cache directory and it holds on every platform (verified against the real
+`~/Library/Caches/ms-playwright`: `chromium-1234`, `chromium_headless_shell-1234`).
+(c) `warm_chrome.sh` implements the whole contract — same filename, same tokens, same table —
+and refuses in a terminal-appropriate way: it prints the exact `printf 'chrome\n' > …` command
+to declare the brand, or the `AIZU_CHROME_PROFILE=…` invocation for a fresh dir, and touches
+nothing itself. The guard runs *before* `ensure_port_free`, so a launch we are going to refuse
+never first asks a healthy browser to quit. Same round, same file: `ensure_port_free`'s refusal
+stopped offering "leave it running, the engine can use it exactly as it is" — it is reachable
+only when `connect_over_cdp` was **rejected** or when nothing answered `/json/version` at all,
+so that sentence was false in both branches; it now says which of the two happened.
+**How to avoid/detect:** A guard that can only refuse is not a safe default — before shipping
+one, ask what it does on a box that **already exists**, and make sure the way out it names is
+reachable from where the operator is standing (a UI control, or a command they can paste). When
+provenance is genuinely unknowable, the honest move is to ask the human and say what a wrong
+answer costs, not to guess quietly. Detection rule for the brand contract: it lives in three
+languages, so exercise all three — the bash half is testable without a browser
+(`AIZU_WARM_CHROME_LIB=1 source engine/scripts/warm_chrome.sh` defines the functions and
+returns before `main`; drive them against throwaway dirs and a scratch port, never 9333). Live
+proof it earns its keep: on the box this was written on `~/.aizu-cft-profile` holds a
+`Default/`, has no marker, and was warmed by **system** Chrome — while `resolve_chrome()`
+prefers Chrome for Testing. The documented command used to walk straight into A9 there; it now
+refuses and explains.
+**Superseded by A12:** every mechanism above — the marker, the decision table, the refusal, the
+operator declaration and its wizard buttons — has been deleted. The profile directory is now
+derived from the brand (`<base>/<brand>`), so there is no shared directory left to police. Only
+`brand_of` and its two rules survive, and only to pick the directory. Keep this entry for the
+holes it names: they are what a marker-and-refusal design costs, and (a) and the round-3
+declaration button are two of the six sightings of the "fix at a layer no user reaches" pattern.
+
+### A8. `cdp_probe` has NEVER attached, in any build — a permanent FALSE RED on a healthy box
+**Symptom:** On a box whose warmed Chrome is perfectly healthy — `/json/version` 200, the engine
+attaching over CDP right now — the desktop app's Chrome step reports the degraded-browser dead end
+and tells the operator to "quit that Chrome COMPLETELY and relaunch". Doing so changes nothing,
+because the next launch is reported degraded too. Reproduces wherever `venv_python()` resolves,
+i.e. `cargo tauri dev` from `desktop/src-tauri` (which reaches `../../engine/.venv/bin/python`).
+Shipped in 361cf97 and wrong from the first commit.
+**Root cause:** `chrome_manager.rs`'s `cdp_probe` builds the Python it shells out to with a
+`format!` whose lines end in `\n\`. In Rust a backslash at end-of-line strips the newline **and
+every leading whitespace character on the continuation line**, so the `\n` is the only newline
+that survives and the block indentation is deleted outright. The emitted program is
+`try:` followed by a column-0 body, and the interpreter dies before touching Chrome:
+`IndentationError: expected an indented block after 'try' statement on line 4`. Compiled the
+literal in isolation and ran what it emits — that error is the whole story. The interpreter
+*runs* and exits non-zero, which is exactly the branch `status_within` maps to `Some(false)` ⇒
+`CdpProbe::Rejected`. So the carefully-built tri-state of A7 (no interpreter ⇒ `Unknown`, never
+`Rejected` — "could not verify is not fine") collapsed the other way: with an interpreter present
+the probe could only ever return `Rejected`, and `Rejected` is sticky (`degraded_launch`).
+**Fix:** Build the script so the emitted text is what you read in the source — explicit `\n`
+separators, a raw/`concat!` literal, or a here-doc-style const — never `format!` line
+continuations for whitespace-significant text.
+**How to avoid/detect:** The generated program must **compile**. A unit test that renders the
+script and feeds it to `python -c 'import sys; compile(sys.stdin.read(), "p", "exec")'` (skipped
+when no interpreter is available) fails on today's literal and passes on the fix, and it costs
+nothing to run. The general trap: `\` at EOL inside a Rust string is not a line continuation that
+preserves your source layout — it eats the indentation you can see. Any embedded Python, YAML,
+Makefile or shell heredoc built that way is silently mangled. And a probe whose *failure* branch
+is the alarming one must be proven to reach its success branch at least once against a known-good
+target, or "always alarming" reads exactly like "correctly detecting a problem".
+
+### A9. Launching a different browser BRAND against a warmed profile DESTROYS its logins (macOS)
+**Symptom:** A warmed profile that had live Instagram / LinkedIn / X sessions comes back logged
+OUT of everything after one launch with the "other" Chrome. The cookie DB is not corrupt and not
+locked — it is **empty**. No later launch of either browser brings the sessions back; the only
+recovery is logging in again by hand on every platform.
+**Root cause:** On macOS, Chromium's cookie encryption key lives in a Keychain item whose name is
+**branded**: Playwright's Chrome for Testing reads `Chromium Safe Storage`, system Google Chrome
+writes `Chrome Safe Storage`. Point one brand at a profile the other warmed and every
+`v10`-encrypted value decrypts with the wrong key — and Chrome **deletes** the undecryptable rows
+rather than quarantining them, so the loss happens on the first launch and is permanent.
+Measured on a **clone** of a warmed profile: 18 cookies → 0, the live Instagram `sessionid`
+included, unreadable by any browser afterwards.
+The version downgrade is **not** the cause, and this was the controlled part of the experiment:
+the *same* system Chrome 151.0.7922.138 relaunched against the clone with `--use-mock-keychain`
+(identical build, deliberately wrong key) produced the identical total loss. Chrome's
+`DowngradeManager` move-aside/snapshot machinery — the thing that renames a too-new `User Data`
+out of the way instead of eating it — is `#if BUILDFLAG(IS_WIN)`; on macOS nothing is set aside.
+**Honest limit:** the un-mocked Chrome-for-Testing-against-a-Chrome-warmed-profile case was
+**inferred, not executed**. Reading a foreign Keychain item can raise a blocking GUI prompt, and
+this ran on the operator's live machine next to a 1.4 GB warmed profile; `--use-mock-keychain`
+reproduces the same wrong-key condition without touching the Keychain, so the mechanism is proven
+and only that one link is by inference.
+**Fix:** Treat a profile dir as bound to the brand that warmed it, forever. `warm_chrome.sh`
+documents it as gotcha 2 and reminds you on every launch against an existing profile;
+`docs/ops/desktop-packaging.md` §3 carries the same warning for `chrome_profile_dir`. If a
+profile was warmed by system Chrome, keep opening it with system Chrome (`CHROME_BIN=…`);
+otherwise warm a FRESH dir with Chrome for Testing.
+**How to avoid/detect:** There is nothing to detect at runtime — **nothing inside the profile
+records which brand wrote it**, and `Last Version` records only a version number, which the
+experiment above proves is the wrong discriminator. So this is a *convention* enforced by
+documentation and defaults, not a check. The live trap to watch: the default
+`chrome_profile_dir`/`AIZU_CHROME_PROFILE` is `~/.aizu-cft-profile`, a *name* that promises CfT
+but on a hand-warmed box may hold a system-Chrome profile — and the setup wizard's
+"Download browser" → "Launch warmed Chrome" sequence would then wipe it. Never test a
+brand/profile pairing on the real profile: clone it (`cp -R`) and burn the clone, which is how
+this was measured.
+~~**Superseded in part by A11:** "a convention, not a check" held only until we wrote the record
+ourselves. Nothing *inside* a Chrome profile still names its brand, but every launch site now
+stamps and consults `<profile>/.aizu-browser-brand`, so the crossing is refused rather than
+merely documented — including in `warm_chrome.sh`, which is where this trap was live.~~
+**Superseded by A12:** there is no marker and no refusal any more. Nothing inside a Chrome
+profile names its brand, so we stopped needing that fact: the directory is *derived* from the
+brand (`<base>/chrome`, `<base>/chrome-for-testing`), and the crossing became unreachable rather
+than detected. The mechanism recorded above is still exactly right, and it is still why no
+component may ever open, move or "repair" a profile whose provenance it does not know.
+
+### A10. `warm_chrome.sh` killed a warmed browser it did not launch
+**Symptom:** Running `engine/scripts/warm_chrome.sh` while any Chrome held the CDP port
+SIGKILLed it — including the operator's warmed, logged-in browser, and including one that was
+attaching perfectly well but happened to fail the script's probe (no venv Playwright, a slow
+start, a 2s curl timeout). Whatever that browser had not flushed went with it.
+**Root cause:** `free_port()` did `pkill -f "remote-debugging-port=${PORT}"`, then `kill -9` on
+every pid `lsof` reported for the port. It was written for a real failure (a degraded Chrome that
+survived a single best-effort `pkill` kept serving 9333 and the engine reconnected to the same
+broken instance — validated live 2026-07-01), but it identified its target by *port*, which is
+the one thing the browser we want to keep and the browser we want gone have in common. That
+inverts the invariant everything else in the system holds: the engine is "a passive observer",
+and the desktop `chrome_manager` only ever ADOPTS a running Chrome. On the box this was found on,
+the process on 9333 was a 1.4 GB profile with a live Instagram session.
+**Fix:** `free_port()` is gone; `ensure_port_free()` replaces it and **signals nothing it cannot
+prove it launched**. The script records its child's pid at launch, and reclaims the port only
+when there is exactly one holder, its pid matches that record, AND its cmdline still carries our
+exact `--remote-debugging-port` + `--user-data-dir` signature — pid files are stale-able and
+cmdlines are forgeable by hand, so both are required. Even then it sends **SIGTERM** (Chrome's
+graceful shutdown flushes cookie and session state), never `-9`. Every other case prints the
+holder — pid, user, start time, command — plus what the CDP probe just said about it, and exits 1
+for the human to decide.
+**How to avoid/detect:** "Free the port" is never a safe primitive when the thing on the port is
+irreplaceable state; the safe primitive is "prove it is mine, else explain and stop". Exercise it
+with a scratch port and a process you launched yourself, never against the live 9333 — the old
+code kills a fake holder on 9444 in one shot, the new code refuses with a description of it, and
+that pair is the whole regression test. A lost pid file (TMPDIR is reaped) only costs the
+automatic reclaim, i.e. it fails toward refusing, which is the correct direction.
+
 ### A1. UI permanently "disconnected", all buttons dead — Tauri 2 bridge not wired
 **Symptom:** The AIZU Worker window renders, but the badge is stuck on `disconnected`, WORKER
 shows `—`, CHROME shows `unknown` (yellow), and no button (Pause/Resume/Stop/Restart/focus)
@@ -36,6 +293,89 @@ scaffold can miss both. Fast triage: if the whole UI is inert, check (a) the bui
 `capabilities.json` is not `{}` (`cat src-tauri/target/*/build/*/out/capabilities.json`). To
 prove where the break is, add a temporary `eprintln!` in the Rust poller — if it logs
 `emitting` but the UI stays stale, the break is the frontend permission/global, not the poll.
+
+### A13. The unified profile base orphaned every existing desktop box's logins
+**Symptom:** After the per-brand profile split, a desktop box that had been running fine looks
+signed-out. Its warmed sessions are intact on disk, at a path nothing opens any more.
+**Root cause:** The shell defaulted to `<app data>/chrome-profile` while `warm_chrome.sh` used
+`~/.aizu-cft-profile` and the worker preflight used a third spelling (`AIZU_CHROME_PROFILE_DIR` /
+`~/.aizu-chrome-profile`) — so the preflight's profile row watched a directory nothing in the repo
+ever warmed. Unifying on ONE name and ONE default (`AIZU_CHROME_PROFILE`, `~/.aizu-cft-profile`)
+fixed that, and is load-bearing: `sidecar_supervisor.rs` exports the base to the child, so the
+shell, its sidecar and the launcher all open the same directory. But changing a DEFAULT moves
+every box that never set the value explicitly.
+**Fix:** Keep the unified default — the split was the real bug — and SAY SO. `config.rs`
+`former_default_chrome_profile_base()` remembers the old location purely to report it, and
+`chrome_manager::former_default_profile_notice` tells the operator their sign-ins are there, that
+nothing has been moved, and how to carry them over. It names BOTH brand destinations and picks
+neither: the brand is as unknowable here as for any legacy profile. Boxes with an explicit
+`chrome_profile_dir` in `config.toml` were never affected — `serde(alias)` still reads the old key.
+**How to avoid/detect:** Changing the DEFAULT of a path is a silent migration for everyone who took
+it. A moved default needs the same treatment as a deleted file: leave the old one alone, and tell
+the operator where it went. Detect with: does anything still read the old location, even to report?
+
+### A12b. Three near-misses in the per-brand split, all found by review, none by tests
+- **The remedy text guessed the brand.** The Python legacy notice pre-typed the Chrome-for-Testing
+  destination into its `mv` command — so the app DID guess, and published the guess to the fleet
+  console as a preflight remedy. An operator whose profile was warmed by system Chrome would have
+  pasted the exact wrong-brand open the redesign exists to make unreachable. It also moved the whole
+  base rather than `Default/`, burying the per-brand dirs the launcher had just created.
+- **The three languages disagreed on override PRECEDENCE.** bash read `AIZU_CHROME_BINARY` first;
+  Python and Rust read `CHROME_BIN` first. With both set, the launcher warmed
+  `<base>/chrome-for-testing` while the worker opened `<base>/chrome`. Since the binary now chooses
+  the DIRECTORY, a precedence disagreement is a split-brain about which logins exist. Standardised
+  on the namespaced name winning: `CHROME_BIN` is generic and other tooling sets it.
+- **Distro Chromium was filed as `chrome`.** Debian/Ubuntu `chromium` seals cookies under its own
+  keyring entry, and `/usr/bin/chromium` sits on the Linux fallback list right next to
+  `/usr/bin/google-chrome` — so a two-token rule handed them one directory and wiped whichever
+  warmed it first. It is now a third brand.
+**How to avoid/detect:** A "shared contract" across three languages is only shared if something
+CHECKS it. Feed all three implementations the same fixture list and compare — 16 real path shapes
+(read off Playwright's own `EXECUTABLE_PATHS` table, not invented) caught all of this in seconds.
+
+### A6. Packaged app can never find a browser — frozen Playwright looks INSIDE the bundle
+**Symptom:** On a packaged box the setup wizard's Chrome step cannot go green. The app launches
+system Chrome, its own probe reports success, and the sidecar preflight then reports
+`cdp_attachable: fail` with a remedy ("quit that Chrome completely and relaunch") that reproduces
+the identical browser forever. Reproduces even on a dev machine whose
+`~/Library/Caches/ms-playwright` is fully populated.
+**Root cause:** THREE layers, each individually reasonable:
+1. `chrome_manager.rs` resolved Chrome-for-Testing by shelling to a **dev-tree venv python**
+   (`engine/.venv/bin/python`, resolved RELATIVE TO CWD). A packaged install has no such venv, and
+   a Finder/LaunchAgent launch has cwd `/`. `CHROME_BIN` is no escape hatch either — a GUI launch
+   inherits no shell profile and `config.toml` has no chrome-binary field.
+2. Fall-through hit **system Chrome**, and Chrome 149+ answers `/json/version` with HTTP 200 while
+   REJECTING `connect_over_cdp` — a browser the engine can never attach to. (True of 149; **no
+   longer true on 151** — see the correction in D3. The layer-1 and layer-3 breakages are
+   unaffected, and CfT-first is still right, for the pinning reason, not the attach reason.)
+3. The obvious fix (ask the frozen sidecar, which carries Playwright inside it) is ALSO broken:
+   `playwright/_impl/_transport.py` does `env.setdefault("PLAYWRIGHT_BROWSERS_PATH", "0")` whenever
+   `sys.frozen` is true, and the Node driver reads `"0"` as *browsers live inside the package* →
+   `<bundle>/_internal/playwright/driver/package/.local-browsers/`. `sidecar.spec` copies the
+   driver tree but **no browsers**, so that directory does not exist at all.
+**Fix:** `aizu.worker.chrome_path` (a CLI the frozen binary dispatches via `run_sidecar.py`, same
+argv trick as A2) prints Playwright's Chrome-for-Testing path; `chrome_manager.rs` asks the SIDECAR
+first, dev venv second, system Chrome last. `run_sidecar.py` pins `PLAYWRIGHT_BROWSERS_PATH` (via
+`setdefault`, so ops can still override) to the per-user cache the dev tree already uses, which
+covers the probe AND the real sidecar since both enter through that shim. `--install` downloads the
+browser with the bundled driver — no Python needed on the box — behind a wizard button.
+**How to avoid/detect:** `cd / && <frozen-binary> -m aizu.worker.chrome_path` must print a path and
+exit 0. Running it from the repo proves nothing: the dev venv is reachable there and masks the bug.
+
+### A7. Two ways this fix silently un-fixed itself (both caught in review, both now guarded)
+- **The degraded-Chrome note was erased on the next click.** `ensure_running`'s attach branches
+  returned `degradation: None`. On a packaged box `cdp_probe` can ONLY return `Unknown` (no
+  interpreter to probe with), so the second "Launch warmed Chrome" — or the next app start — wiped
+  the footer note, painted the step green, and restored the exact green-UI/red-preflight dead end.
+  The fact is now STICKY (`degraded_launch`), retired only by a real `Attached` probe or a healthy
+  launch. **"Could not verify" is not "fine"** — see `attach_branch_degradation`.
+- **A half-installed browser passed an existence check.** A killed download leaves ~322 MB and a
+  52 KB launcher on disk; Playwright knows it is incomplete (it re-downloads with "Removing unused
+  browser at …") but `os.path.exists` does not. `resolve()` now requires Playwright's own
+  `INSTALLATION_COMPLETE` marker in the revision dir — and only rejects when it can positively
+  identify that dir, so an unrecognised layout is accepted rather than falsely failed. The first
+  cut matched `<anything>-<digits>` and declared a healthy browser broken because `pytest-188` was
+  an ancestor of the test fixture.
 
 ### A2. Frozen job child killed instantly (rc=-9), job stuck `queued` forever
 **Symptom:** A leased job crash-loops: `Job <id> crashed (rc=-9): job child crashed`,
@@ -177,7 +517,8 @@ see B4).
 **Symptom:** Job reaches `done`, but `sessions=0, reels_seen=0, matches=0`.
 **Root cause:** NOT a code bug — the managed Chrome on port 9333 was degraded:
 `answers HTTP but rejects connect_over_cdp (stale/degraded Chrome or system Chrome 149+)`. The
-engine couldn't attach, so it did no work but still completed cleanly.
+engine couldn't attach, so it did no work but still completed cleanly. (The "system Chrome 149+"
+half is history — see the D3 correction; a degraded/stale browser still does this.)
 **Fix / prerequisite:** A run needs a **healthy warmed Chrome, logged into the target platform,
 on the CDP port** (9333 live), plus provider creds (`OPENROUTER_API_KEY`) in the worker's env.
 This is the standing "live exit gate." See [engine-live-run notes] and CDP gotchas below (D3).
@@ -361,6 +702,66 @@ the value actually lives; a guessed default turns a safety rail into an outage.
 
 ## C. Local dev environment & deployment wiring
 
+### C0. Both default LLM model ids are DEAD on OpenRouter — masked locally by `engine/.env`
+**Symptom:** Nothing, on any box that sets `OPENROUTER_TEXT_MODEL` /
+`OPENROUTER_VISION_MODEL` — which `engine/.env` does, so local dev and the current fleet
+are fine. On any box WITHOUT them (a fresh clone that copied `.env.example`, a new worker,
+CI, a colleague's laptop), every LLM call sends a model id OpenRouter does not have.
+**Root cause:** `openrouter/owl-alpha` and `nex-agi/nex-n2-pro:free` are both **absent**
+from the live model listing. Verified twice on 2026-08-21 against
+`GET https://openrouter.ai/api/v1/models` (200 OK, 419 models) — no id anywhere in the
+listing contains "owl"; `nex-agi/nex-n2-pro` exists but the `:free` variant does not.
+They were presumably live when written; model ids are not stable.
+
+Five sites carry the literals, and the precedence chain means fixing one is not enough:
+| Site | Note |
+|---|---|
+| `engine/aizu/core/router.py:336-337` | `_DEFAULT_TEXT_MODEL` / `_DEFAULT_VISION_MODEL` — the LAST resort in the chain |
+| ~~`engine/aizu/cli.py:1013,1015`~~ | ~~passed as EXPLICIT args (`cli.py:134-135`), which **outrank** the router chain~~ — **done 2026-08-21**: both are `default=None`; this also restored `AIZU_TEXT_MODEL`, which the explicit pass had made unreachable on the CLI path |
+| `engine/aizu/worker/config.py:299-300, 361-363, 416-417` | same shadowing for the whole fleet via `config.py:455-456` |
+| ~~`engine/aizu/engines/warming/tg_relevance.py:32`~~ | ~~`DEFAULT_GATE_MODEL`, a 4th copy~~ — **done 2026-08-21**: replaced with `_default_gate_model()`, which resolves through the router's chain instead of holding a literal |
+| ~~`engine/.env.example:20-21`~~ | ~~a fresh install copies the dead id~~ — **done 2026-08-21**: points at ids verified live that day, with prices and a re-check warning |
+
+`router.py:366-370` resolves `text_model or AIZU_TEXT_MODEL or OPENROUTER_TEXT_MODEL or
+_DEFAULT_*`, and an explicit argument always wins — so the CLI and worker hardcodes make
+the router default unreachable on the two paths that matter, and they also make
+`AIZU_TEXT_MODEL` (the local-Ollama knob) unreachable on the CLI path entirely.
+
+**Fix:** Do NOT swap five literals. Delete the CLI and worker hardcodes (`default=None`)
+so everything falls through to the router's single resolution chain, leaving exactly one
+place a dead id can live. Then update that one place. Live candidates with exact per-1M
+pricing from the same 2026-08-21 fetch: `qwen/qwen3-vl-32b-instruct` $0.104/$0.416
+(text+image, 131k, response_format yes); `google/gemini-3.5-flash-lite` $0.300/$2.500;
+`nex-agi/nex-n2-mini` $0.025/$0.100; `nex-agi/nex-n2-pro` $0.250/$1.000 (⚠️ response_format
+NOT supported). Free and present: `dots-studio/dots-3-note-preview:free`,
+`google/gemma-4-31b-it:free`, `nvidia/nemotron-nano-12b-v2-vl:free` (⚠️ last one:
+response_format NOT supported).
+
+⚠️ Before picking a VISION id: `router.classify_image` (`:834-880`) appears to have no
+response_format param-rejection handling — the `_json_mode = False` latch-off and stripped
+retry exist only in `classify_text` (`:707-725`) and `generate_json` (`:919-930`). A vision
+model that rejects the param may fail hard rather than degrade. NOT independently verified;
+check before choosing an id marked "response_format NOT supported".
+
+**How to avoid / detect:** A model id is a third-party fact with a shelf life, exactly like
+the API facts the Campaign Lab sheets date and mark ⚠️. There is no preflight row for it —
+`worker/preflight.py` makes no outbound call at all (`check_llm_backend` is a pure env
+predicate), so "the key is set" is checked and "the model exists" is not. An id-resolution
+preflight row would be the first outbound probe in that module; that is a design decision,
+not an oversight to fix casually.
+**Status 2026-08-21:** three of the five sites are done (struck through above).
+**Two remain, both owned by a concurrent session at the time of writing:**
+`engine/aizu/core/router.py:336-337` and
+`engine/aizu/worker/config.py:299-300, 361-363, 416-417`. Until the router
+default is changed, a box with no env override still sends a dead id — the work
+above removed the DUPLICATES, not the defect. The worker one matters most:
+`config.py:455-456` passes the ids as explicit args, so changing the router
+default alone will not help a worker box.
+
+**Found:** 2026-08-21, by a Campaign Lab research fan-out that was looking at
+something else entirely.
+
+
 ### C1. Worker shows "disconnected" / first-register 401 — bootstrap token mismatch
 **Symptom:** Worker can't first-register (401), or shows disconnected in the Fleet page.
 **Root cause:** The server needs the SAME `AIZU_WORKER_BOOTSTRAP_TOKEN` the worker presents
@@ -453,6 +854,21 @@ Live runs attach to a LOCAL warmed Chrome via `connect_over_cdp('http://127.0.0.
 a daytime guard against the account timezone; harvest attaches Chrome before the daytime check;
 warming is gated by a kill-switch. A dedicated `--user-data-dir` is required (Chrome refuses
 `--remote-debugging-port` on the default profile).
+
+**Correction — "system Chrome cannot be attached to" is stale as of Chrome 151 (measured
+2026-08-18).** The 149 regression was real (Chrome 149 dropped the CDP browser-context-management
+surface, so `connect_over_cdp` died right after the websocket with "Browser context management is
+not supported"), and it is why CfT became the default. It is not current behaviour: **system
+Google Chrome 151.0.7922.138 attaches**, **Chrome for Testing 151.0.7922.34 attaches**, and a
+read-only `Target.getBrowserContexts` against the LIVE system Chrome returned
+`{'browserContextIds': [], 'defaultBrowserContextId': '…'}` with no error. Chrome for Testing
+remains the recommended default for a **different** reason than it was picked: it is the build the
+installed Playwright ships with, so its protocol surface matches the client by construction and
+cannot silently auto-update out from under us — which is exactly what 149 did. One build on one OS
+is not a licence to switch the default to system Chrome. A rejected `connect_over_cdp` on 151 means
+degraded/stale/already-attached, not "wrong brand", so the remedy is the same as ever: relaunch a
+clean warmed instance — but see A10, you do not get to kill someone else's browser to do it, and
+A9, you do not get to relaunch it with the other brand.
 
 ### D4. Schema migrations are additive + self-healing — mind the version namespace
 New tables use `CREATE TABLE IF NOT EXISTS` in the SCHEMA block + `_add_column_if_missing`;
@@ -670,15 +1086,30 @@ ever served. Never copy them into a deployed `--panel-dir`.
 - ~~**Revoking a worker bricks it** (B10)~~ **CLOSED 2026-08-13** — a confirmed 401 clears the token,
   halts loudly and parks; and a revoked box can no longer walk back in on the shared bootstrap
   secret, so revocation is durable even before the B8 cutover runs.
-- **Desktop Rust is uncompiled** — `control_client.rs` gained a `#[serde(default)]
-  reenrolment_required` field for B10, but this machine has no cargo/rustc. Statically checked
-  (`rename_all = "camelCase"` matches the wire key, struct derives `Default`, no literal
-  constructions), not built. Run `cargo check` in `desktop/src-tauri/` before packaging.
+- ~~**Desktop Rust is uncompiled**~~ **CLOSED 2026-08-19** — the blocker was PATH, not tooling:
+  `cargo` is installed at `~/.cargo/bin` and simply is not on the shell's default PATH, which is
+  why several rounds recorded "no cargo on this build host". With it exported,
+  `cargo check --all-targets` is clean (one dead-code warning, `errors.rs:43`) and `cargo test`
+  passes **81 tests**, including the A12 brand contract and the A8 `the_probe_script_is_valid_python`
+  regression. Re-check before packaging, but the standing debt is paid. Detection lesson: "command
+  not found" is not "not installed" — check `~/.cargo/bin`, `/opt/homebrew/bin` and `/usr/local/bin`
+  before recording a tooling gap that then persists across commits.
 - ~~**Spend cap is per-box, not per-campaign** (B9)~~ **CLOSED 2026-08-13** — prior total resolved at
   lease time + delta rolled up on ack and nack; the box enforces, the cloud's enqueue-time skip fails
   open. Residual: an attempt on a permanently-dead box that never acks or nacks is never banked.
-- **Live exit gate** (B6): a real `target_leads>=1` run producing leads on a warmed, logged-in
-  Chrome has not been verified end-to-end on a worker box.
+- ~~**Live exit gate** (B6)~~ **CLOSED 2026-08-21** (section I) — a panel-authored campaign,
+  dispatched to a WORKER and run against a warmed, logged-in Chrome, produced real leads:
+  37 reels → 27 relevant → 26 comments scored → 2 matches (`@lead-A` «Цена?» 0.78,
+  `@lead-B` «Можно узнать цену такого ремонта» 0.82), with 0 permalink bounces, 0 owner
+  wedges and three consecutive sessions completing. The whole chain — discover, gate, open the
+  right reel, intercept comments, score, write a lead — now runs end to end on the fleet path.
+  Earlier framing of this gate, kept because the narrowing steps are what made it closeable:
+  still open, but materially narrowed on 2026-08-19 (section H). Two live
+  runs on a warmed, logged-in Chrome proved every stage up to and including comment scoring —
+  run 2 fetched and scored **12 real comments** on a live reel, the first time `_process_comments`
+  has ever executed in this repo. What remains unproven is only the last step: no comment has yet
+  scored >=0.70, so `matches` has never received a row. The blocker is now content/model, not code
+  path — the shipped brief hunts SaaS buyers while the reels reaching it are construction/PM.
 - **Windows/Linux packaging**: `.exe`/`.msi`/NSIS need a Windows host; code-signing/notarization
   (Apple Developer ID; Windows Authenticode/EV) unresolved; ad-hoc/unsigned chosen for the
   managed fleet (Gatekeeper `rejected` is expected — strip quarantine / distribute out-of-band).
@@ -1016,6 +1447,11 @@ discriminator the panel never sends), F-10a (server never passes the argument), 
 the parameter). **A fix is not done at the layer you edited — it is done at the layer a user reaches.**
 Closed by threading it to `RunDrawer`, the one component where a campaign is genuinely in scope; the
 global banner has none and correctly stays unscoped.
+**Now six for six** (A11, A12): `warm_chrome.sh` — the launch site the docs actually hand operators —
+went a whole round without the guard the other two launch sites got, and the round after that shipped a
+wizard button that wrote a marker `resolve_chrome_binary` never read. Both were *correct* code in a
+place no user's path runs through. When you finish a fix, name the exact click or command a user makes
+and follow it to your edit.
 
 ### G4. Cheap checks that repaid the whole exercise
 - `tsc` passed and `npm run lint` failed — TS narrows through a boolean const, so a `?.` I wrote was
@@ -1057,3 +1493,245 @@ confusingly-similar flags (`AIZU_WARMING_ENABLED` vs `AIZU_WORKER_WARMING_ONLY`)
   met for `config`, `preflight` and `cli`, not for the module that actually runs the preflight.
 - **A green preflight means "nothing known-broken on this machine", NOT "this box can harvest."**
   B6's live exit gate is untouched.
+
+---
+
+## H. Third live shakedown — the FIRST warmed-Chrome harvest (2026-08-19)
+
+Two runs against a real, logged-in Instagram session on system Google Chrome at
+`127.0.0.1:9333`, campaign `acme-saas-leadgen`, free OpenRouter tier. Run 1 exposed the
+defects below; run 2 ran with the fixes. **Run 2 executed `_process_comments` against live
+Instagram for the first time in this repo's history** — 12 real comments on reel
+`DXaiAECDLYZ` (@the_construction_mentor), each scored by the cloud model. B6's remaining
+question is no longer "does the code path work" but "does a comment ever clear 0.70".
+
+Run 1 → Run 2: reels 12 → 25, relevance_passes 0 → 1, comments_scored **0 → 12**,
+matches 0 → 0, health_flags **0 → 3**.
+
+### H1. The per-reel deadline destroyed precisely the reels that PASSED relevance
+**Symptom:** A run reports `status=completed`, exit 0, `matches=0`, `relevance_passes=0` and
+**zero health flags**, while `seen_reels` holds a row with `relevant=1`. Indistinguishable
+from a dry feed. Live: reel `DFdnoSsgWBk` (@planuppro) scored relevant 0.85 / confidence 0.90
+and was discarded **in the same log second**.
+**Root cause:** `engines/instagram/session.py` anchored `reel_start` BEFORE
+`cascade.gate_reel()` and enforced `per_reel_seconds=90` AFTER `store.mark_seen(...)` but
+BEFORE `if gate.relevant:` — so classification spent the budget its own docstring said
+bounds the BROWSER block, and the `continue` landed before `open_reel` and
+`_process_comments`. The slow path IS the escalation path, which fires on
+borderline-but-genuine content, so the guard preferentially destroyed the likeliest leads.
+`counters.relevance_passes` sat after the skip, which is why the summary could not show the
+loss. Identical shape in `linkedin/session.py` and `x/session.py`.
+**Made permanent by:** `store.is_seen` (`core/store.py:1538`) is a bare existence check with
+NO TTL and nothing in `aizu/` ever DELETEs from `seen_reels`. `mark_seen` had already run, so
+the reel is blacklisted for that campaign forever. **Every skip path that runs after
+`mark_seen` is destructive, not deferred.**
+**Fix:** Re-anchor the clock after the gate so the budget bounds browser work only; keep a
+real interruption point at the one seam inside the block (after `open_reel`, before the
+comment stage); count `relevance_passes` for every gate-relevant reel; and raise a new
+`relevant_reel_discarded` soft flag on every post-`mark_seen` loss path in all three engines.
+**How to avoid/detect:** A budget must be anchored where the thing it claims to bound BEGINS
+— if a guard's docstring names one stage and its clock starts at another, that is the bug.
+And a summary counter that sits after a `continue` cannot report the loss it was added to
+report: assert the counter against the persisted row (`relevance_passes` vs
+`COUNT(seen_reels.relevant=1)`), which is a cheap invariant and was violated on the first
+live run.
+
+### H2. Fixing H1 nearly traded a lost reel for a halted session (caught in review)
+**Symptom:** Would have presented on the NEXT live run as a mystery `halted: stalled` with no
+obvious cause.
+**Root cause:** `last_activity_at` is bumped ONLY by `_flush()` → `store.update_counters`,
+which the feed loop reaches once per reel, at the very end. Re-anchoring serialized gate +
+`open_reel` + comment scoring behind that single heartbeat, and `session_watchdog.py` halts
+any running session idle >180s. Run 1's log already contained a **186s gap** on the
+159s-vision reel — already past the threshold BEFORE the change added `O + C` on top.
+**Fix:** `self._flush()` between the gate and the browser block in all three engines. Pinned
+by a test that asserts by ORDER (`trace.index("flush") < trace.index("open_reel")`), because
+the injected monotonic clock does not move the wall-clock `last_activity_at` records — a
+timestamp assertion would have passed vacuously. Verified to fail with the `_flush()` removed
+(`trace == ['open_reel', 'flush', 'flush']`).
+**How to avoid/detect:** When a fix makes two expensive stages run in sequence where only one
+ran before, check every watchdog/heartbeat whose threshold was justified against the OLD
+shape. `session_watchdog.py`'s comment literally cited `per_reel_seconds` as its justification
+— the constant the fix redefined.
+
+### H3. A 200 with no usable verdict was a SILENT confident reject
+**Symptom:** 3 of 12 reels in run 1 came back `label=unknown score=0.00 confidence=0.00`,
+logged as `Cloud relevance ✓`, rejected for good behind the TTL-free watermark, no flag.
+**Root cause:** `core/router.py` fed `_extract_json` (returns `{}` on anything unparseable)
+into `_decision_from_payload`, which defaults a missing label to `unknown` and a missing score
+to `0.00` with `tier="cloud"`. `cascade._unsure` then misses all three arms — tier is not
+`degraded`, 0.00 is below `escalate_band` lo, and 0.00 is far from the 0.70 threshold — so it
+is never re-asked. Distinct from the already-handled `malformed 200: no usable choices`, which
+correctly rides the retry ladder.
+**Fix:** An unparseable/verdictless 200 raises inside the retry path and, if it persists,
+returns the degrade path so `tier=="degraded"` — which makes the cascade escalate and raises
+`cloud_degraded`. Kept the word "malformed" in the message so `_looks_like_param_rejection`
+still returns False and JSON mode is not latched off.
+**REVIEW CAUGHT:** the first version of the guard read label and score as an **OR**, so
+`{"label":"unknown","score":0.0}` — byte-for-byte the shape the live run logged — hit the
+score branch, coerced `0.0`, returned True, and rebuilt the exact Decision the fix existed to
+eliminate. A stated label is now authoritative; the score branch is reachable only when
+`label` is absent entirely. **A guard written from a log line must be tested against that
+literal log line**, not against a paraphrase of it.
+**Confirmed live:** run 2 raised 3 `cloud_degraded` flags where run 1 was silent, one reading
+`raw={"label":"{"label":"irreleva…` — the model emitting nested broken JSON.
+
+### H4. One global untagged reel queue inverted per-source attribution
+**Symptom:** Run 1 logged `.../acme.io/reels/ · yielded=12` while **zero** of the 12
+`seen_reels` authors was `acme.io`; all were project-management accounts matching the FIRST
+hashtag.
+**Root cause:** `core/cdp.py` holds a single process-wide `_reel_queue`; `_enqueue_reel` never
+saw which source was being walked, and `walk()` drained with `pop(0)` under whatever url it
+currently named. Reels intercepted during a redirected source's nav+settle were queued, the
+fast-skip `continue` fired before that source's drain loop, and they surfaced later under a
+different source's name.
+**Worse than cosmetic:** that accidental drain was the ONLY thing keeping hashtag discovery
+alive. A brief with `seed_accounts: []` and `include_home_feed` false would intercept reels on
+every tag page, skip each source before draining, harvest ZERO, and still report `completed`
+with no health flag.
+**Fix:** `Reel.source` stamped at interception from a `_current_source` published under the
+existing `_queue_lock`; the redirect path sets `scrollable = False` instead of `continue`, so
+a redirected source drains what it queued without paying the scroll budget; `yielded=` counts
+own-source reels with `carried_over=` beside it; and `walk()` warns if it returns with reels
+still queued. Live in run 2: `projectmanagement · yielded=12 · carried_over=0`, then
+`productivitytools · yielded=0 · carried_over=12`.
+
+### H5. `/explore/tags/<tag>/` redirects are INTERMITTENT, not permanent
+Run 1: all six tag sources 302'd to `/explore/search/keyword/?q=%23<tag>`. Run 2, same URLs,
+~2h later: the first served a real reels grid and yielded 12 on its own. **Do not generalise a
+platform-behaviour claim from one run** — the first reading here ("six for six, the hashtag
+path is dead") was wrong, and would have justified a large unnecessary rewrite of discovery.
+
+### H6. What this shakedown PROVED works — do not re-test
+- The A12 per-brand profile split, end to end and in anger: `brand=chrome` →
+  `profile=<base>/chrome`, legacy notice correctly silent after the operator move, and
+  **cookies 15 → 16 across two full runs** (gained `rur`; lost nothing). A9 did not fire.
+- CDP attach, interception wiring, reel parsing, the relevance cascade, vision escalation
+  (`vision=True frames=3`), comment fetch, comment scoring, and the spend ledger.
+- `cargo check` + `cargo test` on the desktop shell: clean, 81 tests. The ledger's "Desktop
+  Rust is uncompiled" gap was stale — `cargo` was installed at `~/.cargo/bin`, just not on the
+  shell's PATH.
+- **Both hardcoded model defaults are dead ids.** `openrouter/owl-alpha` and
+  `nex-agi/nex-n2-pro:free` (`router._DEFAULT_TEXT_MODEL`/`_DEFAULT_VISION_MODEL`, and the
+  values `CLAUDE.md` documents) both 404 against the live `/api/v1/models` listing. Any box
+  without the `engine/.env` pins latches its cloud leg off on the first call. Ledger D2 again.
+- `max_source_seconds` is NOT broken (an in-session claim that it was is retracted): the check
+  runs at the top of every iteration and `consumer_seconds` deliberately excludes time the
+  cascade holds the generator. Run 2's 41 minutes were **18.5 min of model latency across 43
+  free-tier calls**, plus dwell and scrolling — not a wedge.
+
+### H7. Still open after this shakedown
+- **B6 is NOT closed.** No comment has yet scored ≥0.70, so `matches` has never received a
+  row. Every stage upstream of that is now proven live. The remaining variable is content:
+  the brief hunts SaaS buyers while the reels reaching it are construction/PM, whose
+  commenters discuss methodology, not procurement.
+- Reels destroyed by H1 before the fix stay destroyed — the TTL-free watermark has no repair
+  path. Clearing `seen_reels` for a campaign is currently a manual `DELETE`.
+- `router.classify_image` and `generate_json` (panel-facing, AI campaign generate/interview)
+  have the same unguarded shape H3 fixed for `classify_text`.
+- Free-tier viability: text p90 ~42s, one 159s vision call, and `usd=$0.0000` on every call
+  means `_spend_guard` can never engage.
+
+---
+
+## I. The first leads — Tashkent renovation campaign, fleet-executed (2026-08-20/21)
+
+The campaign was authored end-to-end **through the panel UI** (signup → org → campaign, all
+three classifier prompts pasted into the Advanced section), dispatched to a **worker**, and run
+against the warmed Chrome. It produced the repo's first leads. Four defects stood between "every
+stage is implemented" and "a lead lands", and none of them was the one the logs blamed.
+
+### I1. `/reel/<code>/` bounces off the swipeable surface — the biggest single funnel loss
+**Symptom:** `CDP open_reel bounced off the permalink (swipeable surface?) · reel=X landed=.../reels/Y/`
+on most reels of every run. The engine asks for reel X and lands on reel Y, so
+`_open_reel_landing_check` correctly refuses to read comments there and skips the reel.
+**Root cause:** Instagram serves the SINGULAR `/reel/<code>/` into its swipeable `/reels/` feed,
+which restores its own scroll position and drops the requested code. Measured live on four real
+codes: `/reel/` landed on a different reel **3 of 4**; `/p/<code>/` landed on the requested code
+**4 of 4**.
+**Cost, measured across one day of runs:** 65 reels passed relevance → 22 bounced, 24 more
+"unavailable" → only 47 comment fetches, 24 comments scored **in total**. ~70% of everything the
+campaign correctly identified as on-campaign never reached the classifier.
+**Fix:** `REEL_PERMALINK = "https://www.instagram.com/p/{code}/"`. `_CODE_IN_PAGE_URL` already
+matched `/p/`, so attribution was unaffected. After: **0 bounces**.
+**How to avoid/detect:** A "skip" that is logged as a warning and returns False is invisible in
+every summary — the run still completes, still reports success, just with fewer leads. Count
+the skip paths against the relevance count; if the ratio is not close to 1, the funnel is
+leaking upstream of anything the scores can show you.
+
+### I2. Fixing I1 silently broke comment retrieval — the dialog-scoped scroller
+**Symptom:** After the permalink fix, `new=0 total=0` on **23 of 23** comment fetches. The funnel
+was finally open and nothing came through it.
+**Root cause:** `_scroll_comment_dialog` scoped its scroller lookup to `div[role=dialog]`. That
+was correct for the modal `/reel/` opened and wrong the moment the permalink moved: `/p/`
+renders comments **inline**. Measured on a post with 12 comments: `hasDialog: false`, yet a
+page-level scroller of `scrollHeight 2172` vs `clientHeight 382` holding the real comment list.
+**The second cost, which matters more:** returning False is also the branch that falls through to
+the humanised **mouse-scroll**, which is the path the owner-thread wedge (H-series) lives on. So
+the dialog-only lookup both silenced comments AND fed the wedge.
+**Fix:** `document.querySelector("div[role=dialog]") || document.body`. After: a single reel
+returned `new=15 total=15`, 26 comments scored in one session, **0 wedges**.
+**How to avoid/detect:** When a navigation target changes, re-derive every DOM assumption that
+depended on the old surface. A selector scoped to a container that no longer exists fails
+CLOSED and looks exactly like "there was nothing there".
+
+### I3. The log names an operation it did not observe — four hypotheses refuted at real cost
+**Symptom:** `CDP scroll wheel timed out — trying JS fallback`, dozens of times, followed by
+`the owner thread is still inside the hung wheel call`.
+**Root cause:** `pw_owner`'s FAST-FAIL raises the same `PlaywrightTimeout` class as a genuine
+deadline expiry, so that line prints when `page.mouse.wheel` was **never dispatched to Chrome at
+all**. The real hang was `page.mouse.move`, whose failure `HumanSim.mouse_move` swallowed with a
+bare `except Exception: return` — no log, no trace. "the owner thread is still inside the hung
+wheel call" is inference from `is_wedged()`, which knows only that SOME call is abandoned.
+**What it cost:** four hypotheses tested against the live browser and refuted — the Playwright
+API, Chrome state rot / version skew, the swipeable surface, and `response.json()` on the owner
+thread — plus a lock-order deadlock theory refuted by measurement (`queue_lock locked=False`).
+Every one was aimed at the wheel because the log named the wheel.
+**How to avoid/detect:** **An operation named in an error message is an ATTRIBUTION, not an
+observation** — unless the code can prove it observed that specific call. Before chasing the
+named operation, ask what the code actually knows. And never swallow a bounded call's failure
+silently: `_focus` now logs at debug for exactly this reason, because a silent swallow is what
+hid the original defect for five dead-lettered attempts.
+
+### I0. NEVER put a lead's handle or comment text in this ledger — the repo is PUBLIC
+Leads are private individuals. Their Instagram handle plus the verbatim comment they wrote is
+personal data, and `github.com/orihero/aizu` is a public repository whose `main` branch is also
+the DEPLOY TRIGGER — so committing it publishes it. The first draft of section I named two real
+commenters alongside their messages, scores and extracted intent; it was caught before any
+commit and redacted to `@lead-A` / `@lead-B`. The technical argument never needed the handles:
+the funnel counts and the score gap (0.05-0.40 vs 0.78/0.82) carry all of it. Same rule for
+reel authors where the account is a person rather than a business, and for anything pasted out
+of `matches.text`. If evidence genuinely requires a real example, put it in a local scratch
+file, never in a tracked one.
+
+### I4. The config was never the problem — check the funnel before the thresholds
+When the run produced no leads it was natural to suspect a too-tight brief. The data said
+otherwise: relevance passed **65 of 106** (scores piled at 0.90/0.92), and of the 24 comments
+ever scored, 2 cleared 0.70 and exactly ONE sat in the 0.60-0.69 near-miss band. A tight
+threshold produces a CLUSTER of near-misses; there wasn't one. The shortfall was throughput —
+24 comments scored all day — caused by I1 and I2 upstream.
+**After the fixes, same brief, same threshold:** 37 reels → 27 relevant → 26 comments scored →
+**2 leads** in one session, with a clean gap between 0.40 and 0.78 and nothing stranded below
+the threshold.
+**Leads:** `@lead-A` «Цена?» (0.78) and `@lead-B` «Можно узнать цену такого ремонта»
+(0.82), both extracted `intent: price`. The first is the market's canonical two-word lead that
+the Match prompt deliberately protects ("brevity must lower CONFIDENCE, never SCORE") — evidence
+that the vertical-specific prompt work paid off.
+**How to avoid/detect:** Before tuning a rubric, count the funnel. A threshold can only be judged
+against a sample that reached it.
+
+### I5. Panel-authored campaigns cannot express two brief keys
+The UI has no control for `escalate_band` or `enable_stt`, so a campaign created in the panel
+silently takes the dataclass defaults — `[0.4, 0.75]` instead of the intended `[0.4, 0.65]`.
+Confirmed in the dispatched job spec. `include_home_feed` is fine (the seed-aware default
+resolves to False). Ship a FILE brief, or patch the stored `campaign_briefs` JSON, when those
+two knobs matter.
+
+### I6. Source order is fixed, and accounts-only is worse than hashtags
+`_sources()` is hardcoded `home → hashtags → accounts` with no priority knob, and the other
+session's `_source_seeds` labels sources BY POSITION, so reordering it breaks their ledger.
+Clearing `seed_hashtags` to reach the curated accounts first was tried and was **much worse**:
+account `/reels/` grids wedged almost immediately (2 wedges in ~4 minutes, sessions halting at
+3 reels) where hashtag grids completed 4 sessions over ~60 minutes. Account grids remain
+unusable until the residual wedge is understood; do not repeat this experiment expecting a
+different result.

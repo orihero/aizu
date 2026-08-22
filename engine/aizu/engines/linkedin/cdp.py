@@ -36,6 +36,13 @@ log = get_logger(__name__)
 FEED_URL = "https://www.linkedin.com/feed/"
 HASHTAG_URL = "https://www.linkedin.com/feed/hashtag/{tag}/"
 ACTIVITY_URL = "https://www.linkedin.com/in/{slug}/recent-activity/all/"
+# Company/school/showcase pages do NOT live under /in/ and have their own posts
+# tab. Formatting one into ACTIVITY_URL produces /in/company/<slug>/... — a 404
+# that the walk spends a nav plus four empty-scroll rounds on, every session.
+ORG_ACTIVITY_URL = "https://www.linkedin.com/{kind}/{slug}/posts/"
+# The non-person page kinds LinkedIn serves. `company` is the overwhelming
+# majority; `school` and `showcase` share the same /posts/ tab.
+ORG_KINDS = ("company", "school", "showcase")
 # A post permalink is the activity urn dropped into the feed-update path.
 POST_PERMALINK = "https://www.linkedin.com/feed/update/{urn}/"
 
@@ -44,6 +51,56 @@ POST_PERMALINK = "https://www.linkedin.com/feed/update/{urn}/"
 class LinkedInCDPConfig(CDPBaseConfig):
     post_url_hints: tuple[str, ...] = DEFAULT_POST_URL_HINTS
     comment_url_hints: tuple[str, ...] = DEFAULT_COMMENT_URL_HINTS
+
+
+def seed_activity_url(account: str) -> str:
+    """Build the recent-activity URL for one seed account.
+
+    BOTH documented seed formats used to produce dead URLs. The panel placeholder
+    asks for `in/jane-doe, company/acme`
+    (`admin-panel/src/features/campaigns/useCampaignForm.ts`), while the builder
+    did `str(acct).lstrip("@").strip("/")` straight into `/in/{slug}/...` — so the
+    two shapes an operator is TOLD to type became
+    `linkedin.com/in/in/jane-doe/recent-activity/all/` and
+    `linkedin.com/in/company/acme/recent-activity/all/`. Neither exists. The walk
+    then spent a navigation plus four empty-scroll rounds on each, every session,
+    forever, and the campaign still reported `completed`.
+
+    Accepts every form an operator plausibly types, because the placeholder is not
+    the only thing they copy from:
+      `jane-doe`, `@jane-doe`, `in/jane-doe`, `/in/jane-doe/`,
+      `https://www.linkedin.com/in/jane-doe/`  → person activity feed
+      `company/acme`, `/company/acme/posts/`,
+      `https://linkedin.com/company/acme/`     → company posts tab
+      (`school/` and `showcase/` behave like `company/`)
+
+    An unrecognised bare slug is treated as a PERSON — the pre-existing default,
+    and the overwhelmingly common case.
+    """
+    raw = str(account or "").strip()
+    if not raw:
+        return FEED_URL
+    # Strip a full URL down to its path, so a pasted browser address works.
+    lowered = raw.lower()
+    for prefix in ("https://", "http://"):
+        if lowered.startswith(prefix):
+            raw = raw[len(prefix):]
+            # drop the host (www.linkedin.com, linkedin.com, uz.linkedin.com …)
+            raw = raw.split("/", 1)[1] if "/" in raw else ""
+            break
+    raw = raw.split("?", 1)[0].split("#", 1)[0]
+    raw = raw.strip().lstrip("@").strip("/")
+    if not raw:
+        return FEED_URL
+    parts = [seg for seg in raw.split("/") if seg]
+    kind = parts[0].lower() if parts else ""
+    if kind in ORG_KINDS and len(parts) > 1:
+        return ORG_ACTIVITY_URL.format(kind=kind, slug=parts[1])
+    if kind == "in" and len(parts) > 1:
+        return ACTIVITY_URL.format(slug=parts[1])
+    # A bare slug (or anything unrecognised): treat as a person, which is both the
+    # historical behaviour and the common case.
+    return ACTIVITY_URL.format(slug=parts[0])
 
 
 class LinkedInFeed(CDPFeedBase):
@@ -84,7 +141,7 @@ class LinkedInFeed(CDPFeedBase):
         for tag in self.cfg.seed_hashtags:
             urls.append(HASHTAG_URL.format(tag=str(tag).lstrip("#")))
         for acct in self.cfg.seed_accounts:
-            urls.append(ACTIVITY_URL.format(slug=str(acct).lstrip("@").strip("/")))
+            urls.append(seed_activity_url(acct))
         return urls or [FEED_URL]
 
     # ---- open full-screen ----
@@ -153,6 +210,12 @@ class LinkedInFeed(CDPFeedBase):
             self._load_more_comments(page)
             self._scroll(page)
             time.sleep(self.cfg.settle_seconds)
+            # Same seam as instagram/cdp.py: this whole method runs inside
+            # `fetch_comments`, which `_process_comments` calls BEFORE its first
+            # `_touch()`. Each round is a full `_scroll(page)` — one notch batch,
+            # ~88s worst case — so N rounds were one unbroken silence past
+            # STALL_TIMEOUT_SEC (180s). Progress, not a timer: a round finished.
+            self._progress()
 
     def _open_comment_thread(self, page) -> None:
         """Click the 'Comment' action so the thread expands and its Voyager call fires."""

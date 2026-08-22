@@ -166,6 +166,12 @@ class XFeed(CDPFeedBase):
         for _ in range(self.cfg.max_comment_scrolls):
             self._scroll(page)
             time.sleep(self.cfg.settle_seconds)
+            # Same seam as instagram/cdp.py: this whole method runs inside
+            # `fetch_comments`, which `_process_comments` calls BEFORE its first
+            # `_touch()`. Each round is a full `_scroll(page)` — one notch batch,
+            # ~88s worst case — so N rounds were one unbroken silence past
+            # STALL_TIMEOUT_SEC (180s). Progress, not a timer: a round finished.
+            self._progress()
 
     def _load_quotes(self, reel_id: str) -> None:
         """Quote-posts are a SECOND surface on a different endpoint — navigate to the
@@ -183,3 +189,9 @@ class XFeed(CDPFeedBase):
         for _ in range(self.cfg.max_comment_scrolls):
             self._scroll(page)
             time.sleep(self.cfg.settle_seconds)
+            # Same seam as instagram/cdp.py: this whole method runs inside
+            # `fetch_comments`, which `_process_comments` calls BEFORE its first
+            # `_touch()`. Each round is a full `_scroll(page)` — one notch batch,
+            # ~88s worst case — so N rounds were one unbroken silence past
+            # STALL_TIMEOUT_SEC (180s). Progress, not a timer: a round finished.
+            self._progress()

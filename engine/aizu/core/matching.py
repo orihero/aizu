@@ -60,6 +60,81 @@ def ground_extracted(extracted: Optional[dict[str, Any]],
     return grounded
 
 
+# --------------------------------------------------------------------------- #
+# Cheap comment pre-filter (Campaign Lab, Remedy Sheet #3 / Remedy C)
+# --------------------------------------------------------------------------- #
+# Three cascade docstrings have advertised "local pre-filter → local scoring →
+# escalate-if-unsure → cloud" since they were written, and no pre-filter existed:
+# every comment, including every bare "🔥🔥", bought a model call.
+#
+# The rule that shapes what may live here: a pre-filtered comment is NEVER
+# SCORED AND NEVER STORED, so a wrong skip is an invisible lost lead — the same
+# failure mode as the relevance gate's false negatives. Therefore only comments
+# that CANNOT be a lead under any reading are filtered, and anything arguable
+# goes to the model.
+#
+# In particular sellers are deliberately NOT filtered: Sheet #3 / Remedy B is
+# explicit that supply-side commenters are routed for competitor intel, never
+# dropped. Detecting them is `discovery/buyer_density.classify_comment`; acting
+# on them belongs to the output-contract redesign, not to a silent skip.
+
+SKIP_EMPTY = "empty"
+SKIP_NO_WORDS = "no_words"
+SKIP_DUPLICATE = "duplicate"
+
+# Unicode word characters. A comment with none of these carries no proposition:
+# emoji, punctuation, or a bare "+1" of arrow characters. Digits alone do NOT
+# qualify as words here — but see the guard below, because a bare phone number is
+# a real (seller-shaped) signal and must survive.
+_WORD_RE = re.compile(r"[^\W\d_]", re.UNICODE)
+# Total digits, NOT a consecutive run: a real number is written "+998 90 123 45 67"
+# far more often than "998901234567", and a run-based test filtered exactly the
+# contact details this exemption exists to protect. Seven is the shortest
+# plausible subscriber number.
+_MIN_PHONE_DIGITS = 7
+
+
+def _digit_count(text: str) -> int:
+    return sum(1 for c in text if c.isdigit())
+
+
+def comment_prefilter_reason(text: Optional[str], *,
+                             username: Optional[str] = None,
+                             seen: Optional[set[str]] = None) -> Optional[str]:
+    """Why this comment cannot be a lead, or None to send it to the model.
+
+    `seen` is a per-session set of already-scored `(author, text)` pairs, mutated
+    here.
+
+    KEYED ON THE AUTHOR, not on the text alone. Text-only dedupe looks like the
+    cheapest spam signal there is and is actively wrong for this engine: the
+    highest-value comments are SHORT, COMMON buyer questions — "narxi qancha?",
+    "how much?", "цена?" — and two different people asking the same question
+    under two different posts are two leads, not a broadcast. Text-only dedupe
+    drops the second one silently, and it drops it precisely because it was a
+    textbook buyer phrase. One ACCOUNT repeating itself is the real spam
+    pattern, and it is also already-captured: that person is a lead we have.
+
+    Deliberately conservative. Three rules, each of which is a certainty:
+      * nothing at all;
+      * no letters anywhere (emoji/punctuation only) AND too few digits to be a
+        phone number — the digit exemption keeps a bare "+998 90 123 45 67"
+        alive, which is a real contact signal despite containing no letters;
+      * the same AUTHOR repeating text they already had scored this session.
+    """
+    body = (text or "").strip()
+    if not body:
+        return SKIP_EMPTY
+    if not _WORD_RE.search(body) and _digit_count(body) < _MIN_PHONE_DIGITS:
+        return SKIP_NO_WORDS
+    if seen is not None and username:
+        key = f"{str(username).strip().lower()}\x00{' '.join(body.lower().split())}"
+        if key in seen:
+            return SKIP_DUPLICATE
+        seen.add(key)
+    return None
+
+
 def corroboration_needs_review(primary_score: float,
                                comparisons: list[dict[str, Any]],
                                threshold: float) -> bool:

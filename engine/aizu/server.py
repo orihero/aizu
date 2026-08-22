@@ -195,7 +195,7 @@ _WORKER_PREFLIGHT_STATUSES = frozenset({"fail", "unknown", "pass", "skip"})
 _WORKER_PREFLIGHT_CHECK_IDS = frozenset({
     "state_dir_writable", "token_persistence", "dispatch_credential", "capabilities",
     "llm_backend", "playwright", "cdp_reachable", "cdp_port_drift", "cdp_attachable",
-    "preflight_error",
+    "chrome_profile", "preflight_error",
 })
 _WORKER_PREFLIGHT_LOGIN_PREFIX = "login."
 # AI campaign generation can carry a base64 product screenshot, far over the
@@ -733,9 +733,18 @@ def _validate_campaign(payload: Any) -> tuple[Optional[dict], Optional[str]]:
         # NaN/Infinity token. A numeric *string* keeps its historic tolerance.
         threshold = brief.get("threshold")
         if isinstance(threshold, (int, float)) and not isinstance(threshold, bool):
-            _, err = _finite_number(threshold, "brief.threshold")
+            value, err = _finite_number(threshold, "brief.threshold")
             if err:
                 return None, err
+            # RANGE, not just finiteness (Campaign Lab, Remedy Sheet #3 / Remedy E).
+            # The gate is `score >= campaign.threshold`, so 0 accepts every comment
+            # ever scored and 1 accepts none — both are silent, both look like a
+            # working campaign, and neither raises anything anywhere. Only the
+            # explicit numeric form is checked; a numeric *string* keeps its
+            # historic tolerance, and a blank still means "keep the stored one".
+            if value is not None and not (0.0 < float(value) < 1.0):
+                return None, ("brief.threshold must be between 0 and 1 "
+                              "(exclusive) — 0 matches every comment, 1 matches none")
     return {"campaignId": cid.strip(), "op": op, "status": status, "budgetCap": budget,
             "goalTarget": int(goal) if goal is not None else None,
             "displayName": name.strip() if isinstance(name, str) else None,
@@ -3151,12 +3160,30 @@ class PanelHandler(SimpleHTTPRequestHandler):
         store = Store(self.db_path)
         try:
             router = build_router(store=store, spend_cap_usd=GENERATE_SPEND_CAP_USD)
+            # Campaign Lab (Remedy Sheet #1/D): tell the generator what this org's
+            # past runs actually proved about seed terms, so it stops re-inventing
+            # tags that have already been shown to be dead. Best-effort — a draft
+            # must never fail because the ledger could not be read.
+            try:
+                org_id = self._current_user()["orgId"]
+                plat = (fields["platforms"] or [None])[0]
+                # Split by kind: a proven HANDLE and a proven HASHTAG are
+                # different evidence, and merging them invites the model to
+                # propose one where the other belongs.
+                seed_history = {
+                    kind: store.seed_history(org_id, platform=plat, kind=kind)
+                    for kind in ("hashtag", "account")
+                }
+            except Exception:  # noqa: BLE001 — the ledger is advice, not a gate
+                log.debug("seed_history unavailable for generation", exc_info=True)
+                seed_history = None
             draft = campaign_gen.generate_campaign(
                 url=fields["url"], image_b64=fields["imageB64"], text=fields["text"],
                 router=router, config_dir=self.config_dir,
                 campaign_id_hint=fields["campaignIdHint"],
                 product_context=fields["productContext"],
-                interview=fields["interview"], platforms=fields["platforms"])
+                interview=fields["interview"], platforms=fields["platforms"],
+                seed_history=seed_history)
         except campaign_gen.CampaignGenError as e:  # expected, user-facing
             self._send_json(422, False, error=e.public)
             return

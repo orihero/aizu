@@ -1,4 +1,4 @@
-//! Loopback control-surface client (Phase 6 SCAFFOLD, UNCOMPILED).
+//! Loopback control-surface client (BUILD-PLAN Phase 6).
 //!
 //! A small `reqwest` client for the sidecar's loopback-only control surface
 //! (`aizu.worker.control_surface`, a stdlib HTTP server bound to 127.0.0.1). This is

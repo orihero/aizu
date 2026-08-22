@@ -11,7 +11,11 @@ Implementations:
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Iterator, Optional
+from typing import Callable, Iterator, Optional
+
+from .logsetup import get_logger
+
+log = get_logger(__name__)
 
 
 @dataclass
@@ -42,10 +46,90 @@ class Reel:
     video_frames: list[str] = field(default_factory=list)
     frame_timestamps: list[int] = field(default_factory=list)
     video_analysis: Optional[dict] = None
+    # The author's STABLE, SEED-SHAPED identifier — a YouTube `UC…` id, a
+    # LinkedIn canonical profile URL, a Telegram @channel. `author` above is the
+    # display name, which is what an operator reads and what a rename changes;
+    # this is what a mined seed candidate must actually be keyed on (Campaign Lab,
+    # Remedy Sheet #2: "persist the stable numeric ID as the seed's primary key,
+    # never the handle" — a rename then reads as the same seed, and a 404 on the
+    # ID is the true death signal). Empty when the platform exposes no stable id
+    # on the discovery payload.
+    author_id: str = ""
+    # Which discovery SEED this item was intercepted on — the hashtag, the account
+    # handle, or the literal "home"; NOT the URL, because this string is written
+    # straight through to `seen_reels.source` and joined against `source_stats`.
+    # Interception is a single process-wide queue, so without this stamp a reel
+    # carries NO provenance and the walk logs every drained item under whatever
+    # source it happens to be naming: the live 2026-08-19 Instagram run reported
+    # `.../acme.io/reels/ | yielded=12` for 12 reels whose authors were all
+    # hashtag-page accounts, intercepted on six earlier /explore/tags/ sources.
+    # Empty for feeds that don't intercept (FakeFeed).
+    source: str = ""
+
+
+# ---- per-source accounting (Campaign Lab, Remedy Sheet #1 / Remedy D) ----
+# Discovery source kinds. `walk()` visits a mixed list of URLs/ids and, until now,
+# threw away which one produced what: the per-source epilogue in
+# `cdp.CDPFeedBase.walk()` computed `from_source`/`carried_over` and dropped both
+# at a debug line. These are the vocabulary the persisted ledger is keyed on.
+SOURCE_HOME = "home"
+SOURCE_HASHTAG = "hashtag"      # IG/LinkedIn/X tag pages; YT/Reddit search queries
+SOURCE_ACCOUNT = "account"      # profile/channel/subreddit seeds
+SOURCE_UNKNOWN = "unknown"
+
+
+@dataclass
+class SourceOutcome:
+    """What one discovery source actually produced during one walk.
+
+    `yielded` counts items INTERCEPTED ON this source (Reel.source == source);
+    `carried_over` counts items this source drained that an EARLIER source had
+    queued. Keeping them apart is the whole point: on 2026-08-19 six Instagram
+    hashtag pages redirected and their 12 reels drained under a seed *account*,
+    which is exactly the mis-attribution a naive pop-counter records as truth.
+
+    `source` is the SEED TERM (the hashtag / account handle / the literal
+    "home"), not the URL — the ledger has to key on the thing a campaign brief
+    names and the generator re-proposes, and it must survive a URL-template
+    change. `url` carries what was actually navigated, for the log trail.
+
+    `redirected`/`unavailable` are per-source verdicts the walk already computes
+    and discards — a 302 to keyword search, or a "page isn't available" DOM probe
+    (a banned/removed hashtag). `seconds` is the walk's own time on the source,
+    excluding time the consumer held the generator."""
+    source: str
+    kind: str = SOURCE_UNKNOWN
+    url: str = ""
+    yielded: int = 0
+    carried_over: int = 0
+    redirected: bool = False
+    unavailable: bool = False
+    seconds: float = 0.0
+
+
+def _noop_source_sink(outcome: SourceOutcome) -> None:
+    """Default `FeedSource.on_source_done`: accounting is opt-in, so a feed used
+    without a Store (tests, CLI probes, dry runs) behaves exactly as before."""
 
 
 class FeedSource:
     """Interface. See FakeFeed for the contract semantics."""
+
+    # Per-source accounting sink. `cli._build_run_io` swaps in a Store-backed
+    # recorder; everything else keeps the no-op. Assigned per INSTANCE (a plain
+    # function, not a bound method), so `self.on_source_done(outcome)` calls it
+    # with the outcome alone in both cases.
+    on_source_done: Callable[[SourceOutcome], None] = staticmethod(_noop_source_sink)
+
+    def _record_source(self, outcome: SourceOutcome) -> None:
+        """Report one source's outcome to the sink. Never raises: per-source
+        accounting is a diagnostic, and a DB hiccup here must not end a walk that
+        is otherwise healthy (same contract as `CDPFeedBase._progress`)."""
+        try:
+            self.on_source_done(outcome)
+        except Exception:  # noqa: BLE001 — accounting must never break a walk
+            log.debug("source accounting sink failed · source=%s", outcome.source,
+                      exc_info=True)
 
     def walk(self) -> Iterator[Reel]:
         raise NotImplementedError

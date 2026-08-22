@@ -1,4 +1,4 @@
-//! Desktop-shell configuration (Phase 6 SCAFFOLD, UNCOMPILED).
+//! Desktop-shell configuration (BUILD-PLAN Phase 6).
 //!
 //! Loaded and validated from a TOML file at `app_config_dir()/config.toml`.
 //!
@@ -74,8 +74,12 @@ struct TomlConfig {
     dispatch_base_url: String,
     #[serde(default = "default_cdp_port")]
     cdp_port: u16,
-    #[serde(default)]
-    chrome_profile_dir: String,
+    /// The BASE for the warmed-Chrome profile, not the profile itself: the browser is
+    /// launched against `<base>/<brand>` (`chrome_manager::profile_dir_for`), so two Chrome
+    /// builds can never open one directory. Aliased to the old key so a config.toml written
+    /// before that change still loads.
+    #[serde(default, alias = "chrome_profile_dir")]
+    chrome_profile_base: String,
     /// Path to the bundled/installed `aizu-worker` binary. If empty, the supervisor
     /// resolves it relative to the app resource dir.
     #[serde(default)]
@@ -119,6 +123,62 @@ fn default_worker_platforms() -> String {
     "all".to_string()
 }
 
+/// The env var naming the warmed-Chrome profile BASE — the one spelling, repo-wide.
+///
+/// It used to be three: this shell had none and defaulted under app-data,
+/// `engine/scripts/warm_chrome.sh` read `AIZU_CHROME_PROFILE` (default `~/.aizu-cft-profile`)
+/// and the worker preflight read `AIZU_CHROME_PROFILE_DIR` (default `~/.aizu-chrome-profile`).
+/// So the preflight's profile row watched a directory the shipped launcher never warmed and
+/// this app never launched — a check that could only ever describe someone else's box. The
+/// shipped launcher's spelling wins because it is the one an operator has already typed.
+pub const CHROME_PROFILE_ENV: &str = "AIZU_CHROME_PROFILE";
+
+/// …and its default, likewise repo-wide. A dot-directory in `$HOME` rather than the OS
+/// app-data dir so the desktop shell, `warm_chrome.sh` and a hand-run worker all land on the
+/// SAME base and therefore on the same warmed logins.
+const DEFAULT_CHROME_PROFILE_BASE: &str = ".aizu-cft-profile";
+
+/// Where the per-brand profiles live when config.toml does not say.
+///
+/// This is a BASE. Nothing launches a browser against it — `chrome_manager::profile_dir_for`
+/// appends the brand, and a pre-existing profile sitting directly in it is left alone and
+/// merely reported (`chrome_manager::legacy_profile_notice`).
+/// Where the desktop shell defaulted its Chrome profile BEFORE the base was unified.
+///
+/// Kept only so the operator can be told their warmed logins are sitting there. Nothing
+/// reads it as config and nothing ever opens it — see
+/// `chrome_manager::former_default_profile_notice`.
+///
+/// `None` when the app has no data dir at all, which is the same degradation every other
+/// path in this file takes.
+pub fn former_default_chrome_profile_base(app: &AppHandle) -> Option<PathBuf> {
+    app.path().app_data_dir().ok().map(|d| d.join(FORMER_CHROME_PROFILE_DIR))
+}
+
+/// The old per-app profile directory name. Frozen: it is a historical fact, not a setting.
+const FORMER_CHROME_PROFILE_DIR: &str = "chrome-profile";
+
+fn default_chrome_profile_base() -> PathBuf {
+    if let Ok(explicit) = std::env::var(CHROME_PROFILE_ENV) {
+        let trimmed = explicit.trim();
+        if !trimmed.is_empty() {
+            return PathBuf::from(trimmed);
+        }
+    }
+    // `$HOME` is set for a Finder/launchd launch too; the `.` fallback only matters on a box
+    // with no home at all, where every other path in this file degrades the same way.
+    home_dir().join(DEFAULT_CHROME_PROFILE_BASE)
+}
+
+/// `$HOME`, or `.` when the process has none. Tauri's path API needs an `AppHandle`, which a
+/// unit test cannot construct — see the note at the top of `mod tests`.
+fn home_dir() -> PathBuf {
+    std::env::var_os("HOME")
+        .or_else(|| std::env::var_os("USERPROFILE"))
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from("."))
+}
+
 /// Immutable, validated configuration. Cloned cheaply behind an `Arc`.
 #[derive(Debug, Clone)]
 pub struct DesktopConfig {
@@ -127,9 +187,10 @@ pub struct DesktopConfig {
     pub dispatch_base_url: String,
     /// CDP port for the managed Chrome (default 9333).
     pub cdp_port: u16,
-    /// Dedicated Chrome user-data-dir (NEVER the default profile — Chrome refuses
-    /// --remote-debugging-port on the default profile).
-    pub chrome_profile_dir: PathBuf,
+    /// BASE for the warmed-Chrome profiles. The `--user-data-dir` a browser is actually
+    /// launched against is `<base>/<brand>` — see `chrome_manager::profile_dir_for`. Never
+    /// the operator's default profile: Chrome refuses `--remote-debugging-port` on it.
+    pub chrome_profile_base: PathBuf,
     /// Absolute path to the `aizu-worker` binary, or empty to resolve from resources.
     pub sidecar_binary_path: PathBuf,
     /// Worker state dir (`AIZU_WORKER_STATE`) — machine-id, single-flight locks, logs/.
@@ -218,7 +279,7 @@ const EXAMPLE_TOML: &str = r#"# AIZU Worker — the Setup wizard in the app writ
 dispatch_base_url = "https://your-cloud-dispatch.example.com"  # the cloud you lease jobs from
 cdp_port = 9333            # managed Chrome remote-debugging port (canonical: 9333)
 control_port = 8788        # loopback control surface
-chrome_profile_dir = ""    # a DEDICATED profile dir (NOT your default Chrome profile); "" = auto under app data
+chrome_profile_base = "" # BASE for the warmed profiles; each browser gets <base>/<brand>. "" = AIZU_CHROME_PROFILE, else ~/.aizu-cft-profile
 sidecar_binary_path = ""   # "" = use the aizu-worker bundled inside the app
 state_dir = ""             # "" = auto under app data
 db_path = ""               # "" = auto under app data
@@ -268,7 +329,7 @@ fn default_config(app: &AppHandle) -> DesktopConfig {
     DesktopConfig {
         dispatch_base_url: String::new(),
         cdp_port: DEFAULT_CDP_PORT,
-        chrome_profile_dir: data.join("chrome-profile"),
+        chrome_profile_base: default_chrome_profile_base(),
         sidecar_binary_path: PathBuf::new(),
         state_dir: data.join("worker-state"),
         db_path: data.join("aizu.db"),
@@ -305,7 +366,10 @@ impl TomlConfig {
         Ok(DesktopConfig {
             dispatch_base_url: url.trim_end_matches('/').to_string(),
             cdp_port: self.cdp_port,
-            chrome_profile_dir: or_default(self.chrome_profile_dir, data.join("chrome-profile")),
+            chrome_profile_base: or_default(
+                self.chrome_profile_base,
+                default_chrome_profile_base(),
+            ),
             sidecar_binary_path: PathBuf::from(self.sidecar_binary_path),
             state_dir: or_default(self.state_dir, data.join("worker-state")),
             db_path: or_default(self.db_path, data.join("aizu.db")),
@@ -346,7 +410,7 @@ pub struct ConfigPatch {
 /// Read-modify-write `config.toml`, apply `patch`, and return the reloaded config.
 ///
 /// This REPLACES the old `write_config`, which rewrote a three-line minimal file and thereby
-/// silently dropped `worker_platforms`, `chrome_profile_dir`, `state_dir`, `db_path` and any
+/// silently dropped `worker_platforms`, `chrome_profile_base`, `state_dir`, `db_path` and any
 /// non-default `cdp_port` every time the dev menu saved. The whole file is now round-tripped:
 /// unknown-to-us keys are the only thing lost, and there are none (the struct is total).
 pub fn update_config(app: &AppHandle, patch: ConfigPatch) -> Result<DesktopConfig, DesktopError> {
@@ -362,7 +426,7 @@ pub fn update_config(app: &AppHandle, patch: ConfigPatch) -> Result<DesktopConfi
             TomlConfig {
                 dispatch_base_url: d.dispatch_base_url,
                 cdp_port: d.cdp_port,
-                chrome_profile_dir: String::new(),
+                chrome_profile_base: String::new(),
                 sidecar_binary_path: String::new(),
                 state_dir: String::new(),
                 db_path: String::new(),
@@ -433,7 +497,7 @@ fn render_toml(raw: &TomlConfig) -> String {
          cdp_port = {}\n\
          control_port = {}\n\
          worker_platforms = {}\n\
-         chrome_profile_dir = {}\n\
+         chrome_profile_base = {}\n\
          sidecar_binary_path = {}\n\
          state_dir = {}\n\
          db_path = {}\n\
@@ -443,7 +507,7 @@ fn render_toml(raw: &TomlConfig) -> String {
         raw.cdp_port,
         raw.control_port,
         toml_str(&raw.worker_platforms),
-        toml_str(&raw.chrome_profile_dir),
+        toml_str(&raw.chrome_profile_base),
         toml_str(&raw.sidecar_binary_path),
         toml_str(&raw.state_dir),
         toml_str(&raw.db_path),
@@ -780,7 +844,7 @@ OPENROUTER_TEXT_MODEL='single-quoted'\n\
         let raw = TomlConfig {
             dispatch_base_url: "https://cloud.example.com".into(),
             cdp_port: 9333,
-            chrome_profile_dir: r"C:\aizu\profile".into(),
+            chrome_profile_base: r"C:\aizu\profile".into(),
             sidecar_binary_path: String::new(),
             state_dir: "/var/aizu/state".into(),
             db_path: "/var/aizu/aizu.db".into(),
@@ -792,9 +856,45 @@ OPENROUTER_TEXT_MODEL='single-quoted'\n\
         let back: TomlConfig = toml::from_str(&render_toml(&raw)).expect("re-parse");
         assert_eq!(back.dispatch_base_url, raw.dispatch_base_url);
         assert_eq!(back.cdp_port, 9333);
-        assert_eq!(back.chrome_profile_dir, r"C:\aizu\profile");
+        assert_eq!(back.chrome_profile_base, r"C:\aizu\profile");
         assert_eq!(back.worker_platforms, "instagram,x");
         assert!(back.setup_complete);
+    }
+
+    /// A config.toml written before the profile directory became a function of the browser
+    /// brand still has to load. The key was `chrome_profile_dir` then and is
+    /// `chrome_profile_base` now — it means something different (a parent, not a profile),
+    /// so it is renamed rather than reused, and aliased so nobody's box silently reverts to
+    /// the default base and loses sight of the logins it warmed.
+    #[test]
+    fn the_old_profile_key_still_loads_under_its_new_name() {
+        let old: TomlConfig = toml::from_str(
+            "dispatch_base_url = 'https://c.example.com'\nchrome_profile_dir = '/data/warm'\n",
+        )
+        .expect("a pre-rename config.toml");
+        assert_eq!(old.chrome_profile_base, "/data/warm");
+    }
+
+    /// The ONE base, repo-wide. It used to be three: this shell defaulted under app-data,
+    /// `warm_chrome.sh` read `AIZU_CHROME_PROFILE` (`~/.aizu-cft-profile`), and the worker
+    /// preflight read `AIZU_CHROME_PROFILE_DIR` (`~/.aizu-chrome-profile`) — so the check
+    /// that watched a profile directory watched one nothing on the box had ever warmed.
+    ///
+    /// Serialised on one test because it mutates process env; `cargo test` runs threads in
+    /// parallel and a second env-touching test would flake against this one.
+    #[test]
+    fn the_profile_base_is_one_env_var_and_one_default() {
+        let home = home_dir();
+        std::env::remove_var(CHROME_PROFILE_ENV);
+        assert_eq!(default_chrome_profile_base(), home.join(".aizu-cft-profile"));
+
+        // Blank is not a setting — an empty export must not become an empty path.
+        std::env::set_var(CHROME_PROFILE_ENV, "   ");
+        assert_eq!(default_chrome_profile_base(), home.join(".aizu-cft-profile"));
+
+        std::env::set_var(CHROME_PROFILE_ENV, "/srv/warm");
+        assert_eq!(default_chrome_profile_base(), PathBuf::from("/srv/warm"));
+        std::env::remove_var(CHROME_PROFILE_ENV);
     }
 
     /// "Close and fix later" is worthless if the flag it sets does not survive the next
@@ -806,7 +906,7 @@ OPENROUTER_TEXT_MODEL='single-quoted'\n\
         let raw = TomlConfig {
             dispatch_base_url: "https://cloud.example.com".into(),
             cdp_port: 9333,
-            chrome_profile_dir: String::new(),
+            chrome_profile_base: String::new(),
             sidecar_binary_path: String::new(),
             state_dir: String::new(),
             db_path: String::new(),

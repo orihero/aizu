@@ -30,6 +30,7 @@
   // -------------------------------------------------------------------- constants
   const STALE_MS = 5000;            // status snapshot age before we show "stale"
   const MAX_LOG_LINES = 1000;       // log-pane DOM cap
+  const MAX_INSTALL_LINES = 200;    // browser-download progress-pane DOM cap
   const BUFFER_MAX_TICKS = 180;     // 3 min at the unified 1s sample cadence; FIFO
   const MAX_JOB_HISTORY = 500;      // cap distinct-jobId tracking on an always-on box
   const LIVE_DOT_SILENCE_MS = 3000; // log live-dot goes quiet after this
@@ -63,6 +64,7 @@
     heroTakeoverSub: el("hero-takeover-sub"),
     updateStrip: el("update-strip"), reenrolStrip: el("reenrol-strip"),
     // preflight health strip (steady state)
+    shellStrip: el("shell-strip"), shellStripText: el("shell-strip-text"),
     pfStrip: el("pf-strip"), pfStripPill: el("pf-strip-pill"), pfStripText: el("pf-strip-text"),
     pfStripBody: el("pf-strip-body"), pfStripToggle: el("pf-strip-toggle"),
     // KPI
@@ -289,6 +291,7 @@
   safeListen("status-updated", (evt) => onStatus(evt.payload));
   safeListen("sidecar-status", (evt) => onSidecar(evt.payload));
   safeListen("log-line", (evt) => onLog(evt.payload));
+  safeListen("chrome-install-progress", (evt) => onChromeInstallProgress(evt.payload));
 
   // ==================================================================== status handler
   function onStatus(s) {
@@ -339,6 +342,9 @@
     // (an older sidecar that never sends the key) and `null` (first pass still running)
     // both render as "checking…", never as healthy.
     renderPreflightStrip(s.preflight);
+    // …and the SHELL's own bad news beside it. Cheap enough to ride this beat: it is a lock
+    // read in Rust, not the loopback round-trip `get_setup_state` costs.
+    refreshShellNote();
     // While the wizard is open its step must track the live report, so re-derive it on the
     // same 1.5s beat the status poller already runs on.
     if (setup.open) refreshSetup();
@@ -872,6 +878,28 @@
     return pfChecks(pf).filter((c) => c.severity === "fatal" && c.status === "fail");
   }
 
+  /// The shell's own "something is wrong with this box" line, on the dashboard.
+  ///
+  /// The sidecar's preflight cannot see any of it — a config.toml that would not parse, a
+  /// Chrome this app could not start, a Chrome that came up as the wrong browser — so the
+  /// health strip below, which renders only that report, was never going to show it. It
+  /// lived in the wizard footer alone, behind a button most operators never press, under an
+  /// if/else a running job won.
+  function refreshShellNote() {
+    invoke("get_shell_note")
+      .then(renderShellNote)
+      // A plain browser (no Tauri) or a backend not up yet: leave whatever is on screen
+      // rather than blanking a warning because one poll failed.
+      .catch(() => {});
+  }
+
+  function renderShellNote(note) {
+    if (!nodes.shellStrip) return;
+    const text = typeof note === "string" ? note.trim() : "";
+    nodes.shellStrip.classList.toggle("hidden", !text);
+    if (text) nodes.shellStripText.textContent = text;
+  }
+
   // The dashboard's permanent health strip.
   function renderPreflightStrip(pf) {
     if (!nodes.pfStrip) return;
@@ -999,6 +1027,7 @@
       .then(() => { nodes.pfStripText.textContent = "Re-checking…"; })
       .catch((e) => flashError(node, e)));
   wire("pf-strip-setup", () => openWizard());
+  wire("shell-strip-setup", () => openWizard());
 
   // ==================================================================== setup wizard
   //
@@ -1231,14 +1260,23 @@
     }
     // A live job makes every step that restarts the worker refuse; say so once, up front,
     // instead of letting the operator discover it by clicking Save.
-    if (st.jobActive) {
-      nodes.wzMsg.textContent =
-        "A job is running on this box — saving anything here would restart the worker and " +
-        "kill that run. Wait for it, or stop it from the dashboard.";
-      nodes.wzMsg.className = "wz-foot-msg small is-warn";
-    } else if (st.startupError) {
-      nodes.wzMsg.textContent = "Startup problem: " + st.startupError;
-      nodes.wzMsg.className = "wz-foot-msg small is-danger";
+    //
+    // The startup problem is ADDED to that, never outranked by it. It used to lose the
+    // if/else and therefore vanish for the whole length of a job — and the wizard footer was
+    // the only place in the app that rendered it at all, so "a job is running" silently
+    // deleted the one sentence explaining why Chrome is broken. It is also on the dashboard
+    // now (#shell-strip), which is what main.rs and commands.rs have always claimed.
+    if (st.jobActive || st.startupError) {
+      const parts = [];
+      if (st.startupError) parts.push("Startup problem: " + st.startupError);
+      if (st.jobActive) {
+        parts.push(
+          "A job is running on this box — saving anything here would restart the worker " +
+          "and kill that run. Wait for it, or stop it from the dashboard.");
+      }
+      nodes.wzMsg.textContent = parts.join(" — ");
+      nodes.wzMsg.className =
+        "wz-foot-msg small " + (st.startupError ? "is-danger" : "is-warn");
     } else if (last && !ready && !setup.busy) {
       // A disabled Finish with no explanation is how this wizard became a trap. Name what
       // is holding it AND the way out, on the pane where the operator is stuck.
@@ -1453,6 +1491,7 @@
   function renderStepChrome(st) {
     paintCheckBlock("wz-check-cdp-reachable", "cdp_reachable");
     paintCheckBlock("wz-check-cdp-attachable", "cdp_attachable");
+    renderChromeProfile(st.chromeProfile);
 
     // Port drift (F10). The remedy string the check writes contains the exact port to
     // pin — `Setup → Chrome → "Use 9333"` — so the one-click repair reads it from there
@@ -1497,12 +1536,146 @@
       })
       .then(() => setBusy(false));
   });
+  /// Where each browser's logins live, plus the one thing left to say about a profile
+  /// from before the per-browser split.
+  ///
+  /// There is no question here and no button. Three rounds asked the operator which browser
+  /// warmed a profile — a marker file, a decision table, a refusal, a declaration — and the
+  /// last of them shipped an answer no launch site ever read, so the button was a dead end.
+  /// The directory is now derived from the browser, so nobody can answer wrong and nothing
+  /// has to be answered at all.
+  function renderChromeProfile(profile) {
+    const dirs = el("wz-profile-dirs");
+    if (dirs) {
+      dirs.textContent = profile
+        ? "Chrome for Testing · " + profile.chromeForTestingDir +
+          "\nGoogle Chrome · " + profile.chromeDir
+        : "";
+    }
+    const block = el("wz-legacy-block");
+    if (!block) return;
+    // Two independent things can be sitting unused on disk: a pre-redesign profile in the
+    // CURRENT base, and a profile at the shell's FORMER default location (from before the
+    // base was unified). A box can have either, both, or neither — a box that has the second
+    // and is never told just looks signed-out with no cause attached, which is the exact
+    // silence this whole arc exists to end. Joined rather than ranked: neither is a control,
+    // neither blocks, and dropping one to show the other would hide real logins.
+    const notice = [
+      profile && profile.legacyNotice,
+      profile && profile.formerDefaultNotice,
+    ].filter(Boolean).join("\n\n");
+    // Never blocking, never a control: it says what is there and stops. It also must not
+    // hide the step's own Launch button behind it — a legacy profile does not stop anything.
+    block.classList.toggle("hidden", !notice);
+    const text = el("wz-legacy-text");
+    if (text) text.textContent = notice;
+  }
+
   wire("wz-drift-fix", (node) => {
     const port = parseInt(el("wz-drift-fix").getAttribute("data-port"), 10);
     if (!port) return null;
     return runSetupCommand("save_setup_step", { patch: { cdpPort: port } },
       "wz-chrome-msg", "Pinned port " + port + " — the worker is restarting.", node);
   });
+
+  // ---- step 5 · the browser binary
+  //
+  // The installer is ~30 MB because it carries NO browser, and a packaged worker cannot
+  // borrow the one a developer's checkout downloaded — so on a fresh PC Chrome for Testing
+  // has to be fetched once, here, before "Launch warmed Chrome" has anything to start.
+  //
+  // Nothing about this block is derived from get_setup_state: the report has no check that
+  // says whether the binary is on disk, so this never claims to know. The ONLY state kept
+  // here is "a download is in flight" — which is what disables the button, keeps the live
+  // pane open, and stops a second click stacking a second 356 MB fetch on the same
+  // directory. The download itself runs in Rust and can take MINUTES; deliberately it does
+  // NOT go through setBusy(), because freezing Back/Next for a quarter of an hour would
+  // trap the operator in this pane for the whole download.
+  const chromeInstall = { running: false };
+
+  wire("wz-install-chrome", (node) => {
+    if (chromeInstall.running) return null;
+    setChromeInstallRunning(true);
+    setInstallMsg("Downloading — this can take several minutes. You can keep using the " +
+                  "rest of setup; leave the app open.", "muted");
+    return invoke("install_chrome_browser")
+      .then((path) => {
+        appendInstallLines(["done · " + path]);
+        setInstallMsg("Done — this PC has its own Chrome at " + path, "is-ok");
+        // Nothing in today's report watches the binary, but re-deriving costs one call and
+        // keeps the step rail honest the day something does.
+        return refreshSetup();
+      })
+      .catch((e) => {
+        // Whatever the installer wrote as its last word, verbatim and on screen. This is
+        // the entire diagnosis available to someone who will never see a terminal.
+        appendInstallLines(["failed · " + errText(e)]);
+        setInstallMsg("Download failed: " + errText(e) + " — you can try again.", "is-danger");
+        flashError(node, e);
+      })
+      .then(() => setChromeInstallRunning(false));
+  });
+
+  /// The button owns its own disabled state rather than reading one off the wizard poll:
+  /// renderStepChrome runs every 1.5s and must never repaint over a download in flight.
+  function setChromeInstallRunning(on) {
+    chromeInstall.running = on;
+    const btn = el("wz-install-chrome");
+    if (btn) {
+      btn.disabled = on;
+      btn.setAttribute("aria-disabled", String(on));
+      btn.textContent = on ? "Downloading…" : "Download browser · 356 MB";
+    }
+    // Launch is disabled for the SAME window. It sits inches below on this pane, and
+    // pressing it mid-download either resolves nothing (so system Chrome takes port 9333
+    // and poisons it for the browser now arriving) or resolves a path inside a
+    // half-extracted tree and launches a browser that never opens its CDP port. Both end
+    // as "Chrome launched but did not become CDP-attachable", which reads as the download
+    // having failed. Only this step's own two buttons are touched — the rest of setup
+    // genuinely does stay usable, as the copy says.
+    const launch = el("wz-launch-chrome");
+    if (launch) {
+      launch.disabled = on;
+      launch.setAttribute("aria-disabled", String(on));
+      launch.title = on ? "Available once the browser download finishes" : "";
+    }
+    const pane = el("wz-install-progress");
+    if (pane && on) {
+      pane.textContent = "";
+      pane.classList.remove("hidden");
+    }
+  }
+
+  function setInstallMsg(text, cls) {
+    const msg = el("wz-install-msg");
+    if (!msg) return;
+    msg.textContent = text;
+    msg.className = "small " + (cls || "muted");
+  }
+
+  /// One "chrome-install-progress" event per stderr line. Capped exactly like the log
+  /// console: Playwright redraws its progress bar constantly, so a slow link arrives as
+  /// hundreds of near-identical lines.
+  function appendInstallLines(lines) {
+    const pane = el("wz-install-progress");
+    if (!pane) return;
+    pane.classList.remove("hidden");
+    let text = pane.textContent;
+    for (const line of lines) text += line + "\n";
+    const arr = text.split("\n");
+    if (arr.length > MAX_INSTALL_LINES) text = arr.slice(arr.length - MAX_INSTALL_LINES).join("\n");
+    pane.textContent = text;
+    pane.scrollTop = pane.scrollHeight;
+  }
+
+  function onChromeInstallProgress(payload) {
+    // A straggler emitted between the last write and the command settling has nowhere
+    // meaningful to go — the terminal state is already on screen.
+    if (!chromeInstall.running) return;
+    const line = payload && payload.line;
+    if (typeof line !== "string" || !line) return;
+    appendInstallLines([line]);
+  }
 
   // ---- step 6 · Sign in
   function renderStepSignIn(st) {
@@ -1735,6 +1908,9 @@
   // -------------------------------------------------------------------- boot
   renderConnection("connecting");
   renderPreflightStrip(null);
+  // Before the first status event: a shell problem is at its LOUDEST on a box whose sidecar
+  // never came up, which is exactly the box that never emits one.
+  refreshShellNote();
   scheduleChartRender();
 
   // Prime the setup state, then decide whether this is a first run. A box that has never

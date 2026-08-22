@@ -117,7 +117,7 @@ class RedditSession:
         self.store.set_cursor(cid, reel_id, new_cursor, platform=plat)
         if found:
             self.store.add_to_watchlist(cid, reel_id, ttl_days=WATCHLIST_TTL_DAYS,
-                                        platform=plat)
+            platform=plat)
         return found
 
     # ---- main loop ----
@@ -152,7 +152,10 @@ class RedditSession:
                 except Exception as e:  # noqa: BLE001 — auto-skip transient
                     self.store.mark_seen(cid, reel.reel_id, relevant=None,
                                          author=reel.author or None,
-                                         caption=reel.caption or None, platform=plat)
+                                         caption=reel.caption or None,
+                                         source=reel.source or None,
+                                         author_id=reel.author_id or None,
+                                         platform=plat)
                     self.store.raise_flag("parse_skip", "soft",
                                           f"submission {reel.reel_id}: {e}",
                                           campaign_id=cid, session_id=self.session_id)
@@ -163,7 +166,10 @@ class RedditSession:
                     continue
                 self.store.mark_seen(cid, reel.reel_id, relevant=gate.relevant,
                                      author=reel.author or None,
-                                     caption=reel.caption or None, platform=plat)
+                                     caption=reel.caption or None,
+                                     source=reel.source or None,
+                                     author_id=reel.author_id or None,
+                                     platform=plat)
                 if gate.relevant:
                     self.counters.relevance_passes += 1
                     self._emit("relevance", "success",

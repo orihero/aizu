@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useLayoutEffect, useRef, useState } from 'react';
 import { Info, Plus, X } from 'lucide-react';
 import { Link } from 'react-router-dom';
 import { Button } from '@/shared/ui/Button';
@@ -32,13 +32,47 @@ interface CampaignFormProps {
   readonly note?: string | undefined;
 }
 
-// Tailwind needs literal class names; map the (1 or 2) seed fields to a column count.
-const SEED_GRID_COLS: Readonly<Record<number, string>> = {
-  1: 'md:grid-cols-1',
-  2: 'md:grid-cols-2',
-};
-
 type SeedValues = Pick<ChannelFormEntry, SeedKey>;
+
+// Seed lists are long (dozens of hashtags/handles), so they get a multi-line box
+// that grows with its content instead of a one-line input that hides everything
+// past the first few entries. Capped so a huge paste can't push the rest of the
+// form off-screen — past the cap the textarea scrolls.
+const SEED_MAX_HEIGHT_PX = 220;
+
+/** A seed-list textarea that auto-sizes to its content (min 3 rows, capped). */
+function SeedTextarea({
+  id, value, onChange, placeholder,
+}: {
+  readonly id: string;
+  readonly value: string;
+  readonly onChange: (value: string) => void;
+  readonly placeholder: string;
+}) {
+  const ref = useRef<HTMLTextAreaElement>(null);
+
+  useLayoutEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    el.style.height = 'auto';
+    const next = Math.min(el.scrollHeight, SEED_MAX_HEIGHT_PX);
+    // jsdom reports scrollHeight 0; leaving the height unset keeps the CSS min.
+    el.style.height = next > 0 ? `${next}px` : '';
+  }, [value]);
+
+  return (
+    <textarea
+      ref={ref}
+      id={id}
+      rows={3}
+      value={value}
+      onChange={(e) => { onChange(e.target.value); }}
+      placeholder={placeholder}
+      spellCheck={false}
+      className={cn(FIELD_CLASS, 'min-h-[5.25rem] resize-y leading-relaxed')}
+    />
+  );
+}
 
 /** Platform-specific seed inputs for ONE platform (the flat single-platform form,
  *  or one channel of a fan-out). Each platform discovers differently, so only the
@@ -58,22 +92,23 @@ function SeedFields({
 
   return (
     <div>
-      <div className={cn('grid grid-cols-1 gap-4', SEED_GRID_COLS[config.fields.length])}>
+      <div className="grid grid-cols-1 gap-4">
         {config.fields.map((field) => (
           <div key={field.key}>
             <label htmlFor={`seed-${idPrefix}-${field.key}`} className={LABEL_CLASS}>{field.label}</label>
-            <input
+            <SeedTextarea
               id={`seed-${idPrefix}-${field.key}`}
-              type="text"
               value={values[field.key]}
-              onChange={(e) => { onChange(field.key, e.target.value); }}
+              onChange={(value) => { onChange(field.key, value); }}
               placeholder={field.placeholder}
-              className={FIELD_CLASS}
             />
             {field.hint ? <p className="mt-1.5 text-[11px] text-text-faint">{field.hint}</p> : null}
           </div>
         ))}
       </div>
+      <p className="mt-2 text-[11px] text-text-faint">
+        Separate entries with a comma or a new line.
+      </p>
       {config.requireAnyOf ? (
         <p className="mt-2 text-[11px] font-semibold text-text-faint">
           {config.requireAnyOf.length > 1 ? 'At least one is required to run.' : 'Required to run.'}

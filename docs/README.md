@@ -36,6 +36,7 @@ Cross-cutting specs:
 - **Multi-platform campaign** — [PRD](prd/multi-platform-campaign-PRD.md) · [build plan](prd/multi-platform-campaign-BUILD-PLAN.md)
 - **Distributed workers** — [PRD](prd/distributed-workers-PRD.md) · [build plan](prd/distributed-workers-BUILD-PLAN.md)
 - **Campaign lifecycle controls** — [PRD](prd/campaign-lifecycle-controls-PRD.md)
+- **Campaign Lab** (research phase) — [PRD](prd/campaign-lab-PRD.md): verify seeds/hashtags and benchmark prompts before launch
 - **Warming system** — [system PRD](prd/warming-system-PRD.md) · [writes PRD](prd/warming-writes-PRD.md)
 
 ## Integrations
@@ -45,6 +46,8 @@ Cross-cutting specs:
 
 ## Operations
 
+- [`ops/server-deployment.md`](ops/server-deployment.md) — the aizu.uz production VDS: topology,
+  services, CI/CD deploy pipeline, runbook, and current drift
 - [`ops/desktop-packaging.md`](ops/desktop-packaging.md) — packaging the Tauri desktop app + Python sidecar
 
 ## Archive

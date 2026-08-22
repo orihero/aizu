@@ -18,10 +18,24 @@ from typing import Callable, Optional
 from ...core.config import Campaign
 from ...core.feed import Comment, Reel
 from ...core.logsetup import get_logger
-from ...core.matching import corroboration_needs_review, ground_extracted
+from ...core.matching import (comment_prefilter_reason,
+                              corroboration_needs_review, ground_extracted)
 from ...core.router import Decision, Router, env_flag
+from .prompts import IG_RELEVANCE, IG_VISION, ig_match
 
 log = get_logger(__name__)
+
+# The relevance gate's own cutoff, named rather than repeated as a bare 0.5. The
+# label still wins over the score when the model returns one; this is the cutoff
+# for the score-only path.
+#
+# It is also the value the router needs for `model_comparison_log.agreed`, which
+# is NULL for every row ever written because no caller supplies the cutoff the
+# verdict will be judged against (Campaign Lab, Remedy Sheet #3 / Remedy E). That
+# fix belongs in `core/router.py` — a per-router default the cascade sets once —
+# NOT here: threading `threshold=` through twelve call sites breaks every test
+# double that implements the pre-existing narrower signature.
+RELEVANCE_GATE = 0.5
 
 # Below this many word-chars (after dropping #tags/@mentions) the caption carries
 # too little signal to judge on its own — look at the video instead.
@@ -156,6 +170,41 @@ class Cascade:
         self.escalations = 0
         self.transcriptions = 0  # reels sent through Uzbek STT (Instagram-only, gated)
         self.video_analyses = 0  # reels sent through the video-analysis tier (gated)
+        # Comment texts already scored this session, for the duplicate
+        # pre-filter. Per-cascade, so it dies with the session.
+        self._scored_texts: set[str] = set()
+        # Skips by reason — surfaced so an over-eager filter is visible.
+        # A pre-filtered comment is never scored AND never stored, so a
+        # wrong skip is an invisible lost lead.
+        self.prefiltered: dict[str, int] = {}
+        self._eval_captured = 0
+
+    # ---- system prompts (campaign's own, else this engine's default) ----
+    # Instagram was the ONE engine with no fallback here: every call site passed
+    # `campaign.<x>_prompt` straight through, so a panel-authored campaign with
+    # blank prompts silently ran on core.prompts.SYSTEM_GENERIC — ~50 words, no
+    # platform vocabulary, no escalation guidance — while this engine's own
+    # prompts module was never imported at all. Every other engine already does
+    # `campaign.x or PLATFORM_X` (see engines/x/cascade.py). Campaign Lab,
+    # Remedy Sheet #3 / Remedy C.
+    #
+    # Properties rather than locals because IG has nine call sites across four
+    # methods; one source per prompt is what stops a new call site from
+    # reintroducing the bug.
+    @property
+    def _relevance_system(self) -> str:
+        return self.campaign.relevance_prompt or IG_RELEVANCE
+
+    @property
+    def _vision_system(self) -> str:
+        return self.campaign.vision_prompt or IG_VISION
+
+    @property
+    def _match_system(self) -> str:
+        """The campaign's own match prompt, else this engine's default with the
+        campaign's THRESHOLD templated in — so the rubric the model follows and
+        the gate that reads its answer can never disagree."""
+        return self.campaign.match_prompt or ig_match(self.campaign.threshold)
 
     # ---- relevance gate ----
     def gate_reel(self, reel: Reel, frame_b64=None,
@@ -208,18 +257,18 @@ class Cascade:
                 d = self.router.classify_image(
                     instruction=self.campaign.relevance_def, images_b64=imgs,
                     campaign_id=cid, stage="relevance", session_id=self.session_id,
-                    system=self.campaign.vision_prompt)
+                    system=self._vision_system)
                 used_vision = True
             else:
                 d = self.router.classify_text(
                     instruction=self.campaign.relevance_def, content=reel.caption,
                     campaign_id=cid, stage="relevance", session_id=self.session_id,
-                    system=self.campaign.relevance_prompt)
+                    system=self._relevance_system)
         else:
             d = self.router.classify_text(
                 instruction=self.campaign.relevance_def, content=reel.caption,
                 campaign_id=cid, stage="relevance", session_id=self.session_id,
-                system=self.campaign.relevance_prompt)
+                system=self._relevance_system)
             # on-screen text via vision when the caption verdict is unsure
             if _unsure(d, self.campaign):
                 imgs = frames()
@@ -227,7 +276,7 @@ class Cascade:
                     dv = self.router.classify_image(
                         instruction=self.campaign.relevance_def, images_b64=imgs,
                         campaign_id=cid, stage="relevance", session_id=self.session_id,
-                        system=self.campaign.vision_prompt)
+                        system=self._vision_system)
                     used_vision = True
                     if dv.confidence >= d.confidence:   # take stronger-confidence verdict
                         d = dv
@@ -247,7 +296,7 @@ class Cascade:
                     instruction=self.campaign.relevance_def,
                     content=f"{reel.caption}\n\nSPOKEN TEXT (from audio):\n{text}",
                     campaign_id=cid, stage="relevance", session_id=self.session_id,
-                    system=self.campaign.relevance_prompt)
+                    system=self._relevance_system)
                 if dt.confidence >= d.confidence:   # take stronger-confidence verdict
                     d = dt
 
@@ -265,7 +314,7 @@ class Cascade:
                 dvf = self.router.classify_image(
                     instruction=_video_instruction(self.campaign, reel),
                     images_b64=frames, campaign_id=cid, stage="video_analysis",
-                    session_id=self.session_id, system=self.campaign.vision_prompt)
+                    session_id=self.session_id, system=self._vision_system)
                 # Cache the structured extras + take the stronger-confidence verdict.
                 if isinstance(dvf.extracted, dict) and dvf.extracted:
                     reel.video_analysis = dvf.extracted
@@ -282,9 +331,9 @@ class Cascade:
                 instruction=self.campaign.relevance_def,
                 content=f"[ESCALATED]\nCAPTION:\n{reel.caption}",
                 campaign_id=cid, stage="relevance", session_id=self.session_id,
-                system=self.campaign.relevance_prompt)
+                system=self._relevance_system)
 
-        relevant = d.score >= 0.5 if d.label not in {"relevant", "irrelevant"} \
+        relevant = d.score >= RELEVANCE_GATE if d.label not in {"relevant", "irrelevant"} \
             else d.label == "relevant"
         log.debug("relevance verdict reel=%s relevant=%s label=%s score=%.2f "
                   "conf=%.2f vision=%s stt=%s video=%s escalated=%s", reel.reel_id,
@@ -295,8 +344,55 @@ class Cascade:
                                used_video=used_video)
 
     # ---- comment match scoring ----
+    def _capture_eval_candidate(self, comment, decision, is_match: bool) -> None:
+        """Persist a sampled record of this verdict for later human labelling.
+
+        Reached through `self.router.store` rather than a constructor argument on
+        purpose: three of the six engines wrap the router in a `_HeartbeatRouter`
+        facade that forwards attribute access, so this one seam works for all six
+        WITHOUT touching any session file. A router with no store (tests, the
+        replay harness, dry runs) silently captures nothing.
+
+        Never raises. This is data collection for a future gold set; it must not
+        be able to fail a live run that is otherwise finding leads.
+        """
+        store = getattr(self.router, "store", None)
+        if store is None:
+            return
+        try:
+            band = store.eval_band(decision.score, self.campaign.threshold, is_match)
+            if not store.eval_should_capture(comment.comment_id, band):
+                return
+            if self._eval_captured >= store.EVAL_SESSION_CAP:
+                return
+            store.record_eval_candidate(
+                campaign_id=self.campaign.campaign_id,
+                comment_id=comment.comment_id, text=comment.text or "",
+                band=band, platform=self.campaign.platform,
+                session_id=self.session_id, username=comment.username or None,
+                lang=comment.lang, score=decision.score,
+                confidence=decision.confidence,
+                threshold=self.campaign.threshold, reason=decision.reason,
+                tier=decision.tier, raw=decision.raw)
+            self._eval_captured += 1
+        except Exception:  # noqa: BLE001 — collection must never break a run
+            log.debug("eval candidate capture failed comment=%s",
+                      getattr(comment, "comment_id", "?"), exc_info=True)
+
     def score_comment(self, comment: Comment,
                       reel: Optional[Reel] = None) -> MatchResult:
+        reason = comment_prefilter_reason(comment.text,
+                                          username=comment.username,
+                                          seen=self._scored_texts)
+        if reason is not None:
+            self.prefiltered[reason] = self.prefiltered.get(reason, 0) + 1
+            log.debug("match pre-filtered comment=%s reason=%s",
+                      comment.comment_id, reason)
+            return MatchResult(
+                is_match=False, escalated=False,
+                decision=Decision(label="no", score=0.0, confidence=1.0,
+                                  reason=f"pre-filtered: {reason}",
+                                  tier="prefilter"))
         cid = self.campaign.campaign_id
         fields = self.campaign.extract_fields()
         instr = _match_instruction(self.campaign, fields)
@@ -304,7 +400,7 @@ class Cascade:
         d = self.router.classify_text(
             instruction=instr, content=content,
             campaign_id=cid, stage="match", session_id=self.session_id,
-            system=self.campaign.match_prompt)
+            system=self._match_system)
         escalated = False
         if _unsure(d, self.campaign):
             self.escalations += 1
@@ -315,7 +411,7 @@ class Cascade:
                 instruction=instr,
                 content=f"[ESCALATED]\n{content}",
                 campaign_id=cid, stage="match", session_id=self.session_id,
-                system=self.campaign.match_prompt)
+                system=self._match_system)
         d = _coerce_extracted(d, fields)
         # Deterministic grounding check (gap #4): a hallucinated phone/email that
         # never appears in the comment/reel text the classifier actually saw is
@@ -332,5 +428,6 @@ class Cascade:
         log.debug("match verdict comment=%s match=%s score=%.2f conf=%.2f escalated=%s "
                   "needs_review=%s", comment.comment_id, is_match, d.score, d.confidence,
                   escalated, needs_review)
+        self._capture_eval_candidate(comment, d, is_match)
         return MatchResult(is_match=is_match, decision=d, escalated=escalated,
                            needs_review=needs_review)

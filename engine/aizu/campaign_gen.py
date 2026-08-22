@@ -52,6 +52,10 @@ CAMPAIGN_GEN_MODEL = os.environ.get("CAMPAIGN_GEN_MODEL")
 _DEFAULT_BUDGET_CAP = 7500
 _DEFAULT_GOAL_TARGET = 200
 _DEFAULT_THRESHOLD = 0.7
+# The open interval the bridge accepts (server._validate_campaign): 0 would match
+# every comment, 1 would match none.
+_MIN_THRESHOLD = 0.01
+_MAX_THRESHOLD = 0.99
 _VALID_OBJECTIVES = ("lead", "traffic", "awareness")
 
 # Conversational interview guards (mirror admin-panel MAX_INTERVIEW_ROUNDS).
@@ -342,7 +346,7 @@ def build_product_context(*, url: Optional[str], image_b64: Optional[str],
 
 _SKELETON = (
     '{"name":"","platform":"instagram","objective":"lead","relevanceDef":"",'
-    '"matchDef":"","extractDef":"- field — gloss","seedHashtags":[],'
+    '"matchDef":"","extractDef":"- field — gloss","seedNouns":[],"seedHashtags":[],'
     '"seedAccounts":[],"languageMix":[],"threshold":0.7}')
 
 
@@ -381,9 +385,145 @@ def _interview_block(interview: Optional[list[dict[str, Any]]]) -> str:
             + "\n\n".join(pairs))
 
 
+def _expand_seed_hashtags(draft: dict[str, Any], raw: dict[str, Any]) -> list[str]:
+    """Widen the model's guessed tags with the free discovery oracles.
+
+    Campaign Lab, Remedy Sheet #1 / Remedy A. Asking a model to invent hashtags
+    that EXIST is a task with a 30-45% entity-hallucination base rate; asking it to
+    name the NOUNS for a product is a task it is reliable at. `seedNouns` is the
+    new ask; `seedHashtags` is kept as the fallback so a model that ignores the
+    new key behaves exactly as before.
+
+    The model's own tags are preserved and ranked first — this widens the net, it
+    does not overrule the model. Everything added is either a script variant of a
+    noun the model named or a live autocomplete completion for the campaign's own
+    locale, so nothing invented is introduced here.
+    """
+    nouns = [_str(x) for x in (raw.get("seedNouns") or []) if _str(x)]
+    if not nouns:
+        nouns = _split(draft.get("seedHashtags", ""))
+    if not nouns:
+        return []
+    langs = _split(draft.get("languages", ""))
+    try:
+        from .discovery import expand_seeds
+        result = expand_seeds(nouns, langs=langs,
+                              geo=os.environ.get("AIZU_SEED_GEO", "").strip(),
+                              online=_seed_expansion_online())
+    except Exception:  # noqa: BLE001 — expansion is enrichment, never a gate
+        log.debug("seed expansion failed — keeping the model's own tags",
+                  exc_info=True)
+        return []
+    if result.degraded:
+        log.info("Seed expansion degraded (offline or throttled) — deterministic "
+                 "variants only")
+    # Zero-request prefilter (Remedy C): banned, too-short and too-generic tags
+    # never reach a validator, a browser, or the operator's review screen. Run
+    # over the WIDENED list so a bad model guess is dropped too, not just a bad
+    # mined one.
+    from .discovery import prefilter
+    keep, _dropped = prefilter(result.hashtags(limit=_SEED_HASHTAG_LIMIT * 2))
+    return keep[:_SEED_HASHTAG_LIMIT]
+
+
+def _merge_seed_terms(existing: str, extra: list[str]) -> str:
+    """Append `extra` to the comma-joined `existing`, deduped case-insensitively,
+    capped. The model's own terms keep their positions — an operator who sees the
+    draft change under them has to be able to recognise what they asked for."""
+    out: list[str] = []
+    seen: set[str] = set()
+    for term in list(_split(existing)) + list(extra):
+        key = term.strip().lstrip("#").lower()
+        if not key or key in seen:
+            continue
+        seen.add(key)
+        out.append(term.strip().lstrip("#"))
+        if len(out) >= _SEED_HASHTAG_LIMIT:
+            break
+    return ", ".join(out)
+
+
+def _seed_expansion_online() -> bool:
+    """Whether campaign generation may hit the free suggest endpoint.
+
+    Default ON: it is keyless, costs nothing, takes a few seconds, and is the only
+    layer that reflects what users in the campaign's market currently type. Set
+    `AIZU_SEED_EXPANSION=0` to force the deterministic layers only (air-gapped
+    installs, CI)."""
+    return os.environ.get("AIZU_SEED_EXPANSION", "1").strip().lower() \
+        not in ("0", "false", "no", "off")
+
+
+# The panel's seed field is a comma-joined string an operator has to be able to
+# read and edit; a hundred mined variants would be unusable. This is the widened
+# ceiling, not the model's own 3-8.
+_SEED_HASHTAG_LIMIT = 12
+
+
+def _seed_feedback_block(seed_history: Optional[dict[str, Any]]) -> str:
+    """Render what past runs PROVED about seed terms, for the synthesis prompt.
+
+    The generator invents `seedHashtags` and `seedAccounts` from parametric
+    memory, and nothing has ever told it how the last batch fared — so it
+    re-proposes the same dead seeds indefinitely. `Store.seed_history` supplies
+    the evidence; this turns it into the shortest instruction that uses it.
+
+    HASHTAGS AND ACCOUNTS ARE RENDERED SEPARATELY. They were one merged list
+    before, which is actively misleading: a model told that `@acme_remont` and
+    `remont` are interchangeable evidence will propose a handle where a tag
+    belongs. `source_stats.kind` has always carried the distinction.
+
+    Accepts either the by-kind mapping `{"hashtag": {...}, "account": {...}}` or
+    a single flat `{"productive": [...], "dead": [...]}` (rendered as terms of
+    unspecified kind), so an older caller keeps working.
+
+    Note the asymmetry, which is deliberate: proven seeds are a strong SHOULD
+    (they produced leads for this tenant on this platform), dead ones a hard MUST
+    NOT. Neither list is presented as exhaustive — an empty history must not read
+    as "nothing works".
+    """
+    if not seed_history:
+        return ""
+    by_kind = _split_seed_history(seed_history)
+    sections: list[str] = []
+    for kind, label, plural in (
+            ("hashtag", "seed hashtags / search terms", "terms"),
+            ("account", "seed ACCOUNTS (handles)", "accounts"),
+            ("", "seed terms", "terms")):
+        hist = by_kind.get(kind) or {}
+        good = [t for t in (hist.get("productive") or []) if t]
+        bad = [t for t in (hist.get("dead") or []) if t]
+        if not good and not bad:
+            continue
+        if good:
+            sections.append(f"- These {label} have produced actual leads for this "
+                            f"client. Reuse the {plural} that fit this product: "
+                            + ", ".join(good))
+        if bad:
+            sections.append(f"- These {label} are dead (banned, removed, or ran "
+                            f"dry with zero relevant results). Do NOT propose "
+                            f"them or close variants: " + ", ".join(bad))
+    if not sections:
+        return ""
+    return ("EVIDENCE FROM THIS CLIENT'S PAST RUNS (real outcomes, not guesses):\n"
+            + "\n".join(sections))
+
+
+def _split_seed_history(seed_history: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    """Normalise both accepted shapes to `{kind: {productive, dead}}`.
+
+    A flat legacy dict lands under the empty-string kind, which renders as
+    "seed terms" — honest, since that shape genuinely does not say which."""
+    if any(k in seed_history for k in ("productive", "dead")):
+        return {"": seed_history}
+    return {str(k): v for k, v in seed_history.items() if isinstance(v, dict)}
+
+
 def _synthesis_user(context_text: str, *, strict: bool = False,
-                    interview: Optional[list[dict[str, Any]]] = None) -> str:
-    blocks = [b for b in (context_text, _interview_block(interview)) if b]
+                    interview: Optional[list[dict[str, Any]]] = None,
+                    seed_history: Optional[dict[str, list[str]]] = None) -> str:
+    blocks = [b for b in (context_text, _interview_block(interview),
+                          _seed_feedback_block(seed_history)) if b]
     head = ("Your previous answer was unusable. Return STRICTLY one JSON object "
             "with exactly these keys and no prose.\n\n") if strict else ""
     return (f"{head}PRODUCT CONTEXT\n===============\n" + "\n\n".join(blocks)
@@ -393,10 +533,13 @@ def _synthesis_user(context_text: str, *, strict: bool = False,
 
 def synthesize_brief(context_text: str, router: Any, *, model: Optional[str],
                      strict: bool = False,
-                     interview: Optional[list[dict[str, Any]]] = None) -> dict[str, Any]:
+                     interview: Optional[list[dict[str, Any]]] = None,
+                     seed_history: Optional[dict[str, list[str]]] = None
+                     ) -> dict[str, Any]:
     return router.generate_json(
         system=SYSTEM_CAMPAIGN_GEN,
-        user=_synthesis_user(context_text, strict=strict, interview=interview),
+        user=_synthesis_user(context_text, strict=strict, interview=interview,
+                             seed_history=seed_history),
         model=model)
 
 
@@ -492,7 +635,10 @@ def assemble_draft(raw: dict[str, Any], ctx: ProductContext,
         threshold = float(raw.get("threshold", _DEFAULT_THRESHOLD))
     except (TypeError, ValueError):
         threshold = _DEFAULT_THRESHOLD
-    threshold = max(0.0, min(1.0, threshold))
+    # Clamp INTO the range the server accepts, not onto its edges: a model that
+    # answers 0 or 1 would otherwise produce a draft that the save endpoint then
+    # rejects, which reads to the operator as "generation is broken".
+    threshold = max(_MIN_THRESHOLD, min(_MAX_THRESHOLD, threshold))
     name = _str(raw.get("name") or raw.get("displayName")) or _name_from_context(ctx)
     match_def = _str(raw.get("matchDef"))
     if objective == "lead":
@@ -845,13 +991,27 @@ def generate_campaign(*, url: Optional[str] = None, image_b64: Optional[str] = N
                       campaign_id_hint: Optional[str] = None,
                       product_context: Optional[str] = None,
                       interview: Optional[list[dict[str, Any]]] = None,
-                      platforms: Optional[list[str]] = None) -> dict[str, Any]:
+                      platforms: Optional[list[str]] = None,
+                      seed_history: Optional[dict[str, list[str]]] = None
+                      ) -> dict[str, Any]:
     """Produce a flat campaign draft (Partial<CampaignFormState>) from any mix of
     url/image/text — optionally refined by a conversational `interview` transcript
     and the `platforms` the client chose. When `product_context` (a pre-built,
     serialized context) is supplied, the URL/screenshot are NOT re-fetched. Raises
     CampaignGenError (panel-safe) when no usable campaign can be drafted; never lets
-    a model/network failure escape as a bare exception."""
+    a model/network failure escape as a bare exception.
+
+    `seed_history` is the org's real per-seed outcomes, ideally as the by-kind
+    mapping `{"hashtag": {...}, "account": {...}}` from two `Store.seed_history`
+    calls. When supplied, the generator is told which terms and which ACCOUNTS
+    have produced leads and which are dead, instead of guessing fresh every time.
+
+    Deliberately NOT auto-injected into `seedAccounts`: `core/config.py`'s
+    `_resolve_home_feed` turns the algorithmic home feed OFF as soon as any seed
+    account is present, so adding the FIRST account is a mode switch for the whole
+    campaign, not an addition. Proven accounts are offered to the model as
+    evidence and land in the draft only if it chooses them — which the operator
+    then reviews. Optional — omitted, the prompt is byte-identical to before."""
     if product_context is not None:
         context_text = product_context.strip()
         ctx = ProductContext(description=context_text)
@@ -869,13 +1029,13 @@ def generate_campaign(*, url: Optional[str] = None, image_b64: Optional[str] = N
             "link, or a clearer screenshot.",
             internal=f"empty context; notes={notes}")
     model = CAMPAIGN_GEN_MODEL or None
-    draft = assemble_draft(
-        synthesize_brief(context_text, router, model=model, interview=interview),
-        ctx, platforms)
+    raw = synthesize_brief(context_text, router, model=model, interview=interview,
+                           seed_history=seed_history)
+    draft = assemble_draft(raw, ctx, platforms)
     if not _draft_is_usable(draft):  # one retry with a stricter nudge
-        draft = assemble_draft(
-            synthesize_brief(context_text, router, model=model, strict=True,
-                             interview=interview), ctx, platforms)
+        raw = synthesize_brief(context_text, router, model=model, strict=True,
+                               interview=interview, seed_history=seed_history)
+        draft = assemble_draft(raw, ctx, platforms)
     if not _draft_is_usable(draft) and (interview or platforms):
         # The user invested in the interview — don't dead-end on a flaky model.
         # Fill the missing defs from their answers; they review/edit next.
@@ -887,6 +1047,26 @@ def generate_campaign(*, url: Optional[str] = None, image_b64: Optional[str] = N
             internal="model output not usable after retry")
     if campaign_id_hint:
         draft = {**draft, "name": draft["name"] or campaign_id_hint}
+    # Campaign Lab (Remedy Sheet #1/A): widen the model's guessed tags with the
+    # free oracles — script variants and live locale autocomplete. Additive and
+    # order-preserving: the model's own tags keep the head of the list.
+    widened = _merge_seed_terms(draft.get("seedHashtags", ""),
+                                _expand_seed_hashtags(draft, raw))
+    if widened != draft.get("seedHashtags", ""):
+        draft = {**draft, "seedHashtags": widened}
+        # …and into channels[0], or the widening is a silent no-op for every
+        # multi-platform draft. `assemble_draft` copies the model's PRE-widening
+        # tags into `channels[0]`; the panel then renders CHANNEL rows rather
+        # than the flat fields whenever channels exist
+        # (admin-panel CampaignForm.tsx: `isFlat = channels.length === 0`), and
+        # `briefFromForm` re-sources the flat scalars FROM channels[0] on save.
+        # So a widened flat field alone is invisible in the UI AND discarded when
+        # the operator saves — the oracle work happens and is thrown away.
+        channels = draft.get("channels")
+        if isinstance(channels, list) and channels and isinstance(channels[0], dict):
+            draft = {**draft,
+                     "channels": [{**channels[0], "seedHashtags": widened},
+                                  *channels[1:]]}
     # Enrich with tuned classifier prompts (best-effort; blanks stay blank → the
     # engine's generic prompt is used). Never fails the draft.
     prompts = generate_advanced_prompts(draft, router, model=model)

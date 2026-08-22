@@ -204,6 +204,40 @@ class HumanSim:
         return owner.call(fn, self.call_timeout_s, PlaywrightTimeout)
 
     # ---- input (best-effort; swallow ALL exceptions) ----
+    def focus(self, page) -> None:
+        """Bring ``page`` to the front before dispatching mouse input.
+
+        THE FLEET-STALL ROOT CAUSE (2026-08-20). Chrome accepts
+        ``Input.dispatchMouseEvent`` for a tab that does not hold input focus and
+        then never ACKs it: the CDP command has no reply, so Playwright's future
+        never resolves and the owner thread sits in that call forever. Only the
+        WAIT is bounded, so the caller walks away while the owner stays poisoned —
+        every later bounded call fast-fails, three of those trip
+        ``_halt_if_owner_wedged`` and the whole session halts ``cdp_call_wedged``.
+        Five fleet attempts dead-lettered that way while reels were still being
+        scored relevant, because only the mouse path dies: goto/evaluate/screenshot
+        and response interception need no focus and kept working.
+
+        Directly observed, not inferred: the outstanding protocol message at the
+        wedge was ``method=mouseMove`` with the owner idle in ``selectors.select()``
+        and no lock held, and calling ``bring_to_front()`` from a separate process
+        released a pending ``mouse.move`` in 26ms.
+
+        Bounded and silent by the same contract as everything else here: this must
+        never itself become the first call that wedges, and a browser that cannot
+        raise a tab is not a reason to fail a run.
+        """
+        if page is None:
+            return
+        try:
+            self._bounded(lambda: page.bring_to_front())
+        except Exception as e:  # noqa: BLE001 — best-effort, never break the run
+            # See core/cdp.py's _focus: a silent swallow here is exactly what hid
+            # the original wedge. Never raise, but never be invisible either.
+            log.debug("focus (bring_to_front) failed — mouse input may not ACK · %s",
+                      type(e).__name__)
+            return
+
     def mouse_move(self, page, box: Optional[dict] = None) -> None:
         """Drift the cursor to a random point (25-75% inside ``box``, else 15-85%
         of the viewport) with a 3-7 step interpolated path. Purely decorative —
@@ -217,6 +251,9 @@ class HumanSim:
         despite this method's "never raises" contract."""
         if not self.cfg.enabled or page is None:
             return
+        # Focus FIRST: an unfocused tab never ACKs the mouse.move below, and that
+        # single unreturned call poisons the owner thread for the rest of the run.
+        self.focus(page)
         try:
             if box:
                 x = box["x"] + box["width"] * (0.25 + self.rng.random() * 0.5)

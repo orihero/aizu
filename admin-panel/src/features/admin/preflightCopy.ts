@@ -24,6 +24,7 @@ const TITLES: Readonly<Record<string, string>> = {
   cdp_reachable: 'Warmed Chrome is reachable',
   cdp_port_drift: 'CDP port matches the running Chrome',
   cdp_attachable: 'Chrome accepts a DevTools attach',
+  chrome_profile: 'Chrome profile directory',
   preflight_error: 'The preflight could not complete',
 };
 
@@ -50,6 +51,8 @@ const REMEDIES: Readonly<Record<string, string>> = {
     'The worker adopted a Chrome on the other well-known port. Pin it so this cannot drift again: set cdp_port in the desktop config (Setup → Chrome), or AIZU_CDP_URL for a hand-run sidecar.',
   cdp_attachable:
     'Chrome answers on the CDP port but refuses a DevTools attach — the "degraded Chrome" case, where every job nacks on a box that looks perfectly healthy. Quit that Chrome completely (do not just reload a tab) and relaunch the warmed profile.',
+  chrome_profile:
+    'This box still holds the Chrome profile it warmed before aizu gave each browser brand its own profile directory. Nothing launches it any more — the box signs in fresh under AIZU_CHROME_PROFILE/<brand> — which is why a box that was signed in last week can read as signed out. It has been left exactly as it was: only someone at the box knows which browser warmed it, and opening it with the other brand DELETES every saved login in it, so aizu never guesses. The remedy is on the box: move that directory into the matching per-brand subdirectory (the worker logs both candidate paths), or sign in again and ignore it. Nothing is blocked either way, which is why the row is amber and not red.',
   preflight_error:
     'The preflight itself raised, so this box is running UNBLOCKED at full capabilities. Treat the health of this box as unverified until the next report arrives.',
 };

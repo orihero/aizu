@@ -12,6 +12,12 @@ Aizu is a brief-driven, multi-platform lead-discovery agent plus a multi-tenant 
 - `mockups/` — standalone UI mockups/prototypes (not part of the build).
 - `memory/` — running notes: `known-issues.md`, `feedback-ui-mistakes.md`.
 
+Campaign Lab (see `docs/prd/campaign-lab-PRD.md`) turns guessed campaign inputs into researched ones. Sheets #1 (hashtags & search terms) and #2 (seed accounts) are built; #3 (match prompt & threshold) is researched but not yet built.
+
+`engine/aizu/discovery/` is the package: offline oracles (`translit`, `patterns`, `banned`), the one live free layer (`autocomplete`), the orchestrator (`expand`), per-platform term validators (`validate`), seed-account prescore probes + liveness gate (`prescore`), and the buyer-density scorer (`buyer_density`). `engine/aizu/core/tagmine.py` mines new hashtags from our own labelled captions. Two tables carry the evidence: `source_stats` (what every seed actually produced, plus park/ban verdicts) and `seen_reels.source`/`author_id`, which is what makes `Store.seed_candidates()` / `co_commenter_overlap()` answerable.
+
+Two invariants worth knowing before touching any of it: `Reel.source` is the SEED TERM, never the URL (it is written through to `seen_reels.source` and joined against `source_stats`); and a signal a platform did not report is UNKNOWN, never zero — an unreachable probe must never read as a pass.
+
 ## How to run
 
 Requires Python ≥3.10 and Node. First-time setup:
@@ -31,6 +37,8 @@ Requires Python ≥3.10 and Node. First-time setup:
 - `aizu run` — run the file brief `config/campaign.md`.
 - `aizu run-all [--org <id>]` — run every `live`, non-archived campaign.
 - `aizu status` — print open health flags. `aizu warm-register ...` — register a logged-in account into the warming pool.
+- `aizu seeds --campaign <id> [--platform <p>] [--min-relevant N]` — propose new seed ACCOUNTS mined from that campaign's own results: authors whose posts it already judged relevant, ranked leads-first, plus commenter-overlap lookalikes. Read-only, no network.
+- `aizu sources --campaign <id> [--platform <p>] [--mine]` — print the per-source discovery ledger (schema v24): per seed, how many items it actually produced vs. carried over from an earlier seed, its relevance/lead counts, and any park/ban verdict. `--mine` additionally ranks co-occurring hashtags from that campaign's own labelled captions (no network).
 - Useful run flags: `--dry-run` (fake feed, no network/LLM), `--target-leads N`, `--duration-minutes N`, `--engine-mode {harvest,warming}`, `--spend-cap`, `--cdp-url`. Global `--db` (default `aizu.db`), `-v/-q`.
 
 **Worker sidecar:** `aizu-worker` (PULL model; requires `AIZU_DISPATCH_URL`). A dispatch **401** retires the box's persisted token and parks it pending re-enrolment (ledger B10) — but only after the rejection is *sustained*: `_UNAUTHORIZED_CONFIRM_LIMIT` consecutive 401s **and** at least `_UNAUTHORIZED_CONFIRM_WINDOW_SEC` (5 min) of them, with every 401 retry spaced by ≥`_UNAUTHORIZED_RETRY_MIN_SEC` (30s). So expect a genuinely revoked box to take ~5–8 minutes to halt, and a bridge restart/failover/volume-mount blip to cost nothing. Never make that confirmation count-only: `_backoff` starts sub-second, so a bare three-strike rule was worth ~2.5s of wall clock and a ~9-second server-side blip permanently bricked boxes enrolled with a per-worker token (recovery = a hand-minted enrolment token and an operator visit).
@@ -49,6 +57,7 @@ The build deliberately does **not** ship source maps: `dist` is served staticall
 - Worker plane: `AIZU_DISPATCH_URL` (required), `AIZU_WORKER_BOOTSTRAP_TOKEN`, `AIZU_DB` (default `aizu.db`), `AIZU_WORKER_STATE` (default `.worker-state`), `AIZU_SPEND_CAP`, `AIZU_CONTROL_SURFACE`/`AIZU_CONTROL_TOKEN`, `AIZU_PREFLIGHT_ENFORCE` (set `0`/`false`/`no`/`off` to downgrade every fatal preflight row to a warning; anything else, including unset or garbage, enforces), `AIZU_WORKER_WARMING_ONLY` (declares this box only ever runs warming jobs — the sole effect is demoting the launch preflight's LLM-backend check from fatal to warn. **Not** the same as the global `AIZU_WARMING_ENABLED` hard-stop, which a harvest box also has reason to set; setting this on a box that leases harvest work makes every live job dead-letter at attempt 5 behind an amber row).
 - Billing (Polar, optional; missing ⇒ billing disabled): `POLAR_ACCESS_TOKEN`, `POLAR_WEBHOOK_SECRET`, `POLAR_SERVER` (default `sandbox`), `POLAR_PRODUCTS`.
 - Per-platform live creds when no per-org stored secret: `YOUTUBE_API_KEY`; `TELEGRAM_BOT_TOKEN` or `TELEGRAM_API_ID`/`TELEGRAM_API_HASH`/`TELEGRAM_SESSION`; `REDDIT_CLIENT_ID`/`REDDIT_CLIENT_SECRET`/`REDDIT_USER_AGENT`.
+- Campaign Lab seed discovery (`engine/aizu/discovery/`, all optional): `AIZU_SEED_EXPANSION` (default on; set `0`/`false`/`no`/`off` to skip the free Google/YouTube suggest layer during AI campaign generation and use the deterministic layers only — the test suite forces this off in `tests/conftest.py`), `AIZU_SEED_GEO` (a `gl` market code such as `UZ`; unset lets the endpoint infer one), `AIZU_BANNED_TAGS_FILE` (path to an operator-maintained banned-hashtag list, one tag per line, `#` optional, `//` comments).
 - Logging: `AIZU_LOG_LEVEL`, `AIZU_LOG_FILE_LEVEL`, `AIZU_LOG_FILE`, `AIZU_LOG_COLOR`.
 - Defaults: DB is `aizu.db`, log file is `aizu.log`.
 

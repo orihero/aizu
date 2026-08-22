@@ -30,6 +30,7 @@ from __future__ import annotations
 
 import dataclasses
 import json
+import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
@@ -111,11 +112,17 @@ def _probes(*, env: Optional[dict] = None, cdp: Optional[dict] = None,
             browser=None, token_error: Optional[str] = None,
             token_present: Optional[bool] = True,
             run_active: bool = False, playwright: bool = True,
+            chrome_profile: Optional[object] = None,
             calls: Optional[dict] = None) -> Probes:
     """Every probe inert by default. ``cdp`` maps url -> 'ok'|'unreachable' (absent =
     unreachable); ``calls`` (when given) records what was invoked so a test can assert
     a probe was NOT run — "the API-only box never touches the network" is a property,
-    not an implementation detail."""
+    not an implementation detail.
+
+    ``chrome_profile`` defaults to None — i.e. "this box has no worker-managed Chrome
+    profile", which is what a desktop-shell box looks like from the sidecar. Inert matters
+    more here than anywhere else: the REAL default stats the operator's home directory, so
+    a Probes() built without it would make this suite machine-dependent."""
     env_map = dict(env or {})
     cdp_map = dict(cdp or {})
     log: dict = calls if calls is not None else {}
@@ -123,6 +130,7 @@ def _probes(*, env: Optional[dict] = None, cdp: Optional[dict] = None,
     log.setdefault("browser", [])
     log.setdefault("token", [])
     log.setdefault("present", [])
+    log.setdefault("chrome_profile", [])
 
     def _cdp(url: str, timeout: float = 3.0) -> str:
         log["cdp"].append(url)
@@ -145,11 +153,16 @@ def _probes(*, env: Optional[dict] = None, cdp: Optional[dict] = None,
         log["present"].append(cfg)
         return token_present
 
+    def _chrome_profile() -> Optional[str]:
+        log["chrome_profile"].append(True)
+        return None if chrome_profile is None else str(chrome_profile)
+
     return Probes(cdp=_cdp, browser=_browser, token_roundtrip=_token,
                   token_present=_present,
                   env=lambda name: env_map.get(name, ""),
                   run_active=lambda: run_active,
-                  playwright_available=lambda: playwright)
+                  playwright_available=lambda: playwright,
+                  chrome_profile_base=_chrome_profile)
 
 
 def _green_env() -> dict:
@@ -854,6 +867,165 @@ def test_cdp_port_drift_passes_on_a_plain_healthy_box():
     assert result.status == STATUS_PASS
 
 
+# ---- check_chrome_profile: the profile left behind by the per-brand split ----
+#
+# Profiles are now `<base>/<brand>` (chrome_manager.profile_dir_for), so two browsers can
+# never open one directory and there is no brand conflict left to report. What the split
+# leaves is the profile a box warmed BEFORE it — a `Default/` sitting directly in the base.
+# It is inert and untouched, and it is also the entire explanation for a box that was
+# signed in last week and now is not. On these PCs nobody is watching a log (F12), so the
+# explanation has to ride the wire or it has not been given.
+
+
+def _base(tmp_path: Path, *, legacy: bool = False, split_brand: Optional[str] = None,
+          name: str = "cft-profile") -> Path:
+    """A profile base. ``legacy`` puts a pre-split `Default/` directly in it;
+    ``split_brand`` puts one in the NEW place, `<base>/<brand>/Default`."""
+    base = tmp_path / name
+    base.mkdir(parents=True, exist_ok=True)
+    if legacy:
+        (base / "Default").mkdir(exist_ok=True)
+    if split_brand is not None:
+        (base / split_brand / "Default").mkdir(parents=True, exist_ok=True)
+    return base
+
+
+def _profile_check(tmp_path: Path, *, capabilities=(IG,), **probe_kw):
+    cfg = FakeCfg(state_dir=tmp_path / "state", capabilities=capabilities)
+    return preflight.check_chrome_profile(cfg, _probes(**probe_kw))
+
+
+def test_profile_row_skips_on_an_api_only_box(tmp_path: Path):
+    result = _profile_check(tmp_path, capabilities=(YT,),
+                            chrome_profile=_base(tmp_path, legacy=True))
+    assert result.status == STATUS_SKIP
+
+
+def test_profile_row_skips_when_this_box_manages_no_chrome_profile(tmp_path: Path):
+    """A desktop-shell box: the shell owns its own profile elsewhere and never tells the
+    sidecar where. Inventing a path would report on a directory this box never touches."""
+    result = _profile_check(tmp_path, chrome_profile=None)
+    assert result.status == STATUS_SKIP
+
+
+def test_profile_row_skips_when_the_configured_base_is_not_on_disk_yet(tmp_path: Path):
+    result = _profile_check(tmp_path, chrome_profile=tmp_path / "never-created")
+    assert result.status == STATUS_SKIP
+
+
+def test_profile_row_passes_on_a_base_with_nothing_left_behind(tmp_path: Path):
+    result = _profile_check(tmp_path, chrome_profile=_base(tmp_path))
+    assert result.status == STATUS_PASS
+
+
+def test_profile_row_passes_on_the_new_layout_however_warm_it_is(tmp_path: Path):
+    """`Default/` one level down is the split working correctly. Reading that as "legacy"
+    would nag every healthy box forever, which is how an amber row stops being read."""
+    result = _profile_check(tmp_path,
+                            chrome_profile=_base(tmp_path, split_brand="chrome-for-testing"))
+    assert result.status == STATUS_PASS
+
+
+def test_profile_row_names_both_per_brand_directories_when_it_passes(tmp_path: Path):
+    """The row is the only place an operator learns where their logins now live."""
+    base = _base(tmp_path)
+    result = _profile_check(tmp_path, chrome_profile=base)
+    assert str(base / "chrome-for-testing") in result.detail
+    assert re.search(re.escape(str(base / "chrome")) + r"(?![-\w])", result.detail)
+
+
+def test_profile_row_reports_a_pre_split_profile_at_the_base(tmp_path: Path):
+    base = _base(tmp_path, legacy=True)
+    result = _profile_check(tmp_path, chrome_profile=base)
+    assert result.status == STATUS_FAIL
+    assert str(base) in result.detail
+    assert "left untouched" in result.detail
+    assert str(base / "chrome-for-testing") in result.remedy
+    # Bounded: `<base>/chrome-for-testing` contains `<base>/chrome`, so a plain `in` would
+    # pass on a remedy that names only one of the two destinations — the guess we forbid.
+    assert re.search(re.escape(str(base / "chrome")) + r"(?![-\w])", result.remedy)
+
+
+def test_profile_row_is_never_fatal_in_any_state(tmp_path: Path):
+    """A leftover directory sitting still is not a reason to park a box that leases,
+    attaches and runs perfectly — and it would park it FOREVER, because nothing clears it
+    but a human decision we are not allowed to make for them."""
+    for base in (None,
+                 tmp_path / "missing",
+                 _base(tmp_path, name="clean"),
+                 _base(tmp_path, legacy=True, name="legacy"),
+                 _base(tmp_path, split_brand="chrome", name="split")):
+        result = _profile_check(tmp_path, chrome_profile=base)
+        assert result.severity == SEVERITY_WARN
+        assert result.blocking is False
+
+
+def test_profile_row_survives_a_probe_that_raises(tmp_path: Path):
+    cfg = FakeCfg(state_dir=tmp_path / "state", capabilities=(IG,))
+    probes = dataclasses.replace(
+        _probes(), chrome_profile_base=lambda: (_ for _ in ()).throw(OSError("nope")))
+    assert preflight.check_chrome_profile(cfg, probes).status == STATUS_SKIP
+
+
+def test_profile_row_never_touches_the_profile_it_reports_on(tmp_path: Path):
+    """Never moved, copied, renamed, deleted or opened — the cookies in there are the
+    operator's, and guessing at them is what three earlier rounds got wrong."""
+    base = _base(tmp_path, legacy=True)
+    (base / "Default" / "Cookies").write_bytes(b"warmed-by-someone")
+    _profile_check(tmp_path, chrome_profile=base)
+    assert sorted(p.name for p in base.iterdir()) == ["Default"]
+    assert (base / "Default" / "Cookies").read_bytes() == b"warmed-by-someone"
+
+
+def test_the_legacy_row_publishes_the_same_paragraph_the_launch_logs(tmp_path: Path):
+    """Drift guard, and a strict one: it is the SAME string, not two texts that agree
+    today. This paragraph tells an operator where to move a directory holding live logins,
+    and a second copy of it is a second chance to name a different destination."""
+    from aizu.worker import chrome_manager
+
+    base = _base(tmp_path, legacy=True)
+    result = _profile_check(tmp_path, chrome_profile=base)
+    assert result.remedy == chrome_manager.legacy_profile_note(base)
+
+
+def test_the_profile_row_inspects_the_directory_the_shipped_launcher_warms(monkeypatch):
+    """CARRY-OVER 1. The probe used to resolve AIZU_CHROME_PROFILE_DIR defaulting to
+    ~/.aizu-chrome-profile, while `scripts/warm_chrome.sh` warms AIZU_CHROME_PROFILE
+    defaulting to ~/.aizu-cft-profile — a different name AND a different default, so the
+    row reported on a directory nothing on the box ever wrote. A row about a directory
+    nothing warms is worse than no row at all."""
+    monkeypatch.delenv("AIZU_CHROME_PROFILE", raising=False)
+    monkeypatch.setenv("AIZU_CHROME_PROFILE_DIR", "/data/retired-spelling")
+    assert preflight._default_chrome_profile_base() == str(
+        Path.home() / ".aizu-cft-profile")
+
+    monkeypatch.setenv("AIZU_CHROME_PROFILE", "/data/prof")
+    assert preflight._default_chrome_profile_base() == "/data/prof"
+
+
+def test_the_profile_row_reaches_the_fleet_console_not_just_the_log(tmp_path: Path):
+    """The whole reason the row exists: nobody can SSH into these PCs, so a leftover
+    profile that only ever appears as a log line on the box has not been reported at all.
+    It has to survive BOTH wire shapes — the local control surface and the compact
+    register body."""
+    cfg = FakeCfg(state_dir=tmp_path / "state", capabilities=(IG,))
+    base = _base(tmp_path, legacy=True)
+    report = preflight.run_preflight(cfg, probes=_probes(
+        env=_green_env(), cdp={CDP_9333: "ok"}, chrome_profile=base))
+    row = report.get("chrome_profile")
+    assert row.status == STATUS_FAIL
+
+    local = [c for c in report.to_wire()["checks"] if c["id"] == "chrome_profile"]
+    assert local and str(base / "chrome-for-testing") in local[0]["remedy"]
+
+    upstream = report.to_upstream_wire()
+    assert "chrome_profile" in [f["id"] for f in upstream["failed"]]
+    # ...and the bridge must actually accept the id, or the row is dropped on arrival.
+    from aizu.server import _validate_preflight_summary
+    kept = _validate_preflight_summary(upstream)
+    assert "chrome_profile" in [f["id"] for f in kept["failed"]]
+
+
 # ---- check_browser: cdp_attachable (B6/D3) + login.* ----
 
 def _browser_ids(results) -> list:
@@ -1065,7 +1237,7 @@ def test_run_preflight_runs_every_check_in_the_frozen_order(tmp_path: Path):
     assert [c.id for c in report.checks] == [
         "state_dir_writable", "token_persistence", "dispatch_credential", "capabilities",
         "llm_backend", "playwright", "cdp_reachable", "cdp_port_drift",
-        "cdp_attachable", "login.instagram"]
+        "chrome_profile", "cdp_attachable", "login.instagram"]
     assert report.ok is True and report.blocking is False
     assert report.ran_at > 0 and report.duration_ms >= 0
 
@@ -1099,7 +1271,8 @@ def test_an_api_only_box_touches_no_network_at_all(tmp_path: Path):
     assert calls["cdp"] == [] and calls["browser"] == []
     assert report.blocking is False
     assert {c.id for c in report.checks if c.status == STATUS_SKIP} == {
-        "playwright", "cdp_reachable", "cdp_port_drift", "cdp_attachable"}
+        "playwright", "cdp_reachable", "cdp_port_drift", "cdp_attachable",
+        "chrome_profile"}
     assert not [c for c in report.checks if c.id.startswith("login.")]
 
 
@@ -1216,6 +1389,14 @@ def _scenarios(tmp_path: Path) -> list:
          _probes(env={preflight.WARMING_ONLY_ENV: "1"}, cdp={CDP_9333: "ok"})),
         ("warming-enabled-but-leases-harvest", cdp,
          _probes(env={"AIZU_WARMING_ENABLED": "1"}, cdp={CDP_9333: "ok"})),
+        # ...and the box upgraded across the per-brand profile split, still holding the
+        # profile it warmed before it. Warn-severity by design, so this entry is what
+        # mechanically pins that it cannot park a box
+        # (test_a_warn_severity_row_never_blocks_in_any_scenario) while still carrying a
+        # remedy an SSH session can act on.
+        ("legacy-chrome-profile", cdp,
+         _probes(env=green, cdp={CDP_9333: "ok"},
+                 chrome_profile=_base(tmp_path, legacy=True, name="pre-split"))),
     ]
 
 
@@ -1277,7 +1458,8 @@ def test_every_check_id_and_severity_is_from_the_frozen_set(tmp_path: Path):
              preflight.CHECK_DISPATCH_CREDENTIAL, preflight.CHECK_CAPABILITIES,
              preflight.CHECK_LLM_BACKEND, preflight.CHECK_PLAYWRIGHT,
              preflight.CHECK_CDP_REACHABLE, preflight.CHECK_CDP_PORT_DRIFT,
-             preflight.CHECK_CDP_ATTACHABLE, preflight.CHECK_PREFLIGHT_ERROR}
+             preflight.CHECK_CDP_ATTACHABLE, preflight.CHECK_CHROME_PROFILE,
+             preflight.CHECK_PREFLIGHT_ERROR}
     for name, cfg, probes in _scenarios(tmp_path):
         report = preflight.run_preflight(cfg, probes=probes)
         for check in report.checks:

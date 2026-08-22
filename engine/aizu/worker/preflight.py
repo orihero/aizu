@@ -133,6 +133,7 @@ CHECK_PLAYWRIGHT = "playwright"
 CHECK_CDP_REACHABLE = "cdp_reachable"
 CHECK_CDP_PORT_DRIFT = "cdp_port_drift"
 CHECK_CDP_ATTACHABLE = "cdp_attachable"
+CHECK_CHROME_PROFILE = "chrome_profile"
 CHECK_LOGIN_PREFIX = "login."
 CHECK_PREFLIGHT_ERROR = "preflight_error"
 
@@ -146,6 +147,7 @@ _TITLES = {
     CHECK_CDP_REACHABLE: "Warmed Chrome is reachable",
     CHECK_CDP_PORT_DRIFT: "CDP port matches the running Chrome",
     CHECK_CDP_ATTACHABLE: "Chrome accepts a DevTools attach",
+    CHECK_CHROME_PROFILE: "Chrome profile directory",
     CHECK_PREFLIGHT_ERROR: "Preflight could not complete",
 }
 
@@ -199,6 +201,13 @@ _REMEDY_LOGIN = (
     "Chrome is not signed in to {platform} (or the session expired). Open Setup → Sign "
     "in, click \"Open login tab\" for {platform}, finish the login and any 2FA in the "
     "real Chrome window — the badge turns green by itself.")
+# The pre-split-profile row has NO remedy constant of its own: it publishes
+# `chrome_manager.legacy_profile_note(base)` verbatim. Every other remedy here is frozen
+# operator copy because the check knows something the other module does not — this one is
+# the exact opposite. The text tells an operator where to MOVE a directory holding live
+# logins, it is also logged by the launch path, and two copies of that instruction is two
+# chances for them to name different destinations. `test_the_legacy_row_publishes_the_same
+# _paragraph_the_launch_logs` is the guard.
 _REMEDY_CHECK_RAISED = (
     "The preflight could not complete ({error}) — the worker is running normally and "
     "unblocked. Report this with the sidecar log; it is a bug in the check, not in your box.")
@@ -390,6 +399,30 @@ def _default_token_present(cfg) -> Optional[bool]:
         return None
 
 
+def _default_chrome_profile_base() -> Optional[str]:
+    """The profile BASE this sidecar would launch its own Chrome under — i.e. exactly what
+    ``chrome_manager.config_from_env`` resolves (AIZU_CHROME_PROFILE, else
+    ~/.aizu-cft-profile), never a guess of our own.
+
+    "Exactly what config_from_env resolves" is load-bearing and was not true before: this
+    probe used to inherit a second spelling (AIZU_CHROME_PROFILE_DIR / ~/.aizu-chrome-
+    profile) that no launcher in the repo wrote, so the row reported on an empty directory
+    while every warmed session sat in the one `scripts/warm_chrome.sh` actually uses.
+
+    On a DESKTOP box this is the shell's base too, not a directory we guess at: the shell
+    exports ``AIZU_CHROME_PROFILE`` to the sidecar it spawns
+    (``sidecar_supervisor.rs``), so both halves resolve the same path and the row describes
+    the profile the operator can actually see. That is the whole reason the spelling was
+    unified — an earlier version of this docstring claimed the probe deliberately avoided
+    the shell's profile and skipped on a desktop box, which stopped being true the moment
+    the base became one name with one default."""
+    try:
+        from .chrome_manager import config_from_env
+        return str(config_from_env().profile_base_dir)
+    except Exception:  # noqa: BLE001 — an unresolvable profile just has no row
+        return None
+
+
 @dataclass(frozen=True)
 class Probes:
     """Every side effect injected with a real default (chrome_manager.py's idiom)."""
@@ -401,6 +434,7 @@ class Probes:
     env: Callable[[str], str] = _default_env
     run_active: Callable[[], bool] = _never_active
     playwright_available: Callable[[], bool] = _default_playwright_available
+    chrome_profile_base: Callable[[], Optional[str]] = _default_chrome_profile_base
 
 
 # ---- the report ----
@@ -834,6 +868,81 @@ def check_cdp_port_drift(cfg, *, cdp_state: str,
                        STATUS_PASS, cdp_url)
 
 
+def check_chrome_profile(cfg, probes: Probes) -> CheckResult:
+    """Is there a warmed profile at the base that no launch will ever open again?
+
+    Since profiles are split by browser brand (``<base>/<brand>``, chrome_manager's
+    :func:`profile_dir_for`), there is no brand conflict left to report: two browsers
+    cannot reach one directory, so nothing needs marking, policing or declaring. What the
+    split DOES leave behind is the profile a box warmed before it — a ``Default/`` sitting
+    directly in the base. It is inert, it is never opened, and it is never moved or
+    repaired by us, because only the operator can know which browser owns it and guessing
+    wrong deletes every session in it.
+
+    That is worth a row for exactly one reason: on a box upgraded across the split, this is
+    the whole explanation for a Chrome that suddenly has no logins. Without it the operator
+    reads three red ``login.*`` rows on a machine they signed in on last week, and the cause
+    is a directory they cannot see. With it, the fix is a copy-paste.
+
+    WARN, and the choice is not close:
+
+      * Nothing is broken. The box launches, attaches, leases and runs; the leftover
+        directory costs it nothing but the logins that were in it. A fatal here would park
+        a healthy box over a directory sitting still — the exact failure this suite exists
+        to prevent — and park it FOREVER, because the condition never clears on its own,
+        unlike every other fatal here, which self-heals on the 30s re-probe.
+      * The action is a human decision we are not allowed to make for them (which brand
+        warmed it), so a state we cannot resolve must not be a state we block on.
+      * It is self-limiting, not permanent amber: a box provisioned after the split never
+        has a legacy directory, and one that does goes green the moment the operator moves
+        it — or removes it themselves.
+
+    Skipped on API-only boxes and on any box with no worker-managed profile on disk (a
+    desktop-shell box, where the shell owns the profile and asks in its own wizard)."""
+    def _result(status: str, detail: Optional[str] = None,
+                remedy: Optional[str] = None) -> CheckResult:
+        return CheckResult(CHECK_CHROME_PROFILE, _TITLES[CHECK_CHROME_PROFILE],
+                           SEVERITY_WARN, status, detail, remedy)
+
+    if not cdp_platforms_advertised(cfg):
+        return _result(STATUS_SKIP, "skipped — this box advertises no CDP platform")
+
+    # Imported here, not at module scope, for the reason every import in this file is
+    # lazy: preflight must stay cheap to import on an API-only box. The paragraph and the
+    # directory layout come from chrome_manager rather than being spelled again — this row
+    # tells an operator where to move a directory full of live logins, and a second copy of
+    # that instruction is a second chance to name the wrong destination.
+    from .chrome_manager import (BRAND_CHROME, BRAND_CHROME_FOR_TESTING,
+                                 LEGACY_PROFILE_DIR_NAME, has_legacy_profile,
+                                 legacy_profile_note, profile_dir_for)
+
+    base = _safe(probes.chrome_profile_base, None)
+    if not base:
+        return _result(STATUS_SKIP, "skipped — this box has no worker-managed Chrome "
+                                    "profile")
+    if not _safe(lambda: os.path.isdir(str(base)), False):
+        # Nothing on disk. On a desktop-shell box that is the normal answer — the shell
+        # owns its own profile elsewhere and this default path never materialises — and on
+        # a hand-run box it means no browser has been launched yet. Either way there is
+        # nothing to report, and a green PASS here would claim we checked something.
+        return _result(STATUS_SKIP, f"skipped — no Chrome profile at {base} on this box")
+
+    if not _safe(lambda: has_legacy_profile(base), False):
+        cft = _safe(lambda: str(profile_dir_for(base, BRAND_CHROME_FOR_TESTING)), "?")
+        chrome = _safe(lambda: str(profile_dir_for(base, BRAND_CHROME)), "?")
+        return _result(STATUS_PASS, f"{cft} / {chrome} — one profile per browser brand")
+
+    # Detail is the only field that rides upstream (and it truncates at 200 chars), so it
+    # carries the fact; the paragraph with the destinations is the remedy, which the fleet
+    # console renders locally from the id.
+    return _result(
+        STATUS_FAIL,
+        f"{base} holds a profile from before profiles were split per browser brand (a "
+        f"{LEGACY_PROFILE_DIR_NAME}/ directory); nothing launches it and it was left "
+        f"untouched",
+        _safe(lambda: legacy_profile_note(base), None))
+
+
 def check_browser(cfg, probes: Probes, *, cdp_ok: bool, platforms: tuple) -> tuple:
     """``cdp_attachable`` + one ``login.<platform>`` per advertised CDP platform, all from
     ONE bounded connect_over_cdp.
@@ -1001,6 +1110,8 @@ def run_preflight(cfg, *, probes: Probes = Probes(),
     checks.extend(_guarded(CHECK_CDP_PORT_DRIFT,
                            lambda: check_cdp_port_drift(cfg, cdp_state=cdp_state,
                                                         alternate_alive=alternate_alive)))
+    checks.extend(_guarded(CHECK_CHROME_PROFILE,
+                           lambda: check_chrome_profile(cfg, probes)))
     browser_checks = _guarded(
         CHECK_CDP_ATTACHABLE,
         lambda: check_browser(cfg, probes, cdp_ok=(cdp_state == "ok"),

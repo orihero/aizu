@@ -160,7 +160,9 @@ def test_non_redirect_dry_source_stops_at_wall_clock_cap(monkeypatch):
     cfg = CDPBaseConfig(per_source_reels=10, empty_scrolls_before_stop=999,
                         settle_seconds=0, nav_settle_seconds=0,
                         max_source_seconds=45.0)
-    ticks = iter([0.0, 10.0, 50.0])   # start, first check (ok), second check (>cap)
+    # start, first check (ok), second check (>cap), then the per-source epilogue's
+    # own read (it records how long the walk spent on this source).
+    ticks = iter([0.0, 10.0, 50.0, 50.0])
     feed = _RecordingFeed(cfg, clock=lambda: next(ticks))
     feed._page = _FakePage()
     scrolls = []
@@ -765,3 +767,208 @@ def test_login_wall_reason_base_default_never_fires():
     # URL — a platform with no known login-wall signature is unaffected.
     feed = _RecordingFeed()
     assert feed._login_wall_reason("https://example.test/accounts/login/") is None
+
+
+# ---- per-source attribution (the 2026-08-19 live-run bug) -------------------
+#
+# Interception is ONE process-wide queue. Before Reel.source existed, walk()
+# credited every reel it popped to whatever source it happened to be naming, and
+# a source that 302'd was `continue`d BEFORE its drain loop — so the reels its own
+# XHRs had already queued during nav+settle were paid out under a LATER source.
+# The live run logged `.../acme.io/reels/ · yielded=12` for 12 reels whose authors
+# were all hashtag-page accounts. These lock the fix down.
+
+class _NavInterceptingFeed(_RecordingFeed):
+    """Reels arrive DURING navigation, like the real thing: a source's XHRs land
+    in the seconds of nav+settle, before any scroll ever happens."""
+
+    def __init__(self, cfg=None, sources=(), by_source=None, clock=None):
+        super().__init__(cfg, clock=clock)
+        self._source_urls = list(sources)
+        self._by_source = dict(by_source or {})
+
+    def _sources(self):
+        return list(self._source_urls)
+
+    def _navigate(self, url):
+        for item in self._by_source.get(url, []):
+            self._on_response(FakeResponse("https://x.test/api/posts",
+                                           {"items": [item]}))
+
+
+class _RedirectingNavFeed(_NavInterceptingFeed):
+    """…and then the source turns out to have 302'd to keyword-search."""
+
+    def _source_redirected(self, requested_url, landed_url):
+        return True
+
+
+class _RecordingLog:
+    """Captures formatted log lines. Assertions never go through caplog:
+    configure_logging sets propagate=False on the aizu tree, so any earlier test
+    in the session can silence it (same reasoning as tests/worker/test_preflight)."""
+
+    def __init__(self):
+        self.lines: dict[str, list[str]] = {
+            "debug": [], "info": [], "warning": [], "error": []}
+
+    def _rec(self, level, msg, *args):
+        self.lines[level].append(msg % args if args else msg)
+
+    def debug(self, msg, *a):
+        self._rec("debug", msg, *a)
+
+    def info(self, msg, *a):
+        self._rec("info", msg, *a)
+
+    def warning(self, msg, *a):
+        self._rec("warning", msg, *a)
+
+    def error(self, msg, *a):
+        self._rec("error", msg, *a)
+
+
+def _cfg(**kw):
+    base = dict(settle_seconds=0, nav_settle_seconds=0)
+    base.update(kw)
+    return CDPBaseConfig(**base)
+
+
+def test_intercepted_reels_are_stamped_with_the_source_they_arrived_on():
+    feed = _NavInterceptingFeed(
+        _cfg(per_source_reels=10, empty_scrolls_before_stop=1),
+        sources=["src-a", "src-b"],
+        by_source={"src-a": ["a1", "a2"], "src-b": ["b1"]})
+    feed._scroll = lambda page=None: None
+
+    walked = list(feed.walk())
+    assert [(r.reel_id, r.source) for r in walked] == [
+        ("a1", "src-a"), ("a2", "src-a"), ("b1", "src-b")]
+
+
+def test_a_redirected_source_still_drains_the_reels_it_already_intercepted():
+    # The exact live shape: the tag page 302s to keyword-search, but its XHRs
+    # already fired during nav. Those reels must be paid out HERE — the old
+    # `continue` threw them at whichever source ran next, and with no next source
+    # (seed_accounts empty, no home feed) they were lost with a clean exit code.
+    feed = _RedirectingNavFeed(
+        _cfg(per_source_reels=10, empty_scrolls_before_stop=4),
+        sources=["tag-1"], by_source={"tag-1": ["r1", "r2"]})
+    scrolls = []
+    feed._scroll = lambda page=None: scrolls.append(1)
+
+    walked = list(feed.walk())
+    assert [r.reel_id for r in walked] == ["r1", "r2"]   # drained, not discarded
+    assert scrolls == []                                 # …and still never scrolled
+
+
+def test_the_source_done_line_counts_only_the_reels_that_source_produced(monkeypatch):
+    import aizu.core.cdp as cdpmod
+    rec = _RecordingLog()
+    monkeypatch.setattr(cdpmod, "log", rec)
+    # src-a intercepts two reels but its per-source cap pays out one, so the
+    # second is drained under src-b. src-b must not claim it as its own.
+    feed = _NavInterceptingFeed(
+        _cfg(per_source_reels=1, empty_scrolls_before_stop=1),
+        sources=["src-a", "src-b"], by_source={"src-a": ["a1", "a2"]})
+    feed._scroll = lambda page=None: None
+
+    walked = [r.reel_id for r in feed.walk()]
+    assert walked == ["a1", "a2"]
+    assert [ln for ln in rec.lines["debug"] if "source done" in ln] == [
+        "CDP source done · src-a · yielded=1 · carried_over=0",
+        "CDP source done · src-b · yielded=0 · carried_over=1",
+    ]
+
+
+def test_walk_warns_when_intercepted_reels_are_left_undrained(monkeypatch):
+    import aizu.core.cdp as cdpmod
+    rec = _RecordingLog()
+    monkeypatch.setattr(cdpmod, "log", rec)
+    # Three reels intercepted, a per-source cap of one, one source: two reels are
+    # already in _seen_reel_ids (so nothing will ever re-queue them) and walk()
+    # returns leaving them in the queue. That loss used to be completely silent.
+    # `seed_hashtags` names the one source so the reels are stamped with the SEED
+    # TERM the ledger keys on (`source_stats`), not with the URL — see
+    # CDPFeedBase._source_seeds.
+    feed = _NavInterceptingFeed(
+        _cfg(per_source_reels=1, seed_hashtags=("src-a",), include_home_feed=False),
+        sources=["src-a"], by_source={"src-a": ["a1", "a2", "a3"]})
+    feed._scroll = lambda page=None: None
+
+    walked = [r.reel_id for r in feed.walk()]
+    assert walked == ["a1"]
+    warnings = [ln for ln in rec.lines["warning"] if "never yielded" in ln]
+    assert warnings == [
+        "CDP walk finished with 2 intercepted reel(s) never yielded · "
+        "source(s)=src-a"]
+
+
+def test_a_fully_drained_walk_does_not_warn(monkeypatch):
+    import aizu.core.cdp as cdpmod
+    rec = _RecordingLog()
+    monkeypatch.setattr(cdpmod, "log", rec)
+    feed = _NavInterceptingFeed(
+        _cfg(per_source_reels=10, empty_scrolls_before_stop=1),
+        sources=["src-a"], by_source={"src-a": ["a1"]})
+    feed._scroll = lambda page=None: None
+
+    assert [r.reel_id for r in feed.walk()] == ["a1"]
+    assert rec.lines["warning"] == []
+
+
+# ---- max_source_seconds: the walk's OWN time, enforced every iteration ------
+
+def test_a_slow_consumer_does_not_forfeit_the_sources_scroll_budget():
+    # walk() is a generator: the wall clock between `yield` and the next resume is
+    # the cascade scoring a reel (90s+ is normal), not a wedge. Charging it to the
+    # source made a healthy source abandon itself before it was ever scrolled ONCE
+    # — the live run's 45s cap against a 13m15s source is this same accounting.
+    now = [0.0]
+    feed = _NavInterceptingFeed(
+        _cfg(per_source_reels=10, empty_scrolls_before_stop=2,
+             max_source_seconds=45.0),
+        sources=["src-a"], by_source={"src-a": ["r1", "r2", "r3"]},
+        clock=lambda: now[0])
+    scrolls = []
+    feed._scroll = lambda page=None: scrolls.append(1)
+
+    walked = []
+    for reel in feed.walk():
+        walked.append(reel.reel_id)
+        now[0] += 100.0          # the cascade spends 100s on each reel
+    assert walked == ["r1", "r2", "r3"]
+    assert scrolls == [1, 1]     # source still got its full dry-scroll budget
+
+
+def test_no_reel_is_yielded_after_the_walks_own_budget_is_blown():
+    # A source whose queue keeps refilling never reached the old budget check at
+    # all (it lived in the `reel is None` branch), so "no single source can hold
+    # the walk longer than max_source_seconds" simply did not hold for it — and
+    # once the budget WAS blown it still paid out everything already queued.
+    now = [0.0]
+    feed = _NavInterceptingFeed(
+        _cfg(per_source_reels=100, empty_scrolls_before_stop=999,
+             max_source_seconds=45.0),
+        sources=["src-a"], by_source={"src-a": ["r0"]}, clock=lambda: now[0])
+    counter = iter(range(1, 500))
+
+    def _refilling_scroll(page=None):
+        now[0] += 20.0           # every scroll costs the walk 20s of its own time
+        feed._on_response(FakeResponse(
+            "https://x.test/api/posts",
+            {"items": [f"r{next(counter)}", f"r{next(counter)}"]}))
+
+    feed._scroll = _refilling_scroll
+
+    elapsed_at_yield = []
+    walked = []
+    for reel in feed.walk():
+        walked.append(reel.reel_id)
+        elapsed_at_yield.append(now[0])
+
+    assert [t for t in elapsed_at_yield if t > 45.0] == []
+    # r0 (t=0) + two per scroll at t=20 and t=40; the t=60 scroll's reels are
+    # never paid out because the budget check now runs before every pop.
+    assert walked == ["r0", "r1", "r2", "r3", "r4"]
+    assert len(walked) < feed.cfg.per_source_reels

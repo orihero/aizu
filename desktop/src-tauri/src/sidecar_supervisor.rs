@@ -1,4 +1,4 @@
-//! Supervised `aizu-worker` child process (Phase 6 SCAFFOLD, UNCOMPILED).
+//! Supervised `aizu-worker` child process (BUILD-PLAN Phase 6).
 //!
 //! BUILD-PLAN Phase 6, **C3 option A**: the desktop app supervises the Python sidecar
 //! binary as a managed child — restart-on-crash watchdog + run-at-login. It spawns
@@ -238,6 +238,11 @@ impl SidecarSupervisor {
         // Non-secret wiring from config:
         cmd.env("AIZU_DISPATCH_URL", &cfg.dispatch_base_url);
         cmd.env("AIZU_CDP_URL", cfg.cdp_url()); // matches the Chrome we launched
+        // …and the profile BASE the shell launches against, for the same reason: the child's
+        // preflight inspects a Chrome profile directory, and without this it inspected its
+        // own default — a directory neither this app nor the shipped `warm_chrome.sh` had
+        // ever warmed, so the row could only ever describe somebody else's box.
+        cmd.env(crate::config::CHROME_PROFILE_ENV, &cfg.chrome_profile_base);
         cmd.env("AIZU_WORKER_STATE", &cfg.state_dir);
         cmd.env("AIZU_DB", &cfg.db_path);
         // Capability declaration: which platforms this box advertises it can run. Without
@@ -286,34 +291,12 @@ impl SidecarSupervisor {
         Ok(())
     }
 
-    /// Resolve the sidecar binary: explicit config path wins; else the bundled resource;
-    /// else the bare name on PATH (dev).
+    /// Resolve the sidecar binary. Thin wrapper over [`resolve_sidecar_binary`], which is
+    /// a free function because `ChromeManager` needs the SAME precedence to ask that binary
+    /// for Playwright's Chrome-for-Testing path, and a second copy of this ladder would
+    /// drift the day the packaging layout changes.
     fn resolve_binary(&self, configured: &std::path::Path) -> Result<PathBuf, DesktopError> {
-        // 1. Explicit config override wins.
-        if !configured.as_os_str().is_empty() {
-            if configured.exists() {
-                return Ok(configured.to_path_buf());
-            }
-            return Err(DesktopError::SidecarSpawnFailed(format!(
-                "configured sidecar_binary_path does not exist: {}",
-                configured.display()
-            )));
-        }
-        // 2. Bundled resource (packaged app). The onedir PyInstaller build ships as
-        //    <resource_dir>/sidecar/aizu-worker/aizu-worker (folder + executable).
-        //    Fall back to a flat layout in case the resource copy flattened it.
-        if let Ok(rd) = self.app.path().resource_dir() {
-            let nested = rd.join("sidecar").join(SIDECAR_BINARY_NAME).join(SIDECAR_BINARY_NAME);
-            if nested.exists() {
-                return Ok(nested);
-            }
-            let flat = rd.join("sidecar").join(SIDECAR_BINARY_NAME);
-            if flat.exists() {
-                return Ok(flat);
-            }
-        }
-        // 3. Dev fallback: rely on the binary being on PATH.
-        Ok(PathBuf::from(SIDECAR_BINARY_NAME))
+        resolve_sidecar_binary(&self.app, configured)
     }
 
     /// Poll for the child's exit, returning its exit code if available. The lock is taken
@@ -472,6 +455,51 @@ impl SidecarSupervisor {
     fn emit(&self, status: SidecarStatus) {
         let _ = self.app.emit(SIDECAR_STATUS_EVENT, &status);
     }
+}
+
+/// Resolve the `aizu-worker` binary: explicit config path wins; else the bundled resource;
+/// else the bare name on PATH (dev).
+///
+/// A free function with an explicit `&AppHandle` because there are TWO callers with nothing
+/// else in common: this supervisor (which spawns it as the worker) and `ChromeManager`
+/// (which asks that same binary for Playwright's Chrome-for-Testing path, because on a
+/// packaged box the frozen sidecar is the only Playwright on the machine). Duplicating the
+/// resource_dir/nested/flat/PATH ladder in the Chrome side is how the two would silently
+/// disagree after the next packaging change.
+///
+/// NOTE for the Chrome caller: step 1 turns a configured-but-missing path into an `Err`
+/// rather than a fallthrough, and step 3 can return a BARE RELATIVE name that does not
+/// exist on disk (it is resolved by PATH at spawn time). So do not `.exists()`-gate the
+/// result, and do not propagate the `Err` as a Chrome error — swallow it and fall through.
+pub(crate) fn resolve_sidecar_binary(
+    app: &AppHandle,
+    configured: &std::path::Path,
+) -> Result<PathBuf, DesktopError> {
+    // 1. Explicit config override wins.
+    if !configured.as_os_str().is_empty() {
+        if configured.exists() {
+            return Ok(configured.to_path_buf());
+        }
+        return Err(DesktopError::SidecarSpawnFailed(format!(
+            "configured sidecar_binary_path does not exist: {}",
+            configured.display()
+        )));
+    }
+    // 2. Bundled resource (packaged app). The onedir PyInstaller build ships as
+    //    <resource_dir>/sidecar/aizu-worker/aizu-worker (folder + executable).
+    //    Fall back to a flat layout in case the resource copy flattened it.
+    if let Ok(rd) = app.path().resource_dir() {
+        let nested = rd.join("sidecar").join(SIDECAR_BINARY_NAME).join(SIDECAR_BINARY_NAME);
+        if nested.exists() {
+            return Ok(nested);
+        }
+        let flat = rd.join("sidecar").join(SIDECAR_BINARY_NAME);
+        if flat.exists() {
+            return Ok(flat);
+        }
+    }
+    // 3. Dev fallback: rely on the binary being on PATH.
+    Ok(PathBuf::from(SIDECAR_BINARY_NAME))
 }
 
 // --- POSIX signal shims -------------------------------------------------------------

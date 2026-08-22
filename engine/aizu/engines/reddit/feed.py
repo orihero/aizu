@@ -23,7 +23,8 @@ import time
 from dataclasses import dataclass
 from typing import Iterator, Optional, Protocol, Sequence
 
-from ...core.feed import Comment, FeedSource, Reel
+from ...core.feed import (SOURCE_ACCOUNT, SOURCE_HASHTAG, Comment, FeedSource,
+                          Reel, SourceOutcome)
 from ...core.logsetup import get_logger
 
 log = get_logger(__name__)
@@ -47,6 +48,7 @@ _REEL_SEP = "/"
 # reason) instead of letting a raw HTTP error crash the loop. 401/403 are NOT
 # wrapped — they keep their httpx response so the CLI's auth-error handler can flag
 # the integration as needs-reconnect.
+_SEED_ERROR_STATUS = frozenset({403, 404})
 _RETRYABLE_STATUS = frozenset({429, 500, 502, 503, 504})
 _MAX_RETRIES = 3
 _BACKOFF_BASE_S = 1.0
@@ -61,6 +63,25 @@ class RedditApiError(RuntimeError):
     def __init__(self, message: str, status: Optional[int] = None):
         super().__init__(message)
         self.status = status
+
+
+class RedditSeedError(RuntimeError):
+    """ONE seeded subreddit is unreadable — private, quarantined, banned or gone.
+
+    Deliberately NOT an httpx error and NOT a `RedditApiError`. Every `_get` path
+    in this client is `r/<subreddit>/...`, so a 403/404 there is a statement about
+    that SUBREDDIT, never about our OAuth app. Raising it as a raw
+    `HTTPStatusError` meant `cli._is_auth_error` saw `.response.status_code == 403`,
+    matched, and called `_flag_needs_reconnect` — so one private seed subreddit
+    disconnected the org's entire Reddit integration and every other campaign on
+    it. Reddit reports genuine credential failures as 401, which still propagates
+    raw and still flags needs-reconnect.
+    """
+
+    def __init__(self, message: str, status=None, subreddit: str = ""):
+        super().__init__(message)
+        self.status = status
+        self.subreddit = subreddit
 
 
 def _retry_after_seconds(response) -> Optional[float]:
@@ -142,16 +163,39 @@ class RedditFeed(FeedSource):
 
     def _emit(self, seen: set[str], *, subreddit: str,
               query: Optional[str]) -> Iterator[Reel]:
-        subs = self._client.list_submissions(subreddit=subreddit, query=query,
-                                             limit=self._per_seed)
+        """One (subreddit, query) sweep, stamped with the seed that produced it.
+
+        A query is credited to the QUERY, not to the (subreddit, query) pair: the
+        same term is swept across every seeded subreddit, and the question the
+        ledger has to answer is "is this search term productive", not "is it
+        productive in r/x". Subreddit productivity is the query=None rows."""
+        seed = query or subreddit
+        kind = SOURCE_HASHTAG if query else SOURCE_ACCOUNT
+        try:
+            subs = self._client.list_submissions(subreddit=subreddit, query=query,
+                                                 limit=self._per_seed)
+        except RedditSeedError as e:
+            # One unreadable subreddit skips itself. It used to take the org's whole
+            # Reddit integration down with it (see RedditSeedError).
+            log.warning("Reddit source unavailable · r/%s · %s", subreddit, e)
+            self._record_source(SourceOutcome(source=subreddit, kind=SOURCE_ACCOUNT,
+                                              unavailable=True))
+            return
         log.info("Reddit source · r/%s · %s · %d submission(s)", subreddit,
                  f"query={query!r}" if query else "new", len(subs))
-        for s in subs:
-            if s.submission_id in seen:
-                continue
-            seen.add(s.submission_id)
-            self._subreddit_of[s.submission_id] = subreddit
-            yield Reel(reel_id=s.submission_id, caption=_caption(s), author=s.author)
+        fresh = 0
+        try:
+            for s in subs:
+                if s.submission_id in seen:
+                    continue
+                seen.add(s.submission_id)
+                self._subreddit_of[s.submission_id] = subreddit
+                fresh += 1
+                yield Reel(reel_id=s.submission_id, caption=_caption(s),
+                           author=s.author, source=seed)
+        finally:
+            self._record_source(SourceOutcome(source=seed, kind=kind, yielded=fresh,
+                                              carried_over=len(subs) - fresh))
 
     def fetch_comments(self, reel_id: str, since_cursor: Optional[str]
                        ) -> tuple[list[Comment], Optional[str]]:
@@ -267,7 +311,16 @@ class RedditDataApiClient:
                 raise RedditApiError(
                     f"Reddit API {r.status_code} on /{path} after {_MAX_RETRIES} "
                     "retries (rate limit / client throttled)", status=r.status_code)
-            r.raise_for_status()  # 401/403 keep .response for the auth handler
+            # Every path reaching this method is `r/<subreddit>/...`, so 403/404
+            # names the SUBREDDIT, not the app credential. 401 still falls through
+            # to raise_for_status and keeps .response for the auth handler.
+            if r.status_code in _SEED_ERROR_STATUS:
+                sub = path.split("/")[1] if path.startswith("r/") else ""
+                raise RedditSeedError(
+                    f"Reddit {r.status_code} on /{path} — r/{sub} is private, "
+                    "quarantined, banned or does not exist",
+                    status=r.status_code, subreddit=sub)
+            r.raise_for_status()  # 401 keeps .response for the auth handler
             return r.json()
         raise RedditApiError(f"Reddit API unreachable on /{path}")  # pragma: no cover
 

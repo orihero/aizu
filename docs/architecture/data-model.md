@@ -12,7 +12,7 @@ Every table, column, constraint, and index below is transcribed from `store.py` 
 
 - **One SQLite file** is the whole interface (`store.py:1-11`).
 - Opened in **WAL** mode with `foreign_keys=ON`, `busy_timeout=30000`, connection `timeout=30.0s` (`store.py:1046-1050`).
-- **Schema version:** `SCHEMA_VERSION = 23`, stored in `meta` under key `schema_version` (`store.py:37`). The docstring on that line is the authoritative version history (v2 → v23).
+- **Schema version:** `SCHEMA_VERSION = 25`, stored in `meta` under key `schema_version` (`store.py:37`). The docstring on that line is the authoritative version history (v2 → v25).
 - **Timestamps** are **REAL epoch seconds** on data tables (sessions/actions/matches/etc.). A few audit tables use **ISO-8601 TEXT** — notably `audit_log.created_at`. Local time everywhere is **Asia/Tashkent, a fixed UTC+5 with no DST** (`store.py:69-74`; `schedule.py:14-15`).
 
 ### Migration model
@@ -23,6 +23,9 @@ Fresh DBs get everything from the `SCHEMA` `executescript`. Upgrading DBs are pa
 - **v6** status value remap via `UPDATE` (`_STATUS_V6_REMAP`, `store.py:57-61`, `1093-1095`).
 - **v7** multi-tenancy: `settings`/`integrations`/`users` rebuilt or `ADD COLUMN org_id`; existing data folded into one Default org (`_migrate_to_v7`, `store.py:1103-1107`).
 - **v10–v17** are purely additive: `CREATE TABLE IF NOT EXISTS` for net-new tables plus `_add_column_if_missing` for new columns on old tables (`store.py:1111-1157`). Notably `matches.found_by_models` (v17) is added by migration and is **not** in the base `matches` DDL (`store.py:1157`).
+- **v18–v25** follow the same additive idiom. v24 (Campaign Lab per-source attribution) adds the net-new `source_stats` table via `SCHEMA` plus `seen_reels.source` / `matches.source` via `_add_column_if_missing`; v25 adds `seen_reels.author_id` the same way.
+- **`author_id` is written on FIRST SIGHTING only for `source`, but refreshed for `author_id`** — a rename should update the display name's id mapping, while provenance (which seed found the item) must never be rewritten by a re-poll. See `mark_seen`'s two differing COALESCE directions.
+- **Index creation after ADD COLUMN.** Indexes naming migration-added columns cannot live in the `SCHEMA` `executescript` (it runs *before* the ALTERs), so they are created in `_init_schema` alongside the `org_id` indexes. They go through `_create_index_if_columns`, which skips an index whose columns are absent rather than aborting `_init_schema` — an index is a read optimisation and must never take a database offline.
 
 ### Declared foreign keys (the only hard FKs in the schema)
 
@@ -72,9 +75,11 @@ Holds `schema_version` among others.
 | captured_at | REAL | NOT NULL |
 | updated_at | REAL | NOT NULL |
 | found_by_models | TEXT | JSON array; **added by v17 migration**, not in base DDL (`store.py:1157`) |
+| source | TEXT | **v24** — the seed term whose page produced this lead |
 
 - **PK:** `(campaign_id, platform, comment_id)` — writes are idempotent on `comment_id`; a re-poll never overwrites human `status` (`store.py:7-8`).
-- **Indexes:** `idx_matches_reel(campaign_id, platform, reel_id)`, `idx_matches_status(campaign_id, platform, status)`, `idx_matches_time(campaign_id, captured_at)`, `idx_matches_org(org_id)` (`store.py:136-137`, `736`, `1161`).
+- **Indexes:** `idx_matches_reel(campaign_id, platform, reel_id)`, `idx_matches_status(campaign_id, platform, status)`, `idx_matches_time(campaign_id, captured_at)`, `idx_matches_org(org_id)`, and (v24) `idx_matches_source(campaign_id, platform, source)` + `idx_matches_username(username)`.
+- **`source` has one writer, and it is not the engines.** No engine passes it: `_upsert_match_row` derives it from the reel's `seen_reels.source`. That keeps one writer for the fact and fixes the case an engine could not get right anyway — a watchlist re-poll builds a bare `Reel` with no source, but the `seen_reels` row still knows.
 
 **Lead status vocabulary** (`store.py:43-52`): `VALID_STATUS = {new, in_progress, interested, closed, couldnt_connect, archived}`. Moving into `{closed, couldnt_connect, archived}` (`FORCED_REASON_STATUS`) requires a non-empty reason note (enforced in the store, not just UI). `WIN_STATUS = {interested, closed}` count as won for CPL / win-rate.
 
@@ -91,8 +96,15 @@ Holds `schema_version` among others.
 | author | TEXT | |
 | caption | TEXT | |
 | ocr_text | TEXT | on-screen text read by vision |
+| transcript / transcript_lang / transcript_ms | TEXT / TEXT / INTEGER | v18 Uzbek-only STT |
+| video_analyzed / video_analysis_summary | INTEGER / TEXT | v19 video-analysis tier |
+| source | TEXT | **v24** — the seed term this item was intercepted on; NULL = captured before attribution existed |
+| author_id | TEXT | **v25** — the author's stable, seed-shaped id (IG `user.pk`, X author `rest_id`, LinkedIn canonical profile URL, YouTube `UC…`, Telegram `@channel`); NULL = the platform exposes none |
 
 **PK:** `(campaign_id, platform, reel_id)`.
+**Index:** `idx_seen_reels_source(campaign_id, platform, source, relevant)` — carries `relevant` so the per-source relevance rollup is index-only.
+
+`source` is written **once**, on first sighting (`mark_seen` COALESCEs it the other way round from every other column: `COALESCE(seen_reels.source, excluded.source)`). First sighting owns provenance; a re-poll must not rewrite which seed found the item.
 
 #### `comment_cursors` — per-reel "new comments since last poll" cursor (`store.py:154-161`)
 
@@ -105,6 +117,54 @@ Holds `schema_version` among others.
 | last_polled | REAL | |
 
 **PK:** `(campaign_id, platform, reel_id)`.
+
+#### `source_stats` — per-source discovery ledger (**v24**)
+
+One row per `(campaign_id, platform, source)`, where `source` is the **seed term**
+(`remont`, `acme`, or the literal `home`), not a URL. `CDPFeedBase.walk()` has
+computed per-source yield on every run since the `Reel.source` stamp landed and
+dropped it at a debug line; this is where it goes instead. Fed through
+`FeedSource.on_source_done` (wired in `cli._build_run_io`), which never raises.
+
+| Column | Type | Meaning |
+|---|---|---|
+| campaign_id | TEXT | NOT NULL, PK part |
+| platform | TEXT | NOT NULL, PK part |
+| source | TEXT | NOT NULL, PK part — the seed term |
+| kind | TEXT | `home` \| `hashtag` \| `account` \| `unknown` |
+| navigations | INTEGER | times the walk visited this seed |
+| yielded | INTEGER | items **intercepted on** this seed |
+| carried_over | INTEGER | items it drained that an **earlier** seed queued |
+| redirects | INTEGER | times it 302'd to a page with no grid |
+| dead_hits | INTEGER | times the page reported "doesn't exist" (reset by any yield) |
+| seconds | REAL | cumulative walk time spent here |
+| first_seen / last_seen | REAL | NOT NULL |
+| last_yield_at | REAL | last time it produced anything |
+| banned_at | REAL | platform says the page does not exist |
+| parked_at / park_reason | REAL / TEXT | the park rule fired, and why |
+
+- **`yielded` vs `carried_over` is the whole point.** In the 2026-08-19 live run
+  all six Instagram hashtag sources 302-redirected and their 12 reels were drained
+  — and logged — under a seed *account*. A pop-counter records that as the
+  account's yield; these two columns keep it honest.
+- **Relevance and lead counts are NOT stored here.** `Store.source_stats()`
+  derives them from `seen_reels.source` / `matches.source`, so each fact has one
+  writer.
+- **The lifecycle columns are reversible verdicts, never tombstones.**
+  `record_source_walk` clears `banned_at`, `parked_at` and `park_reason` on any
+  walk that yields, so a tag that 404s during one render, or a profile behind a
+  momentary outage, rehabilitates itself.
+- **Park rule** (`Store.park_dry_sources`): `dead_hits >= 2`, or
+  `navigations >= 3 AND yielded >= 30 AND 0 relevance passes`. `home` is never
+  parked, and the rule never leaves fewer than `PARK_MIN_ACTIVE` (2) live sources.
+  `Store.live_seeds` applies the result at run setup and refuses to return an
+  empty seed list — an empty list flips the home feed back on
+  (`core/config.py:197-210`) and would silently turn a targeted campaign into an
+  untargeted one. When every seed is dead it raises the `seeds_all_dead` health
+  flag and walks them anyway.
+- **Reads:** `Store.source_stats`, `parked_sources`, `seed_history` (org-scoped
+  productive/dead lists fed to the AI campaign generator), `unpark_source`
+  (operator override). CLI: `aizu sources --campaign <id> [--mine]`.
 
 #### `watchlist` — match-rich reels re-polled until aged out (~7–14 days) (`store.py:164-172`)
 
