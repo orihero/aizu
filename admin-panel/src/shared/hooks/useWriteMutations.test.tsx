@@ -3,7 +3,7 @@ import { renderHook, waitFor } from '@testing-library/react';
 import type { ReactNode } from 'react';
 import { AppProviders } from '@/app/providers';
 import { FakePanelRepository } from '@/test/fakePanelRepository';
-import { buildIntegration, buildPanelState } from '@/test/fixtures';
+import { buildIntegration, buildMatch, buildPanelState } from '@/test/fixtures';
 import {
   useAddTeamMember,
   useBulkSetStatus,
@@ -16,6 +16,7 @@ import {
   useRunCampaign,
   useStopRun,
   useToggleIntegration,
+  withBulkStatus,
 } from './useWriteMutations';
 
 function wrapperFor(repository: FakePanelRepository) {
@@ -37,6 +38,33 @@ describe('useBulkSetStatus', () => {
 
     await waitFor(() => { expect(repo.bulkWrites).toHaveLength(1); });
     expect(repo.bulkWrites[0]?.status).toBe('interested');
+  });
+
+  test('the optimistic patch only flips the leads the write actually names', () => {
+    // A commentId repeats across platforms and campaigns; the server writes on the
+    // composite key, so the optimistic patch must not flip the ones it will not touch.
+    const ig = buildMatch({ commentId: 'dup', campaignId: 'cmp-a', platform: 'instagram' });
+    const x = buildMatch({ commentId: 'dup', campaignId: 'cmp-a', platform: 'x' });
+    const other = buildMatch({ commentId: 'dup', campaignId: 'cmp-b', platform: 'instagram' });
+
+    const patched = withBulkStatus([ig, x, other], {
+      campaignId: 'cmp-a',
+      status: 'interested',
+      items: [{ commentId: 'dup', platform: 'instagram' }],
+    });
+
+    const byId = new Map(patched.map((m) => [m.id, m.status]));
+    expect(byId.get(ig.id)).toBe('interested');
+    expect(byId.get(x.id)).toBe('new');
+    expect(byId.get(other.id)).toBe('new');
+  });
+
+  test('a legacy item with no platform still matches on commentId alone', () => {
+    const ig = buildMatch({ commentId: 'dup', campaignId: 'cmp-a', platform: 'instagram' });
+    const patched = withBulkStatus([ig], {
+      campaignId: 'cmp-a', status: 'closed', items: [{ commentId: 'dup' }],
+    });
+    expect(patched[0]?.status).toBe('closed');
   });
 });
 

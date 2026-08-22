@@ -291,6 +291,35 @@ def test_nack_requeues_with_exponential_backoff(store: Store):
     assert store.get_job("j1")["status"] == "queued"
 
 
+def test_requeue_nack_persists_the_reason(store: Store):
+    """B6: a requeued attempt must record WHY it failed. Without this the only trace of
+    e.g. an unattachable Chrome lives in the worker box's local log, and the panel shows
+    a blank 'Finished on the fleet'."""
+    _enqueue(store, "j1", max_attempts=3)
+    store.lease_one_job(worker_id="w1", capabilities=CAP_IG, now=1000.0)
+    res = store.nack_job(job_id="j1", worker_id="w1", reason="cdp_unreachable",
+                         now=1000.0)
+    assert res["outcome"] == "requeued"
+    job = store.get_job("j1")
+    assert job["status"] == "queued"          # still retryable — result is NOT terminal
+    assert job["result"]["reason"] == "cdp_unreachable"
+    assert job["result"]["requeued"] is True
+
+
+def test_ack_overwrites_a_requeued_reason_with_the_run_summary(store: Store):
+    """The failure blob is diagnostic only: a job that later succeeds must read as its
+    summary, not as the stale reason of a dead attempt."""
+    _enqueue(store, "j1", max_attempts=3)
+    store.lease_one_job(worker_id="w1", capabilities=CAP_IG, now=1000.0)
+    store.nack_job(job_id="j1", worker_id="w1", reason="cdp_unreachable", now=1000.0)
+    store.lease_one_job(worker_id="w1", capabilities=CAP_IG, now=9000.0)
+    store.ack_job(job_id="j1", worker_id="w1", summary={"matches": 4})
+    job = store.get_job("j1")
+    assert job["status"] == "done"
+    assert job["result"].get("reason") is None
+    assert job["result"]["matches"] == 4
+
+
 def test_nack_dead_letters_after_max_attempts(store: Store):
     _enqueue(store, "j1", max_attempts=2)
     # attempt 1 → requeue

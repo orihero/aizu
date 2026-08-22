@@ -17,6 +17,7 @@ from pathlib import Path
 
 import pytest
 
+from aizu.panel import lead_uid
 from aizu.server import serve
 from aizu.core.store import Store
 
@@ -25,12 +26,23 @@ CONFIG = ROOT / "config"
 _INDEX_HTML = '<!doctype html><html><body><div id="root"></div></body></html>'
 PW = "longenough1"
 
-# Org A lead seed: (campaign, comment_id, username). 2 + 3 = 5 leads across 2 campaigns.
+# Org A lead seed: (campaign, comment_id, username). 3 + 3 = 6 leads across 2 campaigns.
+# NOTE the LAST row deliberately reuses camp-a1's `a1-c1` comment id under camp-a2:
+# a lead's identity is the composite (campaign_id, platform, comment_id), and the same
+# commenter really can surface under two campaigns. Flattening the payload to a bare
+# comment id collapsed the two into one row, so the pagination/uniqueness assertions
+# below double as the guard for that.
 _A_LEADS = [
     ("camp-a1", "a1-c1", "a1u1"), ("camp-a1", "a1-c2", "a1u2"),
     ("camp-a2", "a2-c1", "a2u1"), ("camp-a2", "a2-c2", "a2u2"), ("camp-a2", "a2-c3", "a2u3"),
+    ("camp-a2", "a1-c1", "a2dup"),
 ]
 _A_TOTAL = len(_A_LEADS)
+
+# A campaign that burned budget without producing a single lead — the shape that made
+# the card report $0 while /api/reports summed the same money under spendByStage.
+_DRY_CAMPAIGN = "camp-a3-dry"
+_DRY_SPEND = 999.0
 
 
 def _req(method, base, path, body=None, cookie=None):
@@ -116,6 +128,10 @@ def srv():
     for cid in ("camp-a1", "camp-a2"):
         store.upsert_campaign_meta(cid, org_id=org_a, status="live")
         store.upsert_campaign_brief(cid, {"platform": "instagram", "threshold": 0.7}, org_id=org_a)
+    store.upsert_campaign_meta(_DRY_CAMPAIGN, org_id=org_a, status="live")
+    store.upsert_campaign_brief(_DRY_CAMPAIGN, {"platform": "instagram", "threshold": 0.7},
+                                org_id=org_a)
+    store.log_spend(_DRY_CAMPAIGN, "vision", _DRY_SPEND, model="m")
     store.upsert_campaign_meta("camp-b", org_id=org_b, status="live")
     store.upsert_campaign_brief("camp-b", {"platform": "instagram", "threshold": 0.7}, org_id=org_b)
     for cid, comment_id, username in _A_LEADS:
@@ -308,7 +324,8 @@ def test_leads_archived_visible_when_filter_selected(srv):
     """Explicitly selecting the Archived filter surfaces the archived lead."""
     data = _get(srv["base"], "/api/leads?status=archived", srv["cookies"]["owner"])[1]["data"]
     assert data["total"] == 1
-    assert [m["id"] for m in data["items"]] == ["a2-arch"]
+    # `id` is the composite lead identity, not the bare comment id.
+    assert [m["id"] for m in data["items"]] == [lead_uid("camp-a2", "instagram", "a2-arch")]
 
 
 def test_dashboard_matches_exclude_archived(srv):
@@ -326,7 +343,8 @@ def test_leads_campaign_filter_scopes_list_and_tiles(srv):
     assert a1["total"] == 2 and a1["stats"]["total"] == 2
     assert all(m["campaignId"] == "camp-a1" for m in a1["items"])
     a2 = _get(srv["base"], "/api/leads?campaign=camp-a2", srv["cookies"]["owner"])[1]["data"]
-    assert a2["total"] == 3  # 3 active; the archived a2 lead stays hidden by default
+    # 4 active (incl. the `a1-c1` duplicate camp-a2 owns); the archived one stays hidden.
+    assert a2["total"] == 4
 
 
 def test_leads_payload_lists_org_campaigns(srv):
@@ -350,3 +368,66 @@ def test_leads_sort_by_username_ascending(srv):
                 srv["cookies"]["owner"])[1]["data"]
     names = [m["username"] for m in data["items"]]
     assert names == sorted(names)
+
+
+# ----- lead identity: the composite (campaign, platform, comment) key -----
+
+def test_lead_ids_are_unique_across_campaigns_sharing_a_comment_id(srv):
+    """Two campaigns holding the same comment id must stay two distinct panel rows.
+
+    The payload used to flatten a lead to `"id": comment_id`, so the shared
+    `a1-c1` collapsed to ONE row: clicking it in camp-a2 resolved camp-a1's lead
+    and a status write landed on the wrong campaign's record."""
+    data = _get(srv["base"], "/api/leads?pageSize=200", srv["cookies"]["owner"])[1]["data"]
+    ids = [m["id"] for m in data["items"]]
+    assert len(set(ids)) == len(ids), "every lead row needs its own id"
+    dupes = [m for m in data["items"] if m["commentId"] == "a1-c1"]
+    assert {m["campaignId"] for m in dupes} == {"camp-a1", "camp-a2"}
+    assert len({m["id"] for m in dupes}) == 2
+    # The id must resolve back to the row's own composite key, never a sibling's.
+    for m in data["items"]:
+        assert m["id"] == lead_uid(m["campaignId"], m["platform"], m["commentId"])
+
+
+def test_status_write_on_a_shared_comment_id_hits_only_its_own_campaign(srv):
+    """The write path resolves the full composite key, so marking camp-a2's copy of
+    `a1-c1` leaves camp-a1's copy untouched."""
+    data = _get(srv["base"], "/api/leads?pageSize=200", srv["cookies"]["owner"])[1]["data"]
+    by_id = {m["id"]: m for m in data["items"]}
+    target = by_id[lead_uid("camp-a2", "instagram", "a1-c1")]
+    code, resp = _post(srv["base"], "/api/status",
+                       {"campaignId": target["campaignId"], "platform": target["platform"],
+                        "commentId": target["commentId"], "status": "in_progress"},
+                       srv["cookies"]["owner"])
+    assert code == 200 and resp["ok"] is True
+    after = {m["id"]: m for m in
+             _get(srv["base"], "/api/leads?pageSize=200", srv["cookies"]["owner"])[1]["data"]["items"]}
+    assert after[lead_uid("camp-a2", "instagram", "a1-c1")]["status"] == "in_progress"
+    assert after[lead_uid("camp-a1", "instagram", "a1-c1")]["status"] == "interested"
+
+
+# ----- spend is reported from spend_log, not inferred from leads -----
+
+def test_campaign_with_spend_but_no_leads_reports_its_spend(srv):
+    """A campaign that burned budget without capturing a lead still shows the money.
+
+    The rollup used to be built from `matches`, so a lead-less campaign had no row
+    at all and the card defaulted to `spent: 0` — while /api/reports summed the very
+    same dollars under spendByStage."""
+    resp = _get(srv["base"], "/api/campaigns", srv["cookies"]["owner"])[1]
+    card = next(c for c in resp["CAMPAIGNS"] if c["id"] == _DRY_CAMPAIGN)
+    assert card["leads"] == 0
+    assert card["spent"] == _DRY_SPEND
+    # No lead means no cost-per-lead — a null, never a division by zero.
+    assert card["cpl"] is None
+
+
+def test_campaigns_and_reports_agree_on_org_spend(srv):
+    """The two payloads must not contradict each other about the same money."""
+    cards = _get(srv["base"], "/api/campaigns", srv["cookies"]["owner"])[1]["CAMPAIGNS"]
+    month = _get(srv["base"], "/api/reports", srv["cookies"]["owner"])[1]["REPORTS"]["month"]
+    card_total = round(sum(c["spent"] for c in cards), 4)
+    stage_total = round(sum(s["value"] for s in month["spendByStage"]), 4)
+    assert card_total == stage_total == _DRY_SPEND
+    per_campaign = {c["id"]: c["spend"] for c in month["perCampaign"]}
+    assert per_campaign[_DRY_CAMPAIGN] == _DRY_SPEND

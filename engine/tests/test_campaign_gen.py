@@ -182,7 +182,11 @@ def test_assemble_draft_coerces_and_defaults():
     draft = assemble_draft(raw, ProductContext())
     assert draft["platform"] == "instagram"      # unknown platform → default
     assert draft["objective"] == "lead"           # unknown objective → default
-    assert draft["threshold"] == 1.0              # clamped into [0,1]
+    # Clamped INTO the open interval the bridge accepts, not onto its edge: the
+    # save endpoint now rejects 0 and 1 (0 matches every comment, 1 matches none),
+    # so clamping to exactly 1.0 would produce a draft that cannot be saved — which
+    # reads to an operator as "generation is broken".
+    assert draft["threshold"] == 0.99
     assert draft["seedHashtags"] == "a, b"        # list → comma string
     assert draft["languages"] == "en, ru"
     assert draft["extractDef"] == "- phone\n- email"   # bulletized
@@ -517,3 +521,114 @@ def test_generate_advanced_prompts_keeps_only_contract_carrying():
 def test_generate_advanced_prompts_tolerates_garbage():
     out = generate_advanced_prompts({"relevanceDef": "x"}, _StubRouter([]), model=None)
     assert out == {}   # empty model reply → no prompts, never raises
+
+
+# ----- seed feedback from the per-source ledger (Campaign Lab, Sheet #1/D) -----
+
+def test_seed_feedback_block_is_empty_without_history():
+    from aizu.campaign_gen import _seed_feedback_block
+    assert _seed_feedback_block(None) == ""
+    assert _seed_feedback_block({}) == ""
+    assert _seed_feedback_block({"productive": [], "dead": []}) == ""
+
+
+def test_seed_history_reaches_the_synthesis_prompt():
+    """The generator invents seeds from parametric memory and has never been told
+    how the last batch fared, so it re-proposes dead tags indefinitely."""
+    router = _StubRouter([GOOD_BRIEF, {}])
+    generate_campaign(text="renovation in Tashkent", router=router,
+                      seed_history={"productive": ["remont"], "dead": ["uzbekistan"]})
+    prompt = router.calls[0]["user"]
+    assert "remont" in prompt and "uzbekistan" in prompt
+    assert "Do NOT propose them" in prompt
+
+
+def test_no_seed_history_leaves_the_prompt_byte_identical():
+    a = _StubRouter([GOOD_BRIEF, {}])
+    b = _StubRouter([GOOD_BRIEF, {}])
+    generate_campaign(text="renovation in Tashkent", router=a)
+    generate_campaign(text="renovation in Tashkent", router=b, seed_history={})
+    assert a.calls[0]["user"] == b.calls[0]["user"]
+
+
+# ----- the widening must reach channels[0], not just the flat field -----
+
+# A brief whose audience writes Cyrillic, so the OFFLINE script fan-out actually
+# widens the seed list. With an English brief nothing is added and these tests
+# would pass with the bug still present.
+_UZ_BRIEF = {**GOOD_BRIEF, "seedNouns": ["remont"], "seedHashtags": ["remont"],
+             "languageMix": ["uz"]}
+
+
+def test_seed_widening_reaches_channel_zero_on_a_multi_platform_draft():
+    """`assemble_draft` copies the model's PRE-widening tags into channels[0].
+    The panel renders CHANNEL rows (not the flat fields) whenever channels exist,
+    and briefFromForm re-sources the flat scalars FROM channels[0] on save — so a
+    widened flat field alone is invisible in the UI and discarded at save time."""
+    router = _StubRouter([_UZ_BRIEF, {}])
+    draft = generate_campaign(text="renovation", router=router,
+                              platforms=["instagram", "youtube"])
+    # Guard: if this ever stops holding the test has gone trivial and proves nothing.
+    assert draft["seedHashtags"] != "remont", "no widening happened — test is vacuous"
+    assert draft["channels"][0]["seedHashtags"] == draft["seedHashtags"]
+
+
+def test_the_other_channels_keep_their_empty_seeds():
+    router = _StubRouter([_UZ_BRIEF, {}])
+    draft = generate_campaign(text="renovation", router=router,
+                              platforms=["instagram", "youtube", "reddit"])
+    assert draft["seedHashtags"] != "remont"
+    assert [c["seedHashtags"] for c in draft["channels"][1:]] == ["", ""]
+    assert len(draft["channels"]) == 3
+
+
+def test_a_single_platform_draft_has_no_channels_to_sync():
+    router = _StubRouter([GOOD_BRIEF, {}])
+    draft = generate_campaign(text="running shoes", router=router,
+                              platforms=["instagram"])
+    assert "channels" not in draft
+
+
+# ----- seed evidence is split by KIND (Sheet #2 wiring, ultracode review) -----
+
+def test_accounts_and_hashtags_are_presented_as_different_evidence():
+    """One merged list invited the model to propose a handle where a tag belongs.
+    `source_stats.kind` always carried the distinction; seed_history ignored it."""
+    router = _StubRouter([GOOD_BRIEF, {}])
+    generate_campaign(text="renovation", router=router, seed_history={
+        "hashtag": {"productive": ["remont"], "dead": ["deadtag"]},
+        "account": {"productive": ["acme_remont"], "dead": ["dead_acct"]}})
+    prompt = router.calls[0]["user"]
+    assert "seed hashtags / search terms" in prompt
+    assert "seed ACCOUNTS (handles)" in prompt
+    for term in ("remont", "deadtag", "acme_remont", "dead_acct"):
+        assert term in prompt
+
+
+def test_a_kind_with_no_history_contributes_no_heading():
+    router = _StubRouter([GOOD_BRIEF, {}])
+    generate_campaign(text="renovation", router=router, seed_history={
+        "hashtag": {"productive": ["remont"], "dead": []},
+        "account": {"productive": [], "dead": []}})
+    prompt = router.calls[0]["user"]
+    assert "seed hashtags / search terms" in prompt
+    assert "seed ACCOUNTS" not in prompt
+
+
+def test_the_legacy_flat_shape_still_renders():
+    router = _StubRouter([GOOD_BRIEF, {}])
+    generate_campaign(text="renovation", router=router,
+                      seed_history={"productive": ["x"], "dead": ["y"]})
+    prompt = router.calls[0]["user"]
+    assert "These seed terms have produced" in prompt
+
+
+def test_proven_accounts_are_offered_as_evidence_but_never_auto_injected():
+    """`_resolve_home_feed` turns the algorithmic home feed OFF the moment any
+    seed account exists, so injecting the first one is a MODE SWITCH for the whole
+    campaign — not an addition. The model may choose them; we never force them."""
+    router = _StubRouter([{**GOOD_BRIEF, "seedAccounts": []}, {}])
+    draft = generate_campaign(text="renovation", router=router, seed_history={
+        "account": {"productive": ["proven_acct"], "dead": []}})
+    assert "proven_acct" in router.calls[0]["user"]      # offered
+    assert draft["seedAccounts"] == ""                    # …never forced

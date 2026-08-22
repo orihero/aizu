@@ -1,14 +1,28 @@
-"""Instagram engine prompts — the shipped default / reference baselines.
+"""Instagram engine prompts.
 
-These are vertical-neutral relevance/match/vision system prompts written around
-a generic SaaS product (the shipped Acme example campaign). They are the eval
-baseline (scripts/eval imports them) and a test locks the campaign.md copy
-against them verbatim — edit a constant and its campaign.md copy together, then
-re-run scripts/eval/run_eval.py.
+TWO FAMILIES, and the difference matters:
 
-The vertical lives in config, not code: a live run reads its own prompts from
-campaign.md and these are only the domain fallback/reference. The
-platform-neutral generic fallbacks live in aizu.core.prompts.
+* ``SYSTEM_RELEVANCE`` / ``SYSTEM_MATCH`` / ``SYSTEM_VISION`` — the shipped **Acme
+  SaaS example**. Explicitly vertical: they say "the reel is posted by the software
+  company" and hunt "a SOFTWARE / SaaS product". They are the eval baseline
+  (``scripts/eval`` imports them) and ``tests/test_config.py`` locks the
+  ``config/campaign.md`` copy against them verbatim — edit a constant and its
+  campaign.md copy together, then re-run ``scripts/eval/run_eval.py``. These are
+  NOT defaults and must never be wired as one.
+
+* ``IG_RELEVANCE`` / ``ig_match()`` / ``IG_VISION`` — the actual **fallbacks** the
+  cascade passes when a campaign omits its own prompts. Vertical-NEUTRAL and
+  Instagram-shaped, exactly like ``engines/x/prompts.py``: they speak of
+  reel/caption/on-screen-text/commenter and carry zero domain assumptions, because
+  the brief supplies the domain.
+
+Why the split exists (Campaign Lab, Remedy Sheet #3 / Remedy C): the IG cascade
+passed ``campaign.relevance_prompt`` straight through with no fallback, so a
+panel-authored campaign with blank prompts ran on the ~50-word ``SYSTEM_GENERIC``
+in ``core/prompts.py`` — this whole module was dead code for DB campaigns. The
+obvious fix, "wire this module in like the other engines do", would have imposed
+the SaaS rubric above on every Instagram campaign, including the shipped
+Tashkent renovation brief. So the fallbacks were written fresh instead.
 """
 from __future__ import annotations
 
@@ -108,3 +122,139 @@ OUTPUT: Return ONLY a single minified JSON object, no prose or fences:
 
 # Fallback for any unrecognized stage — keeps the router safe if a new call
 # site is added before its prompt is written.
+
+
+# ===========================================================================
+# The actual cascade fallbacks — vertical-neutral, Instagram-shaped.
+# Mirrors engines/x/prompts.py in structure and tone so the two engines stay
+# comparable in an eval; the vertical comes from the brief, never from here.
+# ===========================================================================
+
+IG_RELEVANCE = (
+    "You are a precise RELEVANCE gate for an Instagram Reel discovery agent. You "
+    "decide whether ONE reel belongs to the campaign, judging its CAPTION and any "
+    "ON-SCREEN text against the CAMPAIGN BRIEF you are given. Judge by MEANING "
+    "regardless of language (captions are frequently Uzbek, Russian, or a mix of "
+    "both with English). Be decisive: a reel is RELEVANT only if its primary "
+    "subject fits the brief; off-topic content scores low even when it mentions "
+    "related words, shows a price, or is itself commerce of some other kind. "
+    "Captions on this platform are often thin, emoji-heavy or hashtag-only — when "
+    "the text carries too little signal to judge, use a borderline score "
+    "(0.40-0.55) so the engine can escalate to the video instead of guessing "
+    "confidently.\n"
+    'SCORE 0.0-1.0; "label"="relevant" iff score>=0.50. Return ONLY a single '
+    'minified JSON object, no prose or fences: '
+    '{"label":"relevant"|"irrelevant","score":0.0,"confidence":0.0,'
+    '"reason":"brief justification","extracted":{}}'
+)
+
+IG_VISION = (
+    "You read the ON-SCREEN TEXT burned into one OR MORE Instagram Reel frames and "
+    "judge whether the reel fits the CAMPAIGN BRIEF you are given. Multiple frames "
+    "come from the same reel at different moments — read the text across ALL of "
+    "them and judge the reel as a whole. On-screen text is frequently Uzbek, "
+    "Russian or mixed; read all of it and judge by meaning. A price, a phone "
+    "number or a logo alone does not make a reel on-brief — the SUBJECT must fit. "
+    "If there is little or no legible text, or it is ambiguous, use a borderline "
+    "score (0.40-0.55) so the engine can escalate; do not guess confidently.\n"
+    'SCORE 0.0-1.0; "label"="relevant" iff score>=0.50. Return ONLY a single '
+    'minified JSON object, no prose or fences: '
+    '{"label":"relevant"|"irrelevant","score":0.0,"confidence":0.0,'
+    '"reason":"what on-screen text you read + verdict","extracted":{}}'
+)
+
+
+def ig_match(threshold: float = 0.7) -> str:
+    """The Instagram comment-match fallback, with the campaign's OWN threshold
+    templated into the rubric prose.
+
+    A function, not a constant, for one specific reason: the shipped SaaS prompt
+    above hard-codes "the 0.70 threshold separates genuine inquiry from banter"
+    in prose while the gate actually compares against ``campaign.threshold``
+    (``cascade.score_comment``: ``is_match = d.score >= self.campaign.threshold``).
+    An operator who moves the threshold knob to 0.55 therefore silently
+    desynchronizes the rubric the model is following from the gate that reads its
+    answer — the model keeps aiming at 0.70. Templating removes the second source
+    of truth (Campaign Lab, Remedy Sheet #3 / Remedy C).
+    """
+    t = min(max(float(threshold), 0.0), 1.0)
+    # Band edges are placed RELATIVE to the live threshold, as FRACTIONS of the
+    # space either side of it, so they stay ordered and meaningful wherever it is
+    # set. Fixed offsets do not: at t=0.05 a "t - 0.20" edge collapses to three
+    # zero-width bands, and a hard-coded top band of "0.90-1.00" INVERTS at
+    # t=0.95 ("0.95-0.90"). Both printed happily before this.
+    weak_hi = t * 0.40
+    near_lo = t * 0.75
+    strong_lo = t + (1.0 - t) * 0.60
+    edges = [0.0, weak_hi, near_lo, t, strong_lo, 1.0]
+    rounded = [round(e, 2) for e in edges]
+    if all(a < b for a, b in zip(rounded, rounded[1:])):
+        bands = (
+            f"   {rounded[0]:.2f}-{rounded[1]:.2f}  NOISE: praise, jokes, emoji, "
+            'tagging, greetings, complaints, or anyone selling. label "no".\n'
+            f"   {rounded[1]:.2f}-{rounded[2]:.2f}  WEAK: vague interest with no "
+            'clear ask. label "no".\n'
+            f"   {rounded[2]:.2f}-{rounded[3]:.2f}  BORDERLINE: leans toward "
+            'inquiry but underspecified. label "no".\n'
+            f"   {rounded[3]:.2f}-{rounded[4]:.2f}  CLEAR INQUIRY: a genuine "
+            "price/availability/contact/details question, or stated intent to "
+            'buy, hire, book or order. label "yes".\n'
+            f"   {rounded[4]:.2f}-1.00  EXPLICIT: clear intent PLUS a concrete "
+            "signal — contact details volunteered so they can be reached, a "
+            'quantity, a deadline, a named city or a stated budget. label "yes".\n'
+        )
+    else:
+        # An extreme threshold leaves no room for five distinct bands. A numeric
+        # ladder would be degenerate or inverted, so drop to qualitative guidance
+        # rather than print ranges that contradict themselves.
+        bands = (
+            "   Score BELOW the threshold for: praise, jokes, emoji, tagging, "
+            "greetings, complaints, anyone selling, and vague interest with no "
+            'clear ask. label "no".\n'
+            "   Score AT OR ABOVE it for a genuine price/availability/contact/"
+            "details question or stated intent to buy, hire, book or order; score "
+            "near 1.00 when that intent comes with a concrete signal (contact "
+            "details volunteered, a quantity, a deadline, a named city, a stated "
+            'budget). label "yes".\n'
+        )
+    return (
+        "You are a precise PURCHASE/ACTION-INTENT classifier for Instagram Reel "
+        "comments in a lead-gen engine. The reel is authored by someone else; you "
+        "score ONLY the COMMENTER. A lead shows intent to buy, hire, book, visit, "
+        "order or otherwise acquire what the CAMPAIGN BRIEF targets, or asks a "
+        "genuine price / availability / contact / details question about it. Judge "
+        "intent by MEANING regardless of language — comments are frequently Uzbek "
+        "(Latin or Cyrillic), Russian, or code-switched, and a price question is a "
+        "price question in any of them.\n"
+        "INPUT: the content may contain a 'REEL BEING COMMENTED ON' block "
+        "(caption and on-screen text) followed by 'COMMENT TO JUDGE', or just the "
+        "bare comment. Score the COMMENT alone — the reel block is context for "
+        "extraction, never evidence of the commenter's intent.\n"
+        "EXCLUDE as noise (force a LOW score): praise, congratulations, jokes, "
+        "sarcasm, emoji-only or reaction-only, tagging a friend with no intent of "
+        "their own, greetings, generic chatter, and price COMPLAINTS with no "
+        "intent to proceed.\n"
+        "EXCLUDE the SUPPLY side. A commenter OFFERING or SELLING what the brief "
+        "targets is not a lead, however commercial they look. The discriminator is "
+        "DIRECTION, not vocabulary: an imperative aimed at the reader ('order "
+        "now', 'zakazyvayte', 'yozing'), a volunteered price or price list ('from "
+        "99 000'), a stock claim ('bizda bor') or an unprompted phone number is a "
+        "SELLER. The same words in a question ('how much?', 'narxi qancha?', "
+        "'do you have it?') are a BUYER. A buyer who leaves their own number so "
+        "they can be called back is still a buyer.\n"
+        "ON BEHALF OF SOMEONE ELSE STILL COUNTS: evaluating or asking for a team, "
+        "a company or a client is genuine demand.\n"
+        f"SCORE RUBRIC (0.0-1.0). The campaign's decision threshold is {t:.2f}; "
+        f'"label"="yes" iff score>={t:.2f}, else "no".\n'
+        + bands +
+        '"confidence" (0..1) = how sure you are given the ambiguity; lower it for '
+        "very short comments. When genuinely torn between noise and weak intent, "
+        f"score BELOW {t:.2f} rather than above it.\n"
+                "EXTRACTION: fill \"extracted\" from the COMMENT first; fall back to the "
+        "reel block only for fields about the offer itself, never for the "
+        "commenter's own contact details (a phone in the caption is the SELLER's). "
+        "Use null when neither source states a field. NEVER invent a value.\n"
+        "OUTPUT: Return ONLY a single minified JSON object, no prose or fences: "
+        '{"label":"yes"|"no","score":0.0,"confidence":0.0,'
+        '"reason":"brief justification","extracted":{}}'
+    )

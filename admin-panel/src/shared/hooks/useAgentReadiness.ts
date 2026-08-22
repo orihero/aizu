@@ -29,7 +29,7 @@ export interface UseAgentReadinessResult {
  * anything else that cares about "can a live run start right now" read the same data
  * instead of each opening their own probe.
  */
-export function useAgentReadiness(): UseAgentReadinessResult {
+export function useAgentReadiness(campaignId?: string): UseAgentReadinessResult {
   const repository = usePanelRepository();
   // queryFn takes no args, so a manually-forced live probe is threaded through a ref
   // the next queryFn invocation reads and clears — same trick useRunActivity uses for
@@ -38,11 +38,16 @@ export function useAgentReadiness(): UseAgentReadinessResult {
   const [isRechecking, setIsRechecking] = useState(false);
 
   const { data, isLoading, isError, refetch } = useQuery({
-    queryKey: queryKeys.agentReadiness,
+    // Scoped and unscoped answers are cached apart — see queryKeys.agentReadinessFor.
+    queryKey: campaignId ? queryKeys.agentReadinessFor(campaignId) : queryKeys.agentReadiness,
     queryFn: async () => {
       const refresh = forceRefresh.current;
       forceRefresh.current = false;
-      return unwrap(await repository.getAgentReadiness(refresh ? { refresh: true } : undefined));
+      const opts: { refresh?: true; campaignId?: string } = {};
+      if (refresh) opts.refresh = true;
+      if (campaignId) opts.campaignId = campaignId;
+      return unwrap(await repository.getAgentReadiness(
+        Object.keys(opts).length > 0 ? opts : undefined));
     },
     refetchInterval: POLL_INTERVAL_MS,
     staleTime: 30_000,

@@ -152,6 +152,28 @@ def _build_sessions(store: Store, cid: str) -> list[dict[str, Any]]:
     return out
 
 
+def lead_uid(campaign_id: str, platform: str, comment_id: str) -> str:
+    """The panel-facing UNIQUE id of a lead.
+
+    A lead's real identity is the `matches` composite primary key
+    `(campaign_id, platform, comment_id)` — a `comment_id` is only unique inside
+    one platform's id namespace, and the same commenter can legitimately appear
+    under two campaigns. Flattening the row to a bare `comment_id` (as this
+    payload used to) collapsed those into ONE panel row, so clicking a lead in
+    campaign A could open — and write status to — campaign B's lead.
+
+    The encoding is a `|`-joined triple with `%` and `|` percent-escaped inside
+    each part, which makes it injective (distinct triples never collide) and
+    safe to carry in a URL path segment. `admin-panel/src/shared/lib/leadId.ts`
+    implements the SAME encoding character-for-character — keep them in lockstep.
+    The panel treats the value as opaque: it never parses it back, and every
+    write resolves the composite key from the record's own
+    `campaignId`/`platform`/`commentId` fields.
+    """
+    return "|".join(str(part).replace("%", "%25").replace("|", "%7C")
+                    for part in (campaign_id, platform, comment_id))
+
+
 def _build_matches(store: Store, cid: str) -> list[dict[str, Any]]:
     out = []
     # Batch-fetch the per-lead audit log + notes once (avoids an N+1 across leads).
@@ -167,7 +189,8 @@ def _build_matches(store: Store, cid: str) -> list[dict[str, Any]]:
         notes = notes_map.get((platform, m["comment_id"]), [])
         last = history[-1] if history else None
         out.append({
-            "id": m["comment_id"],
+            # Unique per (campaign, platform, comment) — never a bare comment_id.
+            "id": lead_uid(m["campaign_id"], platform, m["comment_id"]),
             "commentId": m["comment_id"],
             "campaignId": m["campaign_id"],
             "platform": platform,

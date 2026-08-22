@@ -1,13 +1,16 @@
 """HTTP tests for the panel bridge server — SPA static serving, the live
 `/api/state` JSON feed, and the v1 status-mark write endpoint (PRD §11:
 matches table status-mark is a v1 panel surface)."""
+import http.client
 import json
+import logging
 import os
 import shutil
 import socket
 import tempfile
 import threading
 import urllib.error
+import urllib.parse
 import urllib.request
 from pathlib import Path
 
@@ -127,7 +130,7 @@ def panel():
     # A ready agent: these tests exercise the run control plane, not the readiness
     # gate POST /api/run puts in front of a LIVE run (that gate has its own file,
     # test_agent_readiness.py). Without the stub every live-run case here would be
-    # answered 409 agent_not_ready, since CI has no warmed Chrome on :9222.
+    # answered 409 agent_not_ready, since CI has no warmed Chrome on :9333.
     httpd = serve(db_path, panel_dir, str(CONFIG), port=0, run_manager=manager,
                   readiness_probe=_ready_probe)
     port = httpd.server_address[1]
@@ -180,6 +183,19 @@ def _post(url: str, body: bytes) -> tuple[int, dict]:
 
 def _campaign_id() -> str:
     return load_campaign(CONFIG / "campaign.md").campaign_id
+
+
+def _owner_org_id(panel) -> int:
+    """The org the module-scoped `panel` fixture's owner signed up into. Needed
+    wherever a test seeds a campaign row straight into the store: an UNREGISTERED
+    brief (org_id NULL) is not the caller's campaign, so a brief-carrying save is an
+    ambiguous create, not the edit those tests mean to exercise."""
+    store = Store(panel["db"])
+    try:
+        return int(store._conn.execute(
+            "SELECT id FROM organizations ORDER BY id LIMIT 1").fetchone()[0])
+    finally:
+        store.close()
 
 
 def test_index_served_as_is(panel):
@@ -641,9 +657,14 @@ def test_campaign_brief_persists_and_surfaces(panel):
                   "seedChannels": ["UC_x"], "languageMix": ["en"]},
     }).encode())
     assert code == 200 and resp["ok"] is True
+    # A create allocates a key in the caller's own org namespace — read the id back
+    # off the response rather than assuming the requested slug (see
+    # _resolve_campaign_target: never reusing the bare id is what removes the
+    # cross-tenant existence oracle).
+    created_id = resp["data"]["campaign_id"]
 
     _, raw = _get(panel["base"] + "/api/state")
-    camp = next(c for c in json.loads(raw)["CAMPAIGNS"] if c["id"] == "ui-brief-test")
+    camp = next(c for c in json.loads(raw)["CAMPAIGNS"] if c["id"] == created_id)
     assert camp["platform"] == "youtube" and camp["threshold"] == 0.8
     assert camp["briefForm"]["relevanceDef"] == "saas product"
     assert camp["briefForm"]["seedChannels"] == ["UC_x"]
@@ -966,17 +987,18 @@ def test_campaign_brief_include_home_feed_round_trips(panel):
                   "includeHomeFeed": True},
     }).encode())
     assert code == 200 and resp["ok"] is True
+    created_id = resp["data"]["campaign_id"]
 
     from aizu.core.store import Store
     store = Store(panel["db"])
     try:
-        stored = store.get_campaign_brief("homefeed-test")
+        stored = store.get_campaign_brief(created_id)
     finally:
         store.close()
     assert stored["include_home_feed"] is True   # explicit override persisted as a bool
 
     _, raw = _get(panel["base"] + "/api/state")
-    camp = next(c for c in json.loads(raw)["CAMPAIGNS"] if c["id"] == "homefeed-test")
+    camp = next(c for c in json.loads(raw)["CAMPAIGNS"] if c["id"] == created_id)
     assert camp["briefForm"]["includeHomeFeed"] is True
 
 
@@ -1040,14 +1062,15 @@ def test_campaign_channels_round_trip_via_api(panel):
             {"platform": "instagram", "seedHashtags": ["a"]},
             {"platform": "youtube", "seedChannels": ["UC1"]}]}}).encode())
     assert code == 200 and resp["ok"] is True
+    created_id = resp["data"]["campaign_id"]
     store = Store(panel["db"])
     try:
-        stored = store.get_campaign_brief("multi-rt")
+        stored = store.get_campaign_brief(created_id)
     finally:
         store.close()
     assert [c["platform"] for c in stored["channels"]] == ["instagram", "youtube"]
     _, raw = _get(panel["base"] + "/api/state")
-    camp = next(c for c in json.loads(raw)["CAMPAIGNS"] if c["id"] == "multi-rt")
+    camp = next(c for c in json.loads(raw)["CAMPAIGNS"] if c["id"] == created_id)
     assert camp["platforms"] == ["instagram", "youtube"]           # C6 chips
     assert [c["platform"] for c in camp["briefForm"]["channels"]] == ["instagram", "youtube"]
 
@@ -1056,7 +1079,8 @@ def test_campaign_channels_absent_is_no_change(panel):
     from aizu.core.store import Store
     store = Store(panel["db"])
     store.upsert_campaign_brief("nochg", {"platform": "instagram", "channels": [
-        {"platform": "instagram"}, {"platform": "youtube"}]})
+        {"platform": "instagram"}, {"platform": "youtube"}]},
+        org_id=_owner_org_id(panel))
     store.close()
     # A save WITHOUT channels must preserve the stored channels (merge sentinel).
     code, resp = _post(panel["base"] + "/api/campaign", json.dumps({
@@ -1073,7 +1097,8 @@ def test_campaign_channels_empty_list_clears_stored(panel):
     from aizu.core.store import Store
     store = Store(panel["db"])
     store.upsert_campaign_brief("clearch", {"platform": "instagram", "channels": [
-        {"platform": "instagram"}, {"platform": "youtube"}]})
+        {"platform": "instagram"}, {"platform": "youtube"}]},
+        org_id=_owner_org_id(panel))
     store.close()
     # An explicit [] clears the multi-platform fan-out back to single-platform.
     code, resp = _post(panel["base"] + "/api/campaign", json.dumps({
@@ -1099,7 +1124,8 @@ def test_campaign_brief_save_merges_and_preserves_prompts(panel):
     store = Store(panel["db"])
     store.upsert_campaign_brief("merge-test", {
         "platform": "instagram", "threshold": 0.7, "relevance_def": "old",
-        "match_prompt": "TUNED MATCH PROMPT", "vision_prompt": "TUNED VISION"})
+        "match_prompt": "TUNED MATCH PROMPT", "vision_prompt": "TUNED VISION"},
+        org_id=_owner_org_id(panel))
     store.close()
     # A panel save that leaves the prompt fields blank must NOT wipe them
     # (blank ⇒ keep stored; see _BRIEF_BLANK_DROP_KEYS).
@@ -1186,9 +1212,10 @@ def test_campaign_brief_persists_prompts_from_form(panel):
                   "matchPrompt": "CUSTOM MATCH PROMPT", "relevancePrompt": "CUSTOM REL"},
     }).encode())
     assert code == 200 and resp["ok"] is True
+    created_id = resp["data"]["campaign_id"]
     store = Store(panel["db"])
     try:
-        stored = store.get_campaign_brief("prompted")
+        stored = store.get_campaign_brief(created_id)
     finally:
         store.close()
     assert stored["match_prompt"] == "CUSTOM MATCH PROMPT"
@@ -1196,7 +1223,7 @@ def test_campaign_brief_persists_prompts_from_form(panel):
 
     # …and the edit form gets them back to round-trip (no silent blanking).
     _, raw = _get(panel["base"] + "/api/state")
-    camp = next(c for c in json.loads(raw)["CAMPAIGNS"] if c["id"] == "prompted")
+    camp = next(c for c in json.loads(raw)["CAMPAIGNS"] if c["id"] == created_id)
     assert camp["briefForm"]["matchPrompt"] == "CUSTOM MATCH PROMPT"
     assert camp["extractFields"] == ["phone", "email"]
 
@@ -1245,6 +1272,32 @@ def test_settings_whitelist_and_persist(panel):
     _, raw = _get(panel["base"] + "/api/state")
     cfg = json.loads(raw)["CONFIG"]
     assert cfg["productName"] == "LeadFlow" and cfg["matchThreshold"] == 0.8
+
+
+def test_settings_rejects_a_non_finite_number(panel):
+    """Python's json parser accepts the non-standard `NaN`/`Infinity` literals, and a
+    type-only isinstance check let them through: `json.dumps` (allow_nan defaults True)
+    wrote the bare token into settings.value — invalid JSON for any other reader — and
+    the operator's configured value then read back as null forever, scrubbed by the
+    response encoder on every request with no error to explain it. Must be a 400 at the
+    boundary, and nothing may be persisted."""
+    _, before = _get(panel["base"] + "/api/state")
+    threshold_before = json.loads(before)["CONFIG"]["matchThreshold"]
+    for literal in (b"Infinity", b"-Infinity", b"NaN"):
+        body = b'{"settings":{"budgetCapUsd":' + literal + b',"matchThreshold":0.55}}'
+        code, resp = _post(panel["base"] + "/api/settings", body)
+        assert code == 400, (literal, resp)
+        assert resp["error"] == "budgetCapUsd must be a finite number"
+    store = Store(panel["db"])
+    try:
+        rows = store._conn.execute(
+            "SELECT value FROM settings WHERE key='budgetCapUsd'").fetchall()
+    finally:
+        store.close()
+    assert [r["value"] for r in rows] == []      # nothing written, not even a token
+    # …and the sibling key in the same rejected payload did not land either.
+    _, raw = _get(panel["base"] + "/api/state")
+    assert json.loads(raw)["CONFIG"]["matchThreshold"] == threshold_before
 
 
 def test_settings_rejects_unknown_key(panel):
@@ -1778,6 +1831,89 @@ def test_run_activity_done_without_mirrored_session_keeps_polling(panel):
     assert resp["data"]["finished"] is False
 
 
+def _nack_fleet_job(db_path: str, *, job_id: str, reason: str,
+                    poison: bool = False, worker_id: str = "w-nack") -> dict:
+    """Drive a seeded job through a REAL nack (lease it to `worker_id` with a targeted
+    UPDATE first, mirroring `_enqueue_fleet_job`'s determinism on the shared module DB).
+    poison=True dead-letters immediately; otherwise it requeues with backoff."""
+    store = Store(db_path)
+    try:
+        store._conn.execute(
+            "UPDATE jobs SET status='leased', leased_by=?, lease_expires_at=? WHERE id=?",
+            (worker_id, 1e12, job_id))
+        store._conn.commit()
+        return store.nack_job(job_id=job_id, worker_id=worker_id, reason=reason,
+                              poison=poison)
+    finally:
+        store.close()
+
+
+def test_run_activity_surfaces_the_fleet_failure_reason(panel):
+    """B6: a fleet run whose worker could not attach Chrome must not read as a blank red
+    'Finished on the fleet' — the nack reason has to cross the HTTP boundary."""
+    cid = _campaign_id()
+    _enqueue_fleet_job(panel["db"], job_id="jf-why", run_id="run-why", campaign_id=cid)
+    out = _nack_fleet_job(panel["db"], job_id="jf-why", reason="cdp_unreachable",
+                          poison=True)
+    assert out["outcome"] == "dead_lettered"
+    _seed_run_activity(panel["db"], run_id="run-why")
+    code, resp = _activity(panel, "?runId=run-why")
+    assert code == 200
+    fj = resp["data"]["fleetJob"]
+    assert fj["status"] == "failed"
+    assert fj["reason"] == "cdp_unreachable"
+    assert fj["attempts"] == 1
+    assert fj["maxAttempts"] >= 1
+
+
+def test_run_activity_surfaces_the_reason_of_a_requeued_attempt(panel):
+    # A requeued (still-alive) job carries its last failure too, so the drawer can say
+    # why the run is stuck retrying instead of showing an unexplained queued job.
+    cid = _campaign_id()
+    _enqueue_fleet_job(panel["db"], job_id="jf-retry", run_id="run-retry",
+                       campaign_id=cid)
+    out = _nack_fleet_job(panel["db"], job_id="jf-retry", reason="cdp_unreachable")
+    assert out["outcome"] == "requeued"
+    _seed_run_activity(panel["db"], run_id="run-retry")
+    code, resp = _activity(panel, "?runId=run-retry")
+    assert code == 200
+    assert resp["data"]["fleetJob"]["status"] == "queued"
+    assert resp["data"]["fleetJob"]["reason"] == "cdp_unreachable"
+
+
+def test_run_activity_reads_halt_reason_off_an_acked_summary(panel):
+    # ack overwrites `result` with the engine summary, whose equivalent key is
+    # `halt_reason` — surface that too, while `status` stays 'done' so the panel never
+    # labels a successful run failed.
+    cid = _campaign_id()
+    _enqueue_fleet_job(panel["db"], job_id="jf-halt", run_id="run-halt", campaign_id=cid)
+    store = Store(panel["db"])
+    try:
+        store._conn.execute(
+            "UPDATE jobs SET status='leased', leased_by='w-ack', lease_expires_at=? "
+            "WHERE id=?", (1e12, "jf-halt"))
+        store._conn.commit()
+        store.ack_job(job_id="jf-halt", worker_id="w-ack",
+                      summary={"halt_reason": "daytime", "matches": 0})
+    finally:
+        store.close()
+    _seed_run_activity(panel["db"], run_id="run-halt")
+    code, resp = _activity(panel, "?runId=run-halt")
+    assert code == 200
+    assert resp["data"]["fleetJob"]["status"] == "done"
+    assert resp["data"]["fleetJob"]["reason"] == "daytime"
+
+
+def test_run_activity_reason_is_null_for_a_job_that_never_failed(panel):
+    cid = _campaign_id()
+    _enqueue_fleet_job(panel["db"], job_id="jf-clean", run_id="run-clean",
+                       campaign_id=cid, status="leased")
+    _seed_run_activity(panel["db"], run_id="run-clean")
+    code, resp = _activity(panel, "?runId=run-clean")
+    assert code == 200
+    assert resp["data"]["fleetJob"]["reason"] is None
+
+
 def _register_campaign(db_path: str, campaign_id: str) -> None:
     """Register a bare campaign_meta row so it surfaces as a card on /api/campaigns
     (the module-scoped DB is shared, so each fleetRunId test uses its own campaign to
@@ -2124,3 +2260,898 @@ def test_json_response_always_sets_content_length(panel):
         f"GET /api/does-not-exist HTTP/1.0\r\nHost: {host}\r\nCookie: {cookie}\r\n\r\n")
     assert b"404" in err_headers, err_headers
     assert b"Content-Length:" in err_headers, err_headers
+
+
+# ----- B9: the enqueue-time spend-cap skip ---------------------------------------
+
+def test_fleet_spend_cap_usd_is_none_when_the_bridge_has_no_cap(monkeypatch):
+    """REVIEW FIX: `AIZU_SPEND_CAP` is a WORKER-plane var — on the hosted split topology
+    the bridge does not have it. Falling back to a hard-coded 20.0 would have the cloud
+    enforce a ceiling no box uses, and since `total_spend` is a lifetime sum that never
+    resets, any campaign past $20 of rolled-up fleet spend would 409 forever with no
+    operator control able to lift it. Unknown cloud-side cap MUST mean 'do not skip'."""
+    from aizu.server import _fleet_spend_cap_usd
+    monkeypatch.delenv("AIZU_SPEND_CAP", raising=False)
+    assert _fleet_spend_cap_usd() is None
+    monkeypatch.setenv("AIZU_SPEND_CAP", "5.5")
+    assert _fleet_spend_cap_usd() == 5.5
+    for bad in ("not-a-number", "0", "-3", ""):
+        monkeypatch.setenv("AIZU_SPEND_CAP", bad)
+        assert _fleet_spend_cap_usd() is None
+
+
+def test_fleet_dispatch_does_not_skip_when_the_bridge_knows_no_cap(panel, monkeypatch):
+    """REVIEW FIX (the hosted split): bridge without AIZU_SPEND_CAP, boxes with a real
+    one. A campaign well past the old 20.0 guess must still dispatch — the box's own cap
+    (re-based by priorSpendUsd, refused pre-spawn by run_one_job when there is no
+    headroom) is the only authority."""
+    monkeypatch.delenv("AIZU_SPEND_CAP", raising=False)
+    _reset_runner(panel)
+    rich_cid = "fix-cap-unknown"
+    store = Store(panel["db"])
+    try:
+        org_id = store._conn.execute(
+            "SELECT id FROM organizations ORDER BY id LIMIT 1").fetchone()[0]
+        store.register_worker(worker_id="w-cap3", token="tok-cap3", org_id=org_id,
+                              capabilities=[[org_id, "instagram", "acme"]])
+        store.upsert_campaign_brief(rich_cid, {"platform": "instagram", "goal": "lead"},
+                                    org_id=org_id)
+        store.upsert_campaign_meta(rich_cid, org_id=org_id, status="live")
+        store.log_spend(rich_cid, "match", 500.0, model="m1")  # way past the old guess
+        store.set_execution_backend("distributed")
+    finally:
+        store.close()
+    try:
+        code, resp = _post(panel["base"] + "/api/run",
+                           json.dumps({"campaignId": rich_cid, "mode": "live"}).encode())
+        assert code == 202, resp
+        assert resp["data"]["jobs"], resp
+    finally:
+        store = Store(panel["db"])
+        try:
+            store.set_execution_backend("in_process")
+        finally:
+            store.close()
+
+
+def test_fleet_dispatch_skips_a_campaign_already_at_its_spend_cap(panel, monkeypatch):
+    """B9's sharp edge. Before the cloud spend total rode the lease, a fresh box always
+    started at $0, so an over-budget campaign never tripped `router._spend_guard` on call
+    one. Now it can — and `_degrade` does NOT stop a run, it returns an abstain-with-low-
+    confidence stand-in, so the job would hold a warmed account for a full duration-capped
+    run producing nothing but degraded verdicts. Never enqueue it in the first place."""
+    monkeypatch.setenv("AIZU_SPEND_CAP", "20.0")
+    _reset_runner(panel)
+    cid = _campaign_id()
+    broke_cid = "fix-over-budget"
+    store = Store(panel["db"])
+    try:
+        org_id = store._conn.execute(
+            "SELECT id FROM organizations ORDER BY id LIMIT 1").fetchone()[0]
+        store.register_worker(worker_id="w-cap", token="tok-cap", org_id=org_id,
+                              capabilities=[[org_id, "instagram", "acme"]])
+        store.upsert_campaign_meta(cid, status="live")
+        with store._tx() as c:
+            c.execute("UPDATE campaign_meta SET archived_at=NULL WHERE campaign_id=?",
+                      (cid,))
+        store.upsert_campaign_brief(broke_cid, {"platform": "instagram", "goal": "lead"},
+                                    org_id=org_id)
+        store.upsert_campaign_meta(broke_cid, org_id=org_id, status="live")
+        store.log_spend(broke_cid, "match", 20.5, model="m1")   # already past the cap
+        store.set_execution_backend("distributed")
+    finally:
+        store.close()
+    try:
+        code, resp = _post(panel["base"] + "/api/run",
+                           json.dumps({"all": True, "mode": "live"}).encode())
+        assert code == 202, resp
+        skip = next(s for s in resp["data"]["skipped"] if s["campaignId"] == broke_cid)
+        # The reason carries both figures so an operator can see WHY it stopped, rather
+        # than a bare string against an invisible ceiling (REVIEW FIX).
+        assert skip["reason"] == "spend cap reached ($20.50 spent of $20.00)"
+        store = Store(panel["db"])
+        try:
+            campaigns = {store.get_job(j)["campaignId"] for j in resp["data"]["jobs"]}
+        finally:
+            store.close()
+        assert broke_cid not in campaigns
+        assert cid in campaigns   # the within-budget campaign still dispatched
+    finally:
+        store = Store(panel["db"])
+        try:
+            store.set_execution_backend("in_process")
+        finally:
+            store.close()
+
+
+def test_fleet_dispatch_409s_a_single_over_budget_campaign(panel, monkeypatch):
+    monkeypatch.setenv("AIZU_SPEND_CAP", "20.0")
+    _reset_runner(panel)
+    broke_cid = "fix-over-budget-solo"
+    store = Store(panel["db"])
+    try:
+        org_id = store._conn.execute(
+            "SELECT id FROM organizations ORDER BY id LIMIT 1").fetchone()[0]
+        store.register_worker(worker_id="w-cap2", token="tok-cap2", org_id=org_id,
+                              capabilities=[[org_id, "instagram", "acme"]])
+        store.upsert_campaign_brief(broke_cid, {"platform": "instagram", "goal": "lead"},
+                                    org_id=org_id)
+        store.upsert_campaign_meta(broke_cid, org_id=org_id, status="live")
+        store.log_spend(broke_cid, "match", 25.0, model="m1")
+        store.set_execution_backend("distributed")
+    finally:
+        store.close()
+    try:
+        code, resp = _post(panel["base"] + "/api/run",
+                           json.dumps({"campaignId": broke_cid, "mode": "live"}).encode())
+        assert code == 409, resp
+        assert "spend cap reached" in resp["error"]
+    finally:
+        store = Store(panel["db"])
+        try:
+            store.set_execution_backend("in_process")
+        finally:
+            store.close()
+
+
+# ----- input-validation / error-handling seam ---------------------------------
+# Four defects that were found by driving the REAL bridge over HTTP, so every test
+# here goes over the wire too: the bugs were only visible in what the socket
+# actually carried (a bare Infinity token, a reset connection, a committed row).
+
+def _hostport(panel) -> tuple[str, int]:
+    parsed = urllib.parse.urlparse(panel["base"])
+    return parsed.hostname, parsed.port
+
+
+def _raw_request(panel, method: str, path: str,
+                 body: bytes | None = None) -> tuple[int, bytes]:
+    """Send a request with http.client (not urllib) and return (status, raw bytes).
+
+    Needed for two reasons urllib cannot serve: the body may contain JSON's
+    non-standard `Infinity`/`NaN` literals, which `json.dumps` will not produce; and
+    the failure mode under test is the server DROPPING the connection with no HTTP
+    response at all, which must surface as an exception here, not be hidden."""
+    host, port = _hostport(panel)
+    conn = http.client.HTTPConnection(host, port, timeout=30)
+    headers = {"Content-Type": "application/json"}
+    if _SESSION_COOKIE:
+        headers["Cookie"] = _SESSION_COOKIE
+    try:
+        conn.request(method, path, body=body, headers=headers)
+        resp = conn.getresponse()
+        return resp.status, resp.read()
+    finally:
+        conn.close()
+
+
+def _reject_non_finite(token: str):
+    """`json.loads(parse_constant=...)` hook: fail on the Infinity/NaN tokens that
+    Python accepts by extension but RFC 8259 — and the panel's parser — do not."""
+    raise AssertionError(f"body carries the invalid JSON token {token!r}")
+
+
+def _strict_loads(raw: str | bytes):
+    return json.loads(raw, parse_constant=_reject_non_finite)
+
+
+# --- unbounded access logging (anonymous remote DoS) ---
+
+def test_log_path_truncates_an_attacker_sized_path():
+    from aizu.server import _LOG_PATH_MAX, _log_path
+    long_path = "/api/x" + "A" * 64_000
+    out = _log_path(long_path)
+    assert len(out) < _LOG_PATH_MAX + 60
+    assert out.startswith("/api/xAAAA")
+    assert "64006 chars total" in out
+    # A normal path is passed through byte-for-byte.
+    assert _log_path("/api/state?campaign=acme") == "/api/state?campaign=acme"
+
+
+def test_long_request_path_is_bounded_in_every_log_line(panel):
+    """`log_request` used to hand the FULL, attacker-controlled path to the console
+    handler, which renders per character while holding the GIL — a few hundred KB of
+    such requests froze the whole bridge for anonymous clients. Every line the
+    request produces must now carry a bounded prefix instead."""
+    captured: list[str] = []
+
+    class _Capture(logging.Handler):
+        def emit(self, record):
+            captured.append(record.getMessage())
+
+    logger = logging.getLogger("aizu.server")
+    handler = _Capture(level=logging.DEBUG)
+    logger.addHandler(handler)
+    try:
+        status, _ = _raw_request(panel, "GET", "/api/x" + "A" * 64_000)
+    finally:
+        logger.removeHandler(handler)
+    assert status == 404
+    assert captured, "the long-path request produced no log line to check"
+    assert max(len(m) for m in captured) < 1000, \
+        "a log line still carries the unbounded request path"
+    assert any("chars total" in m for m in captured)
+
+
+# --- non-finite numbers accepted at 200, bricking the org's panel ---
+
+@pytest.mark.parametrize("literal", [b"Infinity", b"-Infinity", b"NaN", b"1e400"])
+def test_campaign_rejects_non_finite_budget_cap(panel, literal):
+    """`_opt_number` checked type and `>= 0` but never `math.isfinite` — and every
+    comparison against NaN is False, so NaN sailed through the range check."""
+    status, raw = _raw_request(
+        panel, "POST", "/api/campaign",
+        b'{"campaignId": "nonfinite-budget", "budgetCap": ' + literal + b"}")
+    assert status == 400, raw
+    assert json.loads(raw)["ok"] is False
+    store = Store(panel["db"])
+    try:
+        assert store.get_campaign_meta("nonfinite-budget") is None
+    finally:
+        store.close()
+
+
+def test_campaign_rejects_non_finite_brief_threshold(panel):
+    status, raw = _raw_request(
+        panel, "POST", "/api/campaign",
+        b'{"campaignId": "nonfinite-threshold", "brief": '
+        b'{"platform": "instagram", "threshold": NaN}}')
+    assert status == 400, raw
+    assert "finite" in json.loads(raw)["error"]
+
+
+def test_state_and_campaigns_stay_strict_json_after_a_non_finite_attempt(panel):
+    """The whole reason this matters: a stored Infinity/NaN comes back out of
+    `json.dumps` as a BARE `Infinity`/`NaN` token — invalid JSON per RFC 8259 — so
+    /api/state and /api/campaigns answered 200 with a body the panel's parser
+    rejects. Every page for the org went dead with no in-app way to undo it."""
+    _raw_request(panel, "POST", "/api/campaign",
+                 b'{"campaignId": "brick-test", "budgetCap": Infinity}')
+    _raw_request(panel, "POST", "/api/campaign",
+                 b'{"campaignId": "brick-test-2", "goalTarget": NaN}')
+    for path in ("/api/state", "/api/campaigns", "/api/dashboard"):
+        status, raw = _get(panel["base"] + path)
+        assert status == 200
+        _strict_loads(raw)          # raises if a bare Infinity/NaN made it into the body
+
+
+def test_json_bytes_refuses_to_emit_invalid_json():
+    """The serializer-side backstop, so this class cannot recur through another door
+    (an older row, a worker report, a computed ratio): a non-finite is scrubbed to
+    null rather than emitted as a token no strict parser accepts."""
+    from aizu.server import _json_bytes
+    body = _json_bytes({"a": float("inf"), "b": [float("-inf"), float("nan")],
+                        "c": 1.5, "d": {"e": float("nan")}})
+    assert b"Infinity" not in body and b"NaN" not in body
+    assert _strict_loads(body) == {"a": None, "b": [None, None], "c": 1.5,
+                                   "d": {"e": None}}
+
+
+# --- out-of-range number: dead socket + leaked traceback ---
+
+def test_out_of_range_number_answers_a_clean_400_not_a_dead_socket(panel):
+    """A 400-digit `budgetCap` OverflowError-ed inside `_validate_campaign`, which
+    runs BEFORE `_handle_campaign`'s try-block — the exception escaped do_POST, the
+    socket was reset with no HTTP response (curl exit 52 / HTTP 000) and stderr got a
+    traceback full of absolute filesystem paths."""
+    status, raw = _raw_request(
+        panel, "POST", "/api/campaign",
+        b'{"campaignId": "overflow-test", "budgetCap": ' + b"9" * 400 + b"}")
+    assert status == 400, raw
+    assert json.loads(raw)["ok"] is False
+    assert "out of range" in json.loads(raw)["error"]
+
+
+def test_huge_goal_target_is_a_400_not_a_leaked_driver_message(panel):
+    """The sibling case: a merely-huge (finite) number reached SQLite, whose own
+    error text was echoed to the client as a 500 body."""
+    status, raw = _raw_request(
+        panel, "POST", "/api/campaign",
+        b'{"campaignId": "huge-goal", "goalTarget": 1e30}')
+    assert status == 400, raw
+    assert "SQLite" not in raw.decode()
+
+
+def test_unexpected_error_answers_a_generic_500_not_a_dead_socket(panel, monkeypatch):
+    """Top-level guard: whatever blows up inside the router, the client gets a
+    well-formed generic 500 — never an empty reply, never an internal message."""
+    def _boom(_payload):
+        raise RuntimeError("driver detail from /Users/someone/aizu/engine/secret.py")
+
+    monkeypatch.setattr(server, "_validate_campaign", _boom)
+    status, raw = _raw_request(panel, "POST", "/api/campaign",
+                               b'{"campaignId": "boom"}')
+    assert status == 500
+    body = json.loads(raw)
+    assert body["ok"] is False and body["error"] == "internal server error"
+    assert "secret.py" not in raw.decode()
+
+
+def test_unexpected_error_on_a_GET_also_answers_a_generic_500(panel, monkeypatch):
+    def _boom(*_a, **_kw):
+        raise RuntimeError("leaky /Users/someone/aizu/engine/detail.py")
+
+    monkeypatch.setattr(server, "build_campaigns_org", _boom)
+    status, raw = _raw_request(panel, "GET", "/api/campaigns")
+    assert status == 500
+    assert json.loads(raw)["error"] == "internal server error"
+    assert "detail.py" not in raw.decode()
+
+
+# --- a rejected create must not commit a ghost row ---
+
+def test_rejected_campaign_create_leaves_no_ghost_row(panel):
+    """`store.upsert_campaign_meta` commits in its own transaction, and only
+    afterwards did `campaign_from_brief` throw — so a 400 for an unsupported platform
+    still created a brief-less campaign that renders as a full card and can never run
+    ('no platforms'). The whole request must now validate before the first write."""
+    code, resp = _post(panel["base"] + "/api/campaign", json.dumps({
+        "campaignId": "ghost-campaign", "displayName": "Ghost", "status": "live",
+        "brief": {"platform": "myspace"}}).encode())
+    assert code == 400 and resp["ok"] is False
+    store = Store(panel["db"])
+    try:
+        assert store.get_campaign_meta("ghost-campaign") is None
+        assert store.get_campaign_brief("ghost-campaign") is None
+    finally:
+        store.close()
+    _, raw = _get(panel["base"] + "/api/campaigns")
+    assert "ghost-campaign" not in raw
+
+
+def test_rejected_campaign_edit_does_not_apply_the_valid_fields(panel):
+    """Same transaction boundary from the other side: an EXISTING campaign whose edit
+    carries a good status/budget and a bad brief must come back untouched, not
+    half-applied."""
+    _, created = _post(panel["base"] + "/api/campaign", json.dumps({
+        "campaignId": "half-apply", "status": "draft", "budgetCap": 10.0,
+        "brief": {"platform": "instagram"}}).encode())
+    stored_id = created["data"]["campaign_id"]
+    code, _ = _post(panel["base"] + "/api/campaign", json.dumps({
+        "campaignId": stored_id, "status": "live", "budgetCap": 999.0,
+        "brief": {"platform": "myspace"}}).encode())
+    assert code == 400
+    store = Store(panel["db"])
+    try:
+        meta = store.get_campaign_meta(stored_id)
+        assert meta["status"] == "draft" and meta["budget_cap"] == 10.0
+    finally:
+        store.close()
+
+
+# ===================================================================================
+# Routing / authz / campaign-semantics seam
+# ===================================================================================
+
+def _post_json_as(panel, path: str, payload: dict, cookie: str) -> tuple[int, dict]:
+    """POST a dict as a SPECIFIC principal (not the module-global owner cookie)."""
+    return _post_as(panel["base"] + path, json.dumps(payload).encode(), cookie)
+
+
+def _get_as(panel, path: str, cookie: str) -> tuple[int, dict]:
+    req = urllib.request.Request(panel["base"] + path, headers={"Cookie": cookie})
+    try:
+        with urllib.request.urlopen(req) as resp:
+            return resp.status, json.loads(resp.read())
+    except urllib.error.HTTPError as e:
+        return e.code, json.loads(e.read())
+
+
+def _second_org(panel, email: str) -> tuple[str, int]:
+    """A fresh signup → its own org. Returns (cookie, orgId)."""
+    cookie = _signup_cookie(panel["base"], email, "test-password-123",
+                            company="Other Co")
+    store = Store(panel["db"])
+    try:
+        row = store._conn.execute(
+            "SELECT org_id FROM users WHERE email=?", (email,)).fetchone()
+    finally:
+        store.close()
+    return cookie, row[0]
+
+
+# --- B6 on the wire: a fleet run that never emitted anything must not 404 ---
+
+def test_run_activity_reports_a_fleet_job_that_produced_no_events(panel):
+    """The exact case the B6 reason surfacing was built for: a dispatched run whose
+    worker died before it could open a session (e.g. CDP unattachable) has ZERO
+    run_events and ZERO sessions, so the 'unknown run' guard fired BEFORE the fleetJob
+    block and the operator saw a bare 404 for a run that really is theirs."""
+    cid = _campaign_id()
+    _enqueue_fleet_job(panel["db"], job_id="jf-silent", run_id="run-silent",
+                       campaign_id=cid, status="failed")
+    store = Store(panel["db"])
+    try:
+        store._conn.execute("UPDATE jobs SET result=? WHERE id=?",
+                            (json.dumps({"reason": "cdp_unavailable"}), "jf-silent"))
+        store._conn.commit()
+        assert store.fetch_run_events("run-silent", after_id=0) == []
+        assert store.sessions_for_run("run-silent") == []
+    finally:
+        store.close()
+    code, resp = _activity(panel, "?runId=run-silent")
+    assert code == 200, resp
+    fj = resp["data"]["fleetJob"]
+    assert fj is not None and fj["jobId"] == "jf-silent"
+    assert fj["status"] == "failed"
+    assert fj["reason"] == "cdp_unavailable"
+    assert resp["data"]["finished"] is True
+    assert resp["data"]["events"] == []
+
+
+def test_run_activity_does_not_disclose_another_orgs_fleet_run(panel):
+    """The 404 must stay a non-disclosure gate for runs that are NOT the caller's:
+    a job row owned by another org is still 'unknown run'."""
+    cookie, other_org = _second_org(panel, "fleet-oracle@aizu.test")
+    store = Store(panel["db"])
+    try:
+        store.upsert_campaign_meta("other-org-camp", org_id=other_org, status="live")
+        store.enqueue_job(job_id="jf-foreign", campaign_id="other-org-camp",
+                          platform="instagram", org_id=other_org,
+                          required_account_handle=None,
+                          spec={"run_id": "run-foreign", "engine_mode": "harvest"})
+    finally:
+        store.close()
+    code, resp = _activity(panel, "?runId=run-foreign")
+    assert code == 404 and resp["error"] == "unknown run"
+
+
+# --- create vs edit: a colliding create must not destroy the existing campaign ---
+
+def test_explicit_create_refuses_to_clobber_an_existing_campaign(panel):
+    """CREATE and EDIT were the same payload on the same endpoint, so a second
+    campaign whose name slugs to an existing id silently overwrote the first's brief —
+    and `matches` being keyed on (campaign_id, platform, comment_id) re-pointed the
+    first campaign's whole lead history at it. Data loss with no warning."""
+    first = {"campaignId": "same-name", "displayName": "Same Name", "status": "draft",
+             "op": "create",
+             "brief": {"platform": "youtube", "relevanceDef": "the ORIGINAL brief",
+                       "seedChannels": ["UC_original"]}}
+    code, created = _post(panel["base"] + "/api/campaign", json.dumps(first).encode())
+    assert code == 200
+    stored_id = created["data"]["campaign_id"]
+    second = dict(first)
+    second["brief"] = {"platform": "youtube", "relevanceDef": "a DIFFERENT brief",
+                       "seedChannels": ["UC_replacement"]}
+    code, resp = _post(panel["base"] + "/api/campaign", json.dumps(second).encode())
+    assert code == 409, resp
+    assert resp["ok"] is False and resp.get("code") == "campaign_exists"
+    store = Store(panel["db"])
+    try:
+        brief = store.get_campaign_brief(stored_id)
+        assert brief["relevance_def"] == "the ORIGINAL brief"
+        assert brief["seed_channels"] == ["UC_original"]
+    finally:
+        store.close()
+
+
+def test_explicit_edit_of_an_existing_campaign_still_works(panel):
+    _, created = _post(panel["base"] + "/api/campaign", json.dumps({
+        "campaignId": "edit-me", "displayName": "Edit Me", "status": "draft",
+        "brief": {"platform": "youtube", "seedChannels": ["UC_a"]}}).encode())
+    stored_id = created["data"]["campaign_id"]
+    code, resp = _post(panel["base"] + "/api/campaign", json.dumps({
+        "campaignId": stored_id, "displayName": "Edited", "status": "live",
+        "op": "edit", "brief": {"platform": "youtube", "seedChannels": ["UC_b"]},
+    }).encode())
+    assert code == 200 and resp["data"]["status"] == "live"
+    store = Store(panel["db"])
+    try:
+        assert store.get_campaign_brief(stored_id)["seed_channels"] == ["UC_b"]
+    finally:
+        store.close()
+
+
+def test_explicit_edit_of_another_orgs_campaign_is_a_404(panel):
+    """`op="edit"` may only ever reach the caller's OWN row — a cross-org id stays
+    undisclosed. (An id nobody has registered is a different case; see
+    test_explicit_edit_of_the_file_backed_campaign_matches_the_legacy_path.)"""
+    cookie, _ = _second_org(panel, "edit-404@aizu.test")
+    _, theirs = _post_json_as(panel, "/api/campaign", {
+        "campaignId": "theirs-only", "op": "create", "status": "draft",
+        "brief": {"platform": "youtube", "seedChannels": ["UC_a"]}}, cookie)
+    code, resp = _post(panel["base"] + "/api/campaign", json.dumps({
+        "campaignId": theirs["data"]["campaign_id"], "op": "edit",
+        "status": "live"}).encode())
+    assert code == 404 and resp["error"] == "unknown campaign"
+
+
+def test_explicit_edit_of_the_file_backed_campaign_matches_the_legacy_path(panel):
+    """`op="edit"` used to demand a campaign_meta/campaign_briefs row, which the
+    file-backed campaign from config/campaign.md does not have until its first write —
+    so the panel's own primary card (rendered from resolve_campaign) 404'd the moment
+    the form started naming its intent, while the same edit with no `op` succeeded.
+    The two paths must agree on what is editable."""
+    unregistered = "unregistered-file-campaign"
+    code, resp = _post(panel["base"] + "/api/campaign", json.dumps({
+        "campaignId": unregistered, "op": "edit", "status": "paused"}).encode())
+    assert code == 200, resp
+    assert resp["data"]["campaign_id"] == unregistered   # no new key allocated
+    assert resp["data"]["status"] == "paused"
+    store = Store(panel["db"])
+    try:                                   # …and it is stamped to the caller's org
+        assert store.get_campaign_meta(unregistered)["status"] == "paused"
+        assert store.org_for_campaign(unregistered) == _owner_org_id(panel)
+    finally:
+        store.close()
+
+
+def test_campaign_op_must_be_create_or_edit(panel):
+    code, resp = _post(panel["base"] + "/api/campaign", json.dumps({
+        "campaignId": "bad-op", "op": "upsert"}).encode())
+    assert code == 400 and "op" in resp["error"]
+
+
+# --- campaign ids are per-org, not a global namespace ---
+
+def test_two_orgs_can_each_create_a_campaign_with_the_same_name(panel):
+    """Org B creating an ordinarily-named campaign that org A already has used to get
+    `404 unknown campaign` on a CREATE — nonsensical, with no remedy — and doubled as
+    a cross-tenant existence oracle."""
+    cookie, _ = _second_org(panel, "q4-collision@aizu.test")
+    payload = {"campaignId": "q4-outbound", "displayName": "Q4 Outbound",
+               "status": "draft", "op": "create",
+               "brief": {"platform": "youtube", "seedChannels": ["UC_a"]}}
+    code, mine = _post(panel["base"] + "/api/campaign", json.dumps(payload).encode())
+    assert code == 200, mine
+    code, theirs = _post_json_as(panel, "/api/campaign", payload, cookie)
+    assert code == 200, theirs
+    assert theirs["data"]["campaign_id"] != mine["data"]["campaign_id"]
+    # Org A's campaign is untouched and org B cannot see org A's.
+    _, a_state = _get_as(panel, "/api/campaigns", panel["cookie"])
+    _, b_state = _get_as(panel, "/api/campaigns", cookie)
+    a_ids = {c["id"] for c in a_state["CAMPAIGNS"]}
+    b_ids = {c["id"] for c in b_state["CAMPAIGNS"]}
+    assert mine["data"]["campaign_id"] in a_ids
+    assert theirs["data"]["campaign_id"] in b_ids
+    assert not (a_ids & b_ids)
+
+
+def test_create_allocates_the_same_id_shape_whether_or_not_another_org_holds_it(panel):
+    """No existence oracle: an explicit create must not let the caller tell a
+    globally-free id from one another tenant already owns."""
+    from aizu.server import _org_scoped_campaign_id
+    cookie, org_b = _second_org(panel, "oracle-probe@aizu.test")
+    taken = {"campaignId": "oracle-taken", "displayName": "Oracle Taken",
+             "status": "draft", "op": "create"}
+    code, _ = _post(panel["base"] + "/api/campaign", json.dumps(taken).encode())
+    assert code == 200                      # org A takes the bare id first
+    code, probe_taken = _post_json_as(panel, "/api/campaign", taken, cookie)
+    free = {"campaignId": "oracle-free", "displayName": "Oracle Free",
+            "status": "draft", "op": "create"}
+    code2, probe_free = _post_json_as(panel, "/api/campaign", free, cookie)
+    assert code == code2 == 200             # identical status either way
+    # …and an identical key SHAPE: the prefix is derived from the caller's own org,
+    # so nothing in the response says whether another tenant held the base id.
+    assert probe_taken["data"]["campaign_id"] == _org_scoped_campaign_id(
+        org_b, "oracle-taken")
+    assert probe_free["data"]["campaign_id"] == _org_scoped_campaign_id(
+        org_b, "oracle-free")
+
+
+def test_legacy_create_without_op_no_longer_404s_on_another_orgs_id(panel):
+    """The current panel sends no `op`. A brief-carrying create for an id another
+    tenant owns used to answer `404 unknown campaign` with no remedy; it now lands in
+    the caller's own namespace instead."""
+    cookie, _ = _second_org(panel, "legacy-collide@aizu.test")
+    _post(panel["base"] + "/api/campaign", json.dumps({
+        "campaignId": "legacy-shared", "displayName": "Legacy Shared",
+        "status": "draft"}).encode())
+    code, resp = _post_json_as(panel, "/api/campaign", {
+        "campaignId": "legacy-shared", "displayName": "Legacy Shared",
+        "status": "draft",
+        "brief": {"platform": "youtube", "seedChannels": ["UC_b"]}}, cookie)
+    assert code == 200, resp
+    assert resp["data"]["campaign_id"] != "legacy-shared"
+    store = Store(panel["db"])
+    try:  # org A's row is untouched
+        assert store.get_campaign_brief("legacy-shared") is None
+    finally:
+        store.close()
+
+
+def test_legacy_create_allocates_the_same_id_shape_for_a_free_and_a_taken_slug(panel):
+    """The oracle from the other side, over the payload the panel ACTUALLY sends (no
+    `op`). Allocating the bare id when it happened to be free and a scoped one when
+    another tenant held it made the returned id a per-request answer to "does anyone
+    else own this name?" — enumerable one slug at a time. A create must allocate the
+    same shape either way."""
+    from aizu.server import _org_scoped_campaign_id
+    cookie, org_b = _second_org(panel, "legacy-oracle@aizu.test")
+    _post(panel["base"] + "/api/campaign", json.dumps({
+        "campaignId": "legacy-taken", "displayName": "Legacy Taken", "status": "draft",
+        "brief": {"platform": "youtube", "seedChannels": ["UC_a"]}}).encode())
+    body = {"displayName": "Probe", "status": "draft",
+            "brief": {"platform": "youtube", "seedChannels": ["UC_b"]}}
+    code, taken = _post_json_as(
+        panel, "/api/campaign", {**body, "campaignId": "legacy-taken"}, cookie)
+    code2, free = _post_json_as(
+        panel, "/api/campaign", {**body, "campaignId": "legacy-free"}, cookie)
+    assert code == code2 == 200
+    assert taken["data"]["campaign_id"] == _org_scoped_campaign_id(org_b, "legacy-taken")
+    assert free["data"]["campaign_id"] == _org_scoped_campaign_id(org_b, "legacy-free")
+
+
+def test_another_org_cannot_squat_the_callers_campaign_key_namespace(panel):
+    """The scoped key still lives in one global campaign_meta PK, so the namespace has
+    to be reserved: a tenant that could pre-register `o<victimOrg>.<slug>` would lock
+    the victim out of that campaign name for good — 409 on create, 404 on edit, no
+    operator remedy."""
+    from aizu.server import _org_scoped_campaign_id
+    victim_org = _owner_org_id(panel)
+    cookie, _ = _second_org(panel, "squatter@aizu.test")
+    squat_key = _org_scoped_campaign_id(victim_org, "brand-new")
+    # Every shape of squat: with a brief, and the field-only write that used to
+    # register any free id verbatim.
+    code, resp = _post_json_as(panel, "/api/campaign", {
+        "campaignId": squat_key, "status": "live",
+        "brief": {"platform": "youtube", "seedChannels": ["UC_z"]}}, cookie)
+    assert code == 200 and resp["data"]["campaign_id"] != squat_key
+    code, resp = _post_json_as(panel, "/api/campaign", {
+        "campaignId": squat_key, "status": "live"}, cookie)
+    assert code == 404 and resp["error"] == "unknown campaign"
+    code, resp = _post_json_as(panel, "/api/campaign", {
+        "campaignId": squat_key, "op": "edit", "status": "live"}, cookie)
+    assert code == 404 and resp["error"] == "unknown campaign"
+    # The victim can still create — and then edit — that campaign name.
+    code, mine = _post(panel["base"] + "/api/campaign", json.dumps({
+        "campaignId": "brand-new", "op": "create", "displayName": "Brand New",
+        "status": "draft", "brief": {"platform": "youtube",
+                                     "seedChannels": ["UC_a"]}}).encode())
+    assert code == 200, mine
+    assert mine["data"]["campaign_id"] == squat_key
+    code, edited = _post(panel["base"] + "/api/campaign", json.dumps({
+        "campaignId": squat_key, "op": "edit", "status": "paused"}).encode())
+    assert code == 200 and edited["data"]["status"] == "paused"
+
+
+def test_legacy_create_of_a_slug_the_caller_already_used_is_refused(panel):
+    """The data-loss case on the wire the shipped panel uses (no `op`): a second
+    campaign whose name slugs onto one the operator already has must be refused, not
+    silently written over the first one's brief — `matches` is keyed on campaign_id,
+    so the first campaign's whole lead history would follow."""
+    first = {"campaignId": "legacy-same-name", "displayName": "Same Name",
+             "status": "draft",
+             "brief": {"platform": "youtube", "relevanceDef": "FIRST CAMPAIGN",
+                       "seedChannels": ["UC_first"]}}
+    code, created = _post(panel["base"] + "/api/campaign", json.dumps(first).encode())
+    assert code == 200
+    stored_id = created["data"]["campaign_id"]
+    second = {**first, "brief": {"platform": "youtube",
+                                 "relevanceDef": "SECOND CAMPAIGN",
+                                 "seedChannels": ["UC_second"]}}
+    code, resp = _post(panel["base"] + "/api/campaign", json.dumps(second).encode())
+    assert code == 409, resp
+    assert resp["ok"] is False and resp.get("code") == "campaign_exists"
+    store = Store(panel["db"])
+    try:
+        brief = store.get_campaign_brief(stored_id)
+        assert brief["relevance_def"] == "FIRST CAMPAIGN"
+        assert brief["seed_channels"] == ["UC_first"]
+    finally:
+        store.close()
+
+
+# --- /api/state must not leak run history + spend to a member ---
+
+def _member_cookie(panel, email: str) -> str:
+    """A signed-up principal demoted to `member` in its own org."""
+    cookie = _signup_cookie(panel["base"], email, "test-password-123", company="Mem Co")
+    store = Store(panel["db"])
+    try:
+        store._conn.execute("UPDATE users SET role='member' WHERE email=?", (email,))
+        store._conn.commit()
+    finally:
+        store.close()
+    return cookie
+
+
+def test_state_does_not_expose_the_run_block_to_a_member(panel):
+    """panel.py deliberately prunes a member's state to CONFIG + campaign stubs +
+    MATCHES; the handler then bolted RUN (run history + spend) back on with an org
+    check but no ROLE check — while /api/dashboard, /api/campaigns and
+    /api/run/activity all correctly 403 that same member."""
+    cookie = _member_cookie(panel, "member-state@aizu.test")
+    code, state = _get_as(panel, "/api/state", cookie)
+    assert code == 200
+    assert state["CONFIG"]["role"] == "member"
+    assert "RUN" not in state
+    # The sibling endpoints agree.
+    assert _get_as(panel, "/api/dashboard", cookie)[0] == 403
+    assert _get_as(panel, "/api/campaigns", cookie)[0] == 403
+
+
+def test_state_still_exposes_the_run_block_to_an_owner(panel):
+    _, state = _get_as(panel, "/api/state", panel["cookie"])
+    assert "RUN" in state
+
+
+# --- HEAD must route exactly like GET ---
+
+def _head(panel, path: str) -> tuple[int, dict]:
+    host, port = _hostport(panel)
+    conn = http.client.HTTPConnection(host, port, timeout=30)
+    try:
+        conn.request("HEAD", path, headers={"Cookie": _SESSION_COOKIE or ""})
+        resp = conn.getresponse()
+        body = resp.read()
+        assert body == b"", f"HEAD {path} must have no body"
+        return resp.status, dict(resp.getheaders())
+    finally:
+        conn.close()
+
+
+@pytest.mark.parametrize("path", ["/app/campaigns", "/app", "/app/", "/",
+                                  "/assets/index-abc123.js"])
+def test_head_matches_get_status(panel, path):
+    """No do_HEAD meant HEAD fell through to SimpleHTTPRequestHandler's raw
+    filesystem mapping, bypassing every route: /app/campaigns GET 200 / HEAD 404,
+    /app GET 200 / HEAD 301."""
+    get_status, _ = _get(panel["base"] + path)
+    head_status, _ = _head(panel, path)
+    assert head_status == get_status, path
+
+
+def test_head_on_an_api_path_answers_json_like_get(panel):
+    head_status, headers = _head(panel, "/api/state")
+    assert head_status == 200
+    assert headers["Content-Type"].startswith("application/json")
+
+
+def test_head_on_an_unauthenticated_api_path_is_a_json_401(panel):
+    host, port = _hostport(panel)
+    conn = http.client.HTTPConnection(host, port, timeout=30)
+    try:
+        conn.request("HEAD", "/api/state")   # no cookie
+        resp = conn.getresponse()
+        resp.read()
+        assert resp.status == 401
+        assert resp.getheader("Content-Type").startswith("application/json")
+    finally:
+        conn.close()
+
+
+# --- a nested unknown URL must 404, not render the landing at 200 ---
+
+def test_nested_unknown_path_is_a_404_not_the_landing(panel):
+    """/pricing/enterprise served index.html at 200, so the landing rendered
+    unstyled (its relative asset URLs resolved under /pricing/ and answered HTML
+    with a 200 and no nosniff)."""
+    host, port = _hostport(panel)
+    conn = http.client.HTTPConnection(host, port, timeout=30)
+    try:
+        conn.request("GET", "/pricing/enterprise")
+        resp = conn.getresponse()
+        body = resp.read()
+        assert resp.status == 404
+        assert b'id="landing"' not in body
+        assert resp.getheader("X-Content-Type-Options") == "nosniff"
+    finally:
+        conn.close()
+
+
+def test_missing_asset_under_a_nested_path_is_a_404(panel):
+    host, port = _hostport(panel)
+    conn = http.client.HTTPConnection(host, port, timeout=30)
+    try:
+        conn.request("GET", "/pricing/landing/css/core-hr.css")
+        resp = conn.getresponse()
+        resp.read()
+        assert resp.status == 404
+    finally:
+        conn.close()
+
+
+# --- server identity + transport headers ---
+
+def test_server_header_does_not_advertise_the_stdlib_and_python_version(panel):
+    host, port = _hostport(panel)
+    conn = http.client.HTTPConnection(host, port, timeout=30)
+    try:
+        conn.request("GET", "/api/state", headers={"Cookie": _SESSION_COOKIE or ""})
+        resp = conn.getresponse()
+        resp.read()
+        server_header = resp.getheader("Server") or ""
+        assert "SimpleHTTP" not in server_header
+        assert "Python" not in server_header
+        assert server_header.startswith("aizu")
+        assert resp.getheader("X-Content-Type-Options") == "nosniff"
+    finally:
+        conn.close()
+
+
+# --- session cookie Secure flag ---
+
+def test_session_cookie_is_not_secure_over_plain_local_http(panel):
+    cookie_header = _raw_signup_set_cookie(panel, "secure-off@aizu.test", headers={})
+    assert "HttpOnly" in cookie_header and "SameSite=Lax" in cookie_header
+    assert "Secure" not in cookie_header
+
+
+def test_session_cookie_is_secure_behind_an_https_terminating_proxy(panel, monkeypatch):
+    """The 30-day session cookie carried no Secure flag, justified by a comment
+    claiming the bridge is loopback-only — which contradicts the documented hosted
+    deployment behind a reverse proxy."""
+    monkeypatch.setenv("AIZU_TRUSTED_PROXIES", "127.0.0.1")
+    cookie_header = _raw_signup_set_cookie(
+        panel, "secure-on@aizu.test", headers={"X-Forwarded-Proto": "https"})
+    assert "Secure" in cookie_header
+
+
+def test_session_cookie_ignores_forwarded_proto_from_an_untrusted_peer(panel):
+    """X-Forwarded-Proto is client-spoofable: honour it only from a trusted proxy."""
+    cookie_header = _raw_signup_set_cookie(
+        panel, "secure-spoof@aizu.test", headers={"X-Forwarded-Proto": "https"})
+    assert "Secure" not in cookie_header
+
+
+def _raw_signup_set_cookie(panel, email: str, headers: dict) -> str:
+    host, port = _hostport(panel)
+    conn = http.client.HTTPConnection(host, port, timeout=30)
+    try:
+        conn.request("POST", "/api/auth/signup",
+                     body=json.dumps({"email": email, "password": "test-password-123",
+                                      "companyName": "Cookie Co"}).encode(),
+                     headers={"Content-Type": "application/json", **headers})
+        resp = conn.getresponse()
+        resp.read()
+        return resp.getheader("Set-Cookie") or ""
+    finally:
+        conn.close()
+
+
+# --- starting on a busy port ---
+
+def test_serve_on_a_busy_port_raises_a_clean_error_and_leaves_no_db(tmp_path):
+    """A busy port dumped a raw OSError traceback (Errno 48) out of the CLI and left
+    a freshly-migrated DB behind — inconsistent with the clean `error: …`/rc=2 style
+    the same command uses three lines above."""
+    from aizu.server import PortInUseError
+    busy = socket.socket()
+    busy.bind(("127.0.0.1", 0))
+    busy.listen(1)
+    port = busy.getsockname()[1]
+    panel_dir = tmp_path / "dist"
+    (panel_dir / "app").mkdir(parents=True)
+    (panel_dir / "index.html").write_text("<html></html>", encoding="utf-8")
+    (panel_dir / "app" / "index.html").write_text("<html></html>", encoding="utf-8")
+    db = tmp_path / "never-created.db"
+    try:
+        with pytest.raises(PortInUseError) as excinfo:
+            serve(str(db), str(panel_dir), str(CONFIG), port=port)
+        assert str(port) in str(excinfo.value)
+        assert "already in use" in str(excinfo.value)
+        assert not db.exists(), "a failed bind must not leave a migrated DB behind"
+    finally:
+        busy.close()
+
+
+def test_cli_panel_on_a_busy_port_prints_one_error_line(tmp_path, capsys):
+    """The other half of the same defect: serve() raised a clean typed error but
+    nothing caught it, so `aizu panel` on an occupied port — the most common failure
+    of the documented start command — still crashed with a traceback full of absolute
+    filesystem paths instead of the one-line `error: …`/rc=2 the same command already
+    prints for a missing panel build."""
+    import argparse
+    from aizu.cli import cmd_panel
+    busy = socket.socket()
+    busy.bind(("127.0.0.1", 0))
+    busy.listen(1)
+    port = busy.getsockname()[1]
+    panel_dir = tmp_path / "dist"
+    (panel_dir / "app").mkdir(parents=True)
+    (panel_dir / "index.html").write_text("<html></html>", encoding="utf-8")
+    (panel_dir / "app" / "index.html").write_text("<html></html>", encoding="utf-8")
+    db = tmp_path / "never-created.db"
+    try:
+        rc = cmd_panel(argparse.Namespace(
+            db=str(db), panel_dir=str(panel_dir), config=str(CONFIG),
+            host="127.0.0.1", port=port))
+    finally:
+        busy.close()
+    assert rc == 2
+    err = capsys.readouterr().err
+    assert err.strip().startswith("error: ")
+    assert "already in use" in err and "--port" in err
+    assert "Traceback" not in err and __file__ not in err
+    assert not db.exists()

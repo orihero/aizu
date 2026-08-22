@@ -291,3 +291,64 @@ def test_sweep_removes_orphan_json_tmp_files(cfg: WorkerConfig):
     os.utime(tmp, (old, old))
     swept = jr.sweep_orphan_job_files(cfg.state_dir, max_age_sec=7 * 24 * 60 * 60)
     assert swept == 1 and not tmp.exists()
+
+
+# ----- B9: the effective spend cap -----------------------------------------------
+
+class _SpendStore:
+    """Just enough store for the cap math: a campaign's box-LOCAL spend total."""
+
+    def __init__(self, total: float = 0.0):
+        self._total = total
+
+    def total_spend(self, _campaign_id: str) -> float:
+        return self._total
+
+
+@pytest.mark.parametrize("local, prior, cap, expected", [
+    # Fresh box, campaign already burned $18 elsewhere → only $2 of headroom left.
+    (0.0, 18.0, 20.0, 2.0),
+    # This box's own $18 was already rolled up to the cloud → still $20, NOT $38:
+    # `max(prior, local)` counts the shared money once instead of summing it.
+    (18.0, 18.0, 20.0, 20.0),
+    # This box holds $18 the cloud never learned about (an attempt that died before its
+    # ack/nack, re-pinned here by reclaim) → the local floor still counts it.
+    (18.0, 0.0, 20.0, 20.0),
+    # Already over budget → exactly the local total, and the guard is `>=`, so call one
+    # is blocked. The degenerate local==0 case yields 0.0, which _spend_guard treats as a
+    # real cap (it only short-circuits on `spend_cap_usd is None`).
+    (0.0, 25.0, 20.0, 0.0),
+    (5.0, 25.0, 20.0, 5.0),
+    # No cloud number at all (legacy job / older server) → today's behaviour.
+    (5.0, None, 20.0, 20.0),
+    (0.0, None, 20.0, 20.0),
+])
+def test_effective_spend_cap_table(local, prior, cap, expected):
+    assert job_runner._effective_spend_cap(local, prior, cap) == pytest.approx(expected)
+
+
+def test_effective_spend_cap_stays_none_when_uncapped():
+    assert job_runner._effective_spend_cap(3.0, 18.0, None) is None
+
+
+def test_execute_job_hands_the_adjusted_cap_to_the_run(patched, cfg: WorkerConfig):
+    # cfg.spend_cap is the box's AIZU_SPEND_CAP (20.0 by default); the campaign already
+    # spent $18 on another box, so this run gets $2 — not a fresh $20 (B9).
+    job_runner._execute_job(_SpendStore(0.0), _job(prior_spend_usd=18.0), cfg=cfg)
+    assert patched["args"].spend_cap == pytest.approx(2.0)
+
+
+def test_execute_job_keeps_the_box_cap_without_a_cloud_number(patched,
+                                                              cfg: WorkerConfig):
+    job_runner._execute_job(_SpendStore(0.0), _job(), cfg=cfg)
+    assert patched["args"].spend_cap == pytest.approx(cfg.spend_cap)
+
+
+def test_execute_job_survives_a_local_spend_read_failure(patched, cfg: WorkerConfig):
+    class _Broken:
+        def total_spend(self, _cid):
+            raise RuntimeError("db locked")
+
+    # A bookkeeping hiccup must not fail a runnable job — it degrades to local 0.0.
+    job_runner._execute_job(_Broken(), _job(prior_spend_usd=18.0), cfg=cfg)
+    assert patched["args"].spend_cap == pytest.approx(2.0)

@@ -45,3 +45,22 @@ describe('storage helpers', () => {
     expect(readStored(KEY, acceptString)).toBeNull();
   });
 });
+
+// An early, NAMED signal for the setup.ts storage shim (see src/test/setup.ts). If the shim
+// ever silently no-ops, the suite still goes fully red via the global afterEach — this block
+// does not replace that wipeout, it just says *why* in one readable failure. `toBeInstanceOf`
+// is the load-bearing assertion: Node's own webstorage object is also constructor-named
+// `Storage` but is not an instance of jsdom's, so this catches the silent-substitution
+// variant (a working-but-wrong Storage) as well as the plain `undefined` one.
+describe('test environment', () => {
+  it('exposes the jsdom window Storage, not Node webstorage', () => {
+    expect(localStorage).toBeInstanceOf(Storage);
+    expect(sessionStorage).toBeInstanceOf(Storage);
+  });
+  it('round-trips and clears', () => {
+    localStorage.setItem('k', 'v');
+    expect(localStorage.getItem('k')).toBe('v');
+    localStorage.clear();
+    expect(localStorage.length).toBe(0);
+  });
+});

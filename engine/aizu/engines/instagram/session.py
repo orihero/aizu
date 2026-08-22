@@ -55,10 +55,14 @@ class SessionConfig:
     tired_feed_min_reels: int = 10    # don't judge the ratio on tiny samples
     empty_interception_halt: int = 5  # consecutive empty fetches → halt (canary)
     watchlist_ttl_days: float = 10.0
-    # Outer wall-clock backstop for the per-reel processing block (open_reel +
-    # comment fetch). Even with per-call Playwright timeouts, a pathological chain
-    # of slow-but-not-timed-out calls could stack; this caps one reel's total wall
-    # time. On breach the reel is SKIPPED (warn) and the walk continues — NEVER halt.
+    # Outer wall-clock backstop for the BROWSER block only (open_reel + comment
+    # fetch/scoring). Even with per-call Playwright timeouts, a pathological chain
+    # of slow-but-not-timed-out calls could stack; this stops a reel that has
+    # already burned the budget in open_reel from also paying for the comment
+    # stage. The clock is anchored AFTER the cascade gate — classification time
+    # (vision / STT / video / escalation) is deliberately not charged to it, see
+    # the re-anchor in _run_after_start. On breach the reel is SKIPPED (warn) and
+    # the walk continues — NEVER halt.
     per_reel_seconds: float = 90.0
 
 
@@ -71,6 +75,83 @@ MAX_SESSION_EVENTS = 500
 # STALL_THRESHOLD_SEC=120) even though the walk is fine. Emit a time-throttled
 # progress heartbeat on the common per-reel path — comfortably under that threshold.
 PROGRESS_EVENT_INTERVAL_SEC = 45.0
+
+# FIX P0: stable, cross-engine flag kind for a reel the cascade judged RELEVANT that
+# never reached comment scoring. store.mark_seen has already run by then and
+# seen_reels has NO TTL (store.is_seen is a bare existence check and nothing in
+# aizu/ ever DELETEs from it), so such a reel is blacklisted for that campaign
+# forever — a silent, permanent lead loss. The 2026-08-19 live Instagram run
+# reported status=completed / matches=0 / ZERO health flags while having discarded
+# reel DFdnoSsgWBk (relevant=True, score 0.85, confidence 0.90). This flag is what
+# makes that combination impossible again; keep the string identical in the
+# linkedin and x engines so one panel/ops query covers all three.
+RELEVANT_REEL_DISCARDED_FLAG = "relevant_reel_discarded"
+
+
+class _HeartbeatRouter:
+    """Router facade that bumps the session heartbeat every time a model call
+    RETURNS — i.e. on every real verdict, success or failure.
+
+    Why a facade rather than a hook inside the cascade: ONE ``gate_reel`` chains up
+    to five model calls (caption → vision → STT → video → escalation) before it
+    returns a single verdict, and ``score_comment`` chains up to two. Bumping only
+    where the cascade returns therefore multiplies whatever budget the router
+    allows one call by five — and on 2026-08-20 that product killed
+    job-2099fb29e88b five times over with "stalled: no activity for over 180s"
+    (session_watchdog.STALL_TIMEOUT_SEC). Tapping the router instead bounds the gap
+    to ONE bounded model call for every engine, and the two sibling engines
+    (linkedin, x) keep their own private cascade copies that need not learn a
+    watchdog exists.
+
+    This is a PROGRESS signal, not a liveness ticker: nothing fires unless a model
+    call actually completed, so a session wedged inside a call still goes quiet and
+    is still halted. ``finally`` (not a post-return bump) so a call that burned its
+    whole budget and then raised still counts the wall-clock it spent — the loop
+    survives that case and moves on to the next comment.
+    """
+
+    # The facade's OWN state. Everything else — reads and WRITES — belongs to the
+    # wrapped router.
+    _OWN_ATTRS = ("_router", "_on_verdict")
+
+    def __init__(self, router, on_verdict: Callable[[], None]):
+        self._router = router
+        self._on_verdict = on_verdict
+
+    def __getattr__(self, name):        # everything else passes straight through
+        return getattr(self._router, name)
+
+    def __setattr__(self, name, value):
+        """Writes pass through too, or the facade silently swallows configuration.
+
+        A read-only proxy is a trap here: `setattr(router, "x", v)` on the facade
+        binds `x` on the FACADE, while every router method still reads `self.x` on
+        the WRAPPED object and sees the old value. The write appears to work — the
+        caller can read it straight back — and the effect never reaches the code
+        that matters. Measured: setting `default_threshold` through the facade left
+        the real router's at None, so `_classify_text_with_comparison` would have
+        gone on writing NULL into `model_comparison_log.agreed`, which is the exact
+        bug that setting it exists to fix. This repo has SEVEN recorded sightings of
+        a fix that was correct where it was written and inert where it was read
+        (ledger B4, E7, F10a, F10b, A11, A12, and the CDP wedge attribution); a
+        write-swallowing proxy in the middle of the router is how you get an eighth.
+        """
+        if name in self._OWN_ATTRS:
+            object.__setattr__(self, name, value)
+        else:
+            setattr(self._router, name, value)
+
+    def classify_text(self, *args, **kwargs):
+        try:
+            return self._router.classify_text(*args, **kwargs)
+        finally:
+            self._on_verdict()
+
+    def classify_image(self, *args, **kwargs):
+        try:
+            return self._router.classify_image(*args, **kwargs)
+        finally:
+            self._on_verdict()
 
 
 class Session:
@@ -112,7 +193,19 @@ class Session:
         # fires ~PROGRESS_EVENT_INTERVAL_SEC in, not instantly after "Run started".
         self._last_progress_emit = 0.0
         self.counters = SessionCounters()
-        self.cascade = Cascade(router, campaign, session_id=self.session_id)
+        self.cascade = Cascade(_HeartbeatRouter(router, self._touch),
+                               campaign, session_id=self.session_id)
+        # The feed's OWN heartbeat. `_HeartbeatRouter` covers the model calls and
+        # the loop below covers everything it can see, but the interval BETWEEN two
+        # `walk()` yields belongs entirely to the feed: nav + landed/login probes +
+        # up to four scroll rounds per source, repeated for every unproductive
+        # source in the brief, with nothing to bump `last_activity_at`. That is
+        # unbounded in the number of sources; the six redirecting hashtag pages on
+        # the live 2026-08-19 Instagram brief are what it looks like in practice.
+        # Duck-typed on purpose: FakeFeed and every non-CDP feed simply lack the
+        # attribute and stay exactly as they were.
+        if hasattr(feed, "on_progress"):
+            feed.on_progress = self._touch
         self.actions = ActionPolicy.from_campaign(campaign)
         self._empty_streak = 0
         # Uzbek STT (Instagram-only, campaign-gated — see cascade.py's gate_reel).
@@ -129,6 +222,35 @@ class Session:
                           and env_flag("AIZU_VIDEO_ANALYSIS_ENABLED"))
 
     # ---- helpers ----
+    def _touch(self) -> None:
+        """Fine-grained progress heartbeat: bump sessions.last_activity_at ONLY.
+
+        The watchdog kills any running session whose heartbeat is >180s stale, and
+        before 2026-08-20 the only bump inside a reel came from ``_flush()`` at the
+        end of it (plus the one added between the gate and the browser block). One
+        slow cascade gate or one long comment-scoring loop therefore emitted nothing
+        for its whole duration, and the fleet's first real campaign dead-lettered at
+        attempt 5 with reason=worker_stall. Called after each unit of REAL progress —
+        a model verdict, a comment scored, a permalink opened — never on a timer.
+
+        Never raises: it runs inside the router facade's ``finally``, where an
+        exception would mask the model error the loop is about to handle. A DB that
+        is genuinely broken still surfaces on the next ``_flush()``."""
+        try:
+            self.store.touch_session(self.session_id)
+        except Exception:  # noqa: BLE001 — a heartbeat must never break a run
+            log.debug("heartbeat bump failed · session=%s", self.session_id,
+                      exc_info=True)
+
+    def _touched(self, value):
+        """Bump the heartbeat and hand `value` straight back — for tagging a lazy
+        acquisition callback (frame capture, STT, video sampling) as progress. Those
+        run INSIDE the cascade gate and are not model calls, so the router facade
+        never sees them; a 60s ffmpeg download between two verdicts would otherwise
+        be invisible to the watchdog."""
+        self._touch()
+        return value
+
     def _flush(self) -> None:
         self.counters.escalations = self.cascade.escalations
         self.counters.transcriptions = self.cascade.transcriptions
@@ -231,6 +353,10 @@ class Session:
                        {"reelId": reel.reel_id})
         self.store.log_action(cid, action_type, reel_id=reel.reel_id, target=target,
                               succeeded=ok, session_id=self.session_id)
+        # Like/follow are bounded CDP calls, but open_reel -> like -> action-block
+        # probe -> fetch_comments used to be one unbroken silence; the action ran
+        # and was logged, so this bump is progress, not a ticker.
+        self._touch()
         if ok:
             if action_type == "like":
                 self.actions.record_like()
@@ -249,12 +375,27 @@ class Session:
             self._halt("action-block detected after " + action_type,
                        kind="action_block")
 
+    def _flag_relevant_discard(self, reel: "Reel", reason: str) -> None:
+        """FIX P0: record that a reel which PASSED relevance never reached comment
+        scoring. This is not cosmetic: mark_seen already ran, seen_reels has no TTL,
+        and nothing ever deletes from it — so the reel is unreachable for this
+        campaign for good. Soft severity (the walk carries on), but it guarantees a
+        run can never again finish 'completed, 0 leads, no health flags' after
+        destroying a confirmed hit."""
+        self.store.raise_flag(
+            RELEVANT_REEL_DISCARDED_FLAG, "soft",
+            f"reel {reel.reel_id}: passed relevance but was skipped before comment "
+            f"scoring ({reason}) — it is marked seen and will never be revisited",
+            campaign_id=self.campaign.campaign_id, session_id=self.session_id)
+
     def _reel_deadline_breached(self, reel: "Reel", started: float) -> bool:
-        """True once a single reel's processing has exceeded per_reel_seconds. The
-        outer wall-clock backstop behind the per-call Playwright timeouts: a
-        pathological stack of slow-but-not-timed-out calls can't wedge the walk.
-        On breach it emits a warn step; the caller SKIPS the reel and continues —
-        this NEVER halts the run."""
+        """True once a reel's BROWSER block (open_reel + comment fetch) has exceeded
+        per_reel_seconds. `started` is anchored after the cascade gate, so slow
+        classification never spends this budget — that inversion is what silently
+        discarded relevant reels before FIX P0. The outer backstop behind the
+        per-call Playwright timeouts: a pathological stack of slow-but-not-timed-out
+        calls can't wedge the walk. On breach it emits a warn step; the caller SKIPS
+        the remaining browser work and continues — this NEVER halts the run."""
         if self._clock() - started <= self.cfg.per_reel_seconds:
             return False
         self._emit("feed_walk", "warn",
@@ -314,6 +455,10 @@ class Session:
         plat = self.campaign.platform
         cursor = self.store.get_cursor(cid, reel_id, platform=plat)
         comments, new_cursor = self.feed.fetch_comments(reel_id, cursor)
+        # The comment fetch is a browser/network round-trip with no bump of its own;
+        # without this the gap runs from the pre-block _flush all the way to the
+        # first comment's verdict.
+        self._touch()
 
         # empty-interception canary (PRD §9 tier 3) — SOFT/auto-resumable (gap #1).
         if not self.feed.healthy():
@@ -339,6 +484,13 @@ class Session:
                                       campaign_id=cid, session_id=self.session_id)
                 log.debug("[comments] Skipped comment %s — %s", comment.comment_id, e)
                 continue
+            finally:
+                # One bump per comment, on the skip path too (a failed score burned
+                # the same wall-clock). This loop is N model calls deep and used to
+                # bump nothing until the whole reel finished — with 20 comments on a
+                # reel that is the second way one reel outlived the 180s watchdog.
+                # `finally` runs before the `continue` above takes effect.
+                self._touch()
             self.counters.comments_scored += 1
             if res.is_match:
                 d = res.decision
@@ -391,6 +543,10 @@ class Session:
         halt_reason: Optional[str] = None
         try:
             for reel in self.feed.walk():
+                # A new item arrived from the feed — real progress, and the
+                # first bump after the walk's own scroll/fetch, which runs INSIDE
+                # this generator between two iterations and bumped nothing.
+                self._touch()
                 # v12: cooperative pause checkpoint — idle here (between reels) while
                 # the operator has the run paused, then carry on from the same cursor.
                 self._check_pause()
@@ -411,24 +567,29 @@ class Session:
                 self._maybe_emit_progress()
                 self.pacer.dwell()
 
-                # Start the per-reel wall-clock BEFORE the gate/scoring so the whole
-                # expensive block (vision, open_reel nav, comment fetch) is bounded.
-                reel_start = self._clock()
-
                 try:
                     # Frames captured lazily (only if the gate needs vision); audio
                     # only captured+transcribed lazily too, and only when this
                     # session actually has a real (non-Null) transcriber wired —
                     # cascade.py's own campaign-gate check still decides per-reel.
+                    # Each lazy tier is wrapped in _touched: capture/STT/ffmpeg run
+                    # inside the gate and are not model calls, so only this makes
+                    # them visible to the watchdog (see _touched).
                     gate = self.cascade.gate_reel(
-                        reel, capture_fn=lambda r=reel: self.feed.capture_frames(r),
-                        transcribe_fn=(lambda r=reel: self._transcribe_reel(r))
+                        reel,
+                        capture_fn=lambda r=reel: self._touched(
+                            self.feed.capture_frames(r)),
+                        transcribe_fn=(lambda r=reel: self._touched(
+                            self._transcribe_reel(r)))
                         if self._stt_wired else None,
-                        video_analyze_fn=(lambda r=reel: self._analyze_video_reel(r))
+                        video_analyze_fn=(lambda r=reel: self._touched(
+                            self._analyze_video_reel(r)))
                         if self._va_wired else None)
                 except Exception as e:  # noqa: BLE001 — auto-skip transient
                     self.store.mark_seen(cid, reel.reel_id, relevant=None,
                                          author=reel.author or None, caption=reel.caption or None,
+                                         source=reel.source or None,
+                                         author_id=reel.author_id or None,
                                          platform=plat)
                     self.store.raise_flag("parse_skip", "soft", f"reel {reel.reel_id}: {e}",
                                           campaign_id=cid, session_id=self.session_id)
@@ -447,14 +608,43 @@ class Session:
                                      video_analysis_summary=(
                                          json.dumps(reel.video_analysis, ensure_ascii=False)
                                          if reel.video_analysis else None),
+                                     source=reel.source or None,
+                                     author_id=reel.author_id or None,
                                      platform=plat)
-                # Wall-clock backstop before the expensive open_reel + comment block.
-                if self._reel_deadline_breached(reel, reel_start):
-                    self._flush()
-                    self.pacer.between_reels()
-                    continue
+
+                # FIX P0: anchor the wall-clock backstop HERE, after the gate result
+                # is persisted — it used to start before cascade.gate_reel(), so a
+                # reel whose CLASSIFICATION overran per_reel_seconds was skipped
+                # before open_reel ever ran. Since mark_seen had already written the
+                # row and seen_reels has no TTL, that permanently blacklisted the
+                # reel. Live on 2026-08-19: DFdnoSsgWBk classified relevant (0.85 /
+                # conf 0.90) and was discarded in the same log second, and the
+                # escalation path that produces those slow classifications fires on
+                # exactly the borderline-but-genuine content most likely to be a
+                # lead. The budget now bounds only the browser work, which is what
+                # cfg.per_reel_seconds has always claimed to bound.
+                reel_start = self._clock()
+                # Heartbeat between the two now-serialized expensive stages. The
+                # watchdog halts any session whose last_activity_at is >180s stale
+                # (session_watchdog.py), and last_activity_at is bumped ONLY by
+                # _flush() -> update_counters, which the loop otherwise reaches just
+                # once per reel, at the very end. Before the re-anchor a slow reel
+                # cost dwell+G; now it costs dwell+G+O+C, and the shakedown log
+                # already had a 186s gap on the 159s-vision reel. Without this the
+                # fix would trade "one reel silently lost" for "whole session halted
+                # as stalled" — strictly worse, and on exactly the escalated reels
+                # most likely to be leads.
+                self._flush()
+                # Bound once, read twice: the post-block diagnostic below must not
+                # re-emit the same warn for a breach this branch already reported.
+                breached = False
 
                 if gate.relevant:
+                    # Counted for EVERY reel the gate judged relevant, before any
+                    # later skip can drop it: relevance_passes must never disagree
+                    # with seen_reels.relevant. The live run reported
+                    # relevance_passes=0 while seen_reels held a relevant=1 row,
+                    # which is what made the loss invisible in the summary.
                     self.counters.relevance_passes += 1
                     self._emit("relevance", "success",
                                f"Relevant ✓ — @{reel.author or reel.reel_id}",
@@ -463,14 +653,32 @@ class Session:
                     # only exist there, not on hashtag/account grid pages. If the
                     # permalink doesn't resolve (deleted/unavailable reel), reading
                     # the page would attribute someone else's comments to it.
-                    if not self.feed.open_reel(reel):
+                    opened = self.feed.open_reel(reel)
+                    # Permalink navigation is the longest unguarded step inside the
+                    # browser block: per_reel_seconds is only read AFTER it returns,
+                    # so a 150s nav would sit between the pre-block _flush and the
+                    # next bump with nothing in between. Progress, not a timer — it
+                    # fires because the navigation finished.
+                    self._touch()
+                    if not opened:
                         self.store.raise_flag(
                             "reel_unavailable", "soft",
                             f"reel {reel.reel_id}: permalink did not open — skipped",
                             campaign_id=cid, session_id=self.session_id)
+                        self._flag_relevant_discard(reel, "permalink did not open")
                         self._emit("feed_walk", "warn",
                                    f"Reel {reel.reel_id} unavailable — skipped",
                                    {"reelId": reel.reel_id})
+                    elif (breached := self._reel_deadline_breached(reel, reel_start)):
+                        # The only real interruption point inside the browser block:
+                        # open_reel alone burned the whole budget, so don't also pay
+                        # for the comment fetch + scoring. This keeps the backstop's
+                        # original job (a stack of slow-but-not-timed-out calls can't
+                        # wedge the walk) while charging it to browser work only. The
+                        # reel is still lost, so it is flagged rather than silent.
+                        self._flag_relevant_discard(
+                            reel, f"open_reel exceeded the {self.cfg.per_reel_seconds:.0f}s "
+                                  "browser budget")
                     else:
                         self._maybe_like(reel)                   # like on relevance (opt-in)
                         found = self._process_comments(reel)
@@ -484,7 +692,11 @@ class Session:
                 # Wall-clock backstop AFTER the block too: if open_reel/comment fetch
                 # burned the budget, log it so a chronically slow reel is diagnosable
                 # (the work is already done here; the warn is the load-bearing signal).
-                self._reel_deadline_breached(reel, reel_start)
+                # Skipped when the in-block checkpoint already reported this breach —
+                # re-evaluating the same (reel, reel_start) emitted the warn twice and
+                # burned two of the 500-event per-run budget on one reel.
+                if not breached:
+                    self._reel_deadline_breached(reel, reel_start)
 
                 self._check_tired_feed()
                 self._flush()

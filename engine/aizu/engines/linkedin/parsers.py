@@ -62,6 +62,27 @@ def _actor_name(node: dict) -> str:
     return ""
 
 
+def _actor_target(node: dict) -> str:
+    """The post author's CANONICAL profile/company URL
+    (``actor.navigationContext.actionTarget``).
+
+    Already present in every feed payload and dropped until now. The display name
+    from `_actor_name` cannot be fed back in as a seed — it is not a slug, it is
+    not unique, and it changes on a rename. This is the one field in the payload
+    that `engines/linkedin/cdp.seed_activity_url()` can consume directly, which is
+    what makes a mined author an actionable seed candidate rather than a string.
+    """
+    actor = node.get("actor")
+    if not isinstance(actor, dict):
+        return ""
+    nav = actor.get("navigationContext")
+    if isinstance(nav, dict):
+        target = nav.get("actionTarget")
+        if isinstance(target, str) and target.strip():
+            return target.strip()
+    return ""
+
+
 def _commenter_name(node: dict) -> str:
     """The commenter's display name across the commenter-wrapper variants."""
     commenter = node.get("commenter")
@@ -157,7 +178,7 @@ def parse_posts(body: Any) -> list[Reel]:
             continue
         seen.add(rid)
         out.append(Reel(reel_id=rid, caption=_commentary_text(d),
-                        author=_actor_name(d)))
+                        author=_actor_name(d), author_id=_actor_target(d)))
     return out
 
 

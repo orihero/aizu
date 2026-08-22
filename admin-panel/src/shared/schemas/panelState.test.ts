@@ -1,5 +1,11 @@
 import { describe, expect, test } from 'vitest';
-import { buildCampaign, buildPanelState, buildRunActivity, buildRunEvent } from '@/test/fixtures';
+import {
+  buildCampaign,
+  buildFleetJob,
+  buildPanelState,
+  buildRunActivity,
+  buildRunEvent,
+} from '@/test/fixtures';
 import {
   activeRunSchema,
   campaignBriefFormSchema,
@@ -140,6 +146,26 @@ describe('matchSchema', () => {
     const state = buildPanelState();
     const match = { ...state.MATCHES[0], sessionId: null, lang: null };
     expect(matchSchema.safeParse(match).success).toBe(true);
+  });
+
+  test('recomputes id from the composite (campaignId, platform, commentId)', () => {
+    // Identity is not the wire's to decide: a payload that flattens a lead to its
+    // bare commentId (what the engine used to emit) must still parse to an id that
+    // is unique per record, or two campaigns' leads collapse into one panel row.
+    const base = buildPanelState().MATCHES[0];
+    const a = matchSchema.safeParse({
+      ...base, id: 'dup', commentId: 'dup', campaignId: 'cmp-a', platform: 'instagram',
+    });
+    const b = matchSchema.safeParse({
+      ...base, id: 'dup', commentId: 'dup', campaignId: 'cmp-b', platform: 'instagram',
+    });
+    const x = matchSchema.safeParse({
+      ...base, id: 'dup', commentId: 'dup', campaignId: 'cmp-a', platform: 'x',
+    });
+    expect(a.success && b.success && x.success).toBe(true);
+    const ids = [a, b, x].map((r) => (r.success ? r.data.id : ''));
+    expect(new Set(ids).size).toBe(3);
+    expect(a.success && a.data.commentId).toBe('dup');  // raw comment id preserved
   });
 });
 
@@ -354,7 +380,7 @@ describe('runActivitySchema', () => {
   test('parses a fleetJob block for a fleet-routed run (FIX 2)', () => {
     const parsed = runActivitySchema.safeParse(
       buildRunActivity({
-        fleetJob: { jobId: 'job-9', status: 'running', lastEventAt: 1_718_800_000, leaseExpiresAt: null },
+        fleetJob: buildFleetJob({ jobId: 'job-9', status: 'running', leaseExpiresAt: null }),
       }),
     );
     expect(parsed.success).toBe(true);
@@ -362,6 +388,30 @@ describe('runActivitySchema', () => {
       expect(parsed.data.fleetJob?.jobId).toBe('job-9');
       expect(parsed.data.fleetJob?.status).toBe('running');
       expect(parsed.data.fleetJob?.leaseExpiresAt).toBeNull();
+    }
+  });
+
+  test('keeps the fleet job failure reason (B6) instead of stripping it', () => {
+    const parsed = runActivitySchema.safeParse(
+      buildRunActivity({
+        fleetJob: buildFleetJob({ status: 'failed', reason: 'cdp_unreachable', attempts: 3 }),
+      }),
+    );
+    expect(parsed.success).toBe(true);
+    if (parsed.success) {
+      expect(parsed.data.fleetJob?.reason).toBe('cdp_unreachable');
+      expect(parsed.data.fleetJob?.attempts).toBe(3);
+      expect(parsed.data.fleetJob?.maxAttempts).toBe(3);
+    }
+  });
+
+  test('an older server that omits reason/attempts degrades them to null', () => {
+    const { reason: _r, attempts: _a, maxAttempts: _m, ...legacy } = buildFleetJob();
+    const parsed = runActivitySchema.safeParse(buildRunActivity({ fleetJob: legacy as never }));
+    expect(parsed.success).toBe(true);
+    if (parsed.success) {
+      expect(parsed.data.fleetJob?.reason).toBeNull();
+      expect(parsed.data.fleetJob?.attempts).toBeNull();
     }
   });
 

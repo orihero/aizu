@@ -29,7 +29,17 @@ from .core.mock_router import MockRouter
 from .core.pacing import PacingConfig, Pacer
 from .core.pause import pause_file_from_env, wait_while_paused
 from .core.router import OpenRouterRouter, build_router, env_flag, _parse_csv_env
-from .core.store import Store
+from .core.store import DEFAULT_PLATFORM, Store
+# 9333 is the canonical warmed-Chrome port repo-wide (ledger F10). The literal is
+# duplicated from readiness.DEFAULT_CDP_URL on purpose, exactly as core/cdp.py and
+# worker/config.py do it: `readiness` imports Playwright AT IMPORT TIME, and this module
+# is pulled in by `worker/job_runner.py` (for the `_run_session_loop` seam), so a
+# module-scope `from .readiness import ...` here dragged the whole Playwright package
+# into every worker sidecar — including an API-only box that never opens a browser — and
+# silently defeated the lazy `from .. import readiness` imports inside
+# `worker/preflight.py`, which exist for precisely that reason. One string is not worth
+# the dependency; `test_config_import_cost.py` pins the constants against each other.
+DEFAULT_CDP_URL = "http://127.0.0.1:9333"
 
 # Explicit name (not __name__): run as `python -m aizu.cli`, __name__ is
 # "__main__", which would sit outside the configured `aizu` logger tree.
@@ -127,17 +137,48 @@ def _build_run_io(campaign: Campaign, store: Store, dry_run: bool,
                           compare_models=_parse_csv_env("MODEL_COMPARISON_MODELS"))
     credentials = _resolve_platform_credentials(
         campaign, store, baked=getattr(args, "platform_credentials", None))
+    # Campaign Lab (Remedy Sheet #1/D): drop seeds the per-source ledger has
+    # already parked or found dead, so a run stops paying ~45s per session per
+    # dead seed. `live_seeds` never empties a non-empty list and never falls below
+    # its own floor — see Store.live_seeds.
+    # A store-less caller (probes, some tests) simply gets the brief's seeds back
+    # — the ledger is an optimisation, never a precondition for running.
+    def _live(seeds, kind):
+        if store is None:
+            return list(seeds)
+        return store.live_seeds(campaign.campaign_id, seeds,
+                                platform=campaign.platform, kind=kind)
+    seed_hashtags = _live(campaign.seed_hashtags, "hashtag")
+    seed_accounts = _live(campaign.seed_accounts, "account")
+    seed_channels = _live(campaign.seed_channels, "channel")
     feed = build_feed(campaign.platform, cdp_url=args.cdp_url,
-                      seed_hashtags=campaign.seed_hashtags,
-                      seed_accounts=campaign.seed_accounts,
-                      seed_channels=campaign.seed_channels,
+                      seed_hashtags=seed_hashtags,
+                      seed_accounts=seed_accounts,
+                      seed_channels=seed_channels,
                       include_home_feed=campaign.include_home_feed,
                       credentials=credentials)
+    # …and record what each surviving seed actually produces, so the ledger keeps
+    # earning its keep. The sink is per-instance and never raises (FeedSource).
+    if store is not None:
+        feed.on_source_done = _source_sink(store, campaign)
     pacer = Pacer()
     if not pacer.cfg.enforce_daytime:
         log.warning("Daytime guard DISABLED (AIZU_IGNORE_DAYTIME) — live run will "
                     "proceed off-hours; intended for testing only")
     return router, feed, pacer
+
+
+def _source_sink(store: Store, campaign: Campaign):
+    """A `FeedSource.on_source_done` sink that folds each source's walk outcome
+    into `source_stats`. A plain function (not a bound method) so assigning it to
+    the instance attribute calls it with the outcome alone."""
+    def sink(outcome) -> None:
+        store.record_source_walk(
+            campaign.campaign_id, outcome.source, platform=campaign.platform,
+            kind=outcome.kind, yielded=outcome.yielded,
+            carried_over=outcome.carried_over, redirected=outcome.redirected,
+            unavailable=outcome.unavailable, seconds=outcome.seconds)
+    return sink
 
 
 def _build_warming_io(campaign: Campaign, store: Store, args: argparse.Namespace):
@@ -405,6 +446,23 @@ def _run_one(*, campaign: Campaign, store: Store, soul, dry_run: bool,
         # attach a fresh Playwright driver (a 2nd sync_playwright().start() while the
         # first is alive raises "Sync API inside the asyncio loop").
         _close_feed(feed)
+        # The session's per-source rows are in by now (the sink writes as walk()
+        # finishes each source), so re-run the park rule on the fresh cumulative
+        # totals. Idempotent — already-parked seeds are skipped — and the counters
+        # are cumulative, so evaluating per session simply means a seed is retired
+        # as soon as it has earned it rather than one run later.
+        _park_dry_sources(store, campaign, dry_run)
+
+
+def _park_dry_sources(store: Optional[Store], campaign: Campaign, dry_run: bool) -> None:
+    """Apply the ledger's park rule after a session. Never raises and never runs on
+    a dry run (the fake feed records nothing, so there is nothing to judge)."""
+    if store is None or dry_run:
+        return
+    try:
+        store.park_dry_sources(campaign.campaign_id, campaign.platform)
+    except Exception:  # noqa: BLE001 — housekeeping must not mask the run outcome
+        log.debug("park_dry_sources failed (continuing)", exc_info=True)
 
 
 def _close_feed(feed) -> None:
@@ -725,7 +783,7 @@ def cmd_run_all(args: argparse.Namespace) -> int:
 
 
 def cmd_panel(args: argparse.Namespace) -> int:
-    from .server import serve
+    from .server import PortInUseError, serve
     panel_dir = Path(args.panel_dir)
     if not (panel_dir / "index.html").exists():
         print(f"error: no index.html under {panel_dir} — build the panel first "
@@ -741,7 +799,17 @@ def cmd_panel(args: argparse.Namespace) -> int:
               "(cd admin-panel && npm run build), or pass --panel-dir",
               file=sys.stderr)
         return 2
-    httpd = serve(args.db, str(panel_dir), args.config, host=args.host, port=args.port)
+    try:
+        httpd = serve(args.db, str(panel_dir), args.config,
+                      host=args.host, port=args.port)
+    except PortInUseError as e:
+        # The most common failure of the documented start command (a stale bridge from
+        # an unclean exit). serve() already refuses to touch the DB or start a daemon
+        # before it binds, so there is nothing to clean up — print it in the same
+        # one-line `error: …` style the missing-panel-build checks above use, rather
+        # than letting a traceback full of absolute paths out.
+        print(f"error: {e}", file=sys.stderr)
+        return 2
     url = f"http://{args.host}:{args.port}/"
     log.success("Panel serving %s at %s (db=%s)", panel_dir, url, args.db)
     print(f"AIZU panel serving {panel_dir} at {url}")
@@ -764,6 +832,151 @@ def cmd_status(args: argparse.Namespace) -> int:
         print(f"  [{f['severity']}] {f['kind']}: {f['detail']}")
     store.close()
     return 0
+
+
+def cmd_sources(args: argparse.Namespace) -> int:
+    """Print the per-source discovery ledger for a campaign (schema v24).
+
+    The operator-facing half of Campaign Lab Remedy Sheet #1/D: which seed
+    produced which leads, which ones are being carried by other seeds' reels, and
+    which the park rule has retired. Read-only.
+    """
+    store = Store(args.db)
+    try:
+        rows = store.source_stats(args.campaign, args.platform)
+        if not rows:
+            print(f"No source data yet for campaign {args.campaign!r}"
+                  + (f" on {args.platform}" if args.platform else "")
+                  + " — it has not run since per-source accounting landed.")
+            return 0
+        print(f"{'source':<28} {'kind':<9} {'navs':>5} {'yield':>6} {'carried':>8} "
+              f"{'relev':>6} {'leads':>6}  status")
+        for r in rows:
+            status = ""
+            if r["banned_at"]:
+                status = "BANNED"
+            elif r["parked_at"]:
+                status = f"parked — {r['park_reason'] or ''}"
+            elif r["redirects"]:
+                status = f"{r['redirects']} redirect(s)"
+            print(f"{r['source'][:28]:<28} {r['kind']:<9} {r['navigations']:>5} "
+                  f"{r['yielded']:>6} {r['carried_over']:>8} "
+                  f"{r['relevant_reels']:>6} {r['leads']:>6}  {status}")
+        if args.mine:
+            from .core.tagmine import mine_campaign
+            seeds = [r["source"] for r in rows]
+            candidates = mine_campaign(store, args.campaign,
+                                       platform=args.platform, exclude=seeds)
+            print("\nCo-occurring tags mined from this campaign's own captions "
+                  "(support-adjusted, best first):")
+            if not candidates:
+                print("  (not enough labelled captions yet)")
+            for c in candidates[:15]:
+                print(f"  {c.tag:<28} {c.relevant}/{c.support} relevant "
+                      f"· lift {c.lift:.2f}")
+        return 0
+    finally:
+        store.close()
+
+
+def cmd_seeds(args: argparse.Namespace) -> int:
+    """Propose new seed ACCOUNTS mined from this campaign's own results (v25).
+
+    Campaign Lab, Remedy Sheet #2 / Remedy A. Zero new requests: the authors of
+    posts this campaign already judged relevant, ranked by how many of them
+    produced actual leads. Read-only — it proposes, the operator disposes.
+    """
+    store = Store(args.db)
+    try:
+        current = [r["source"] for r in store.source_stats(args.campaign, args.platform)]
+        rows = store.seed_candidates(args.campaign, args.platform,
+                                     exclude=current, min_relevant=args.min_relevant,
+                                     limit=args.limit)
+        if not rows:
+            print(f"No seed candidates for campaign {args.campaign!r} yet — needs "
+                  f"posts marked relevant by at least {args.min_relevant} run(s).")
+        else:
+            print("Accounts whose posts this campaign judged relevant "
+                  "(proof first — leads beat relevance):")
+            print(f"  {'seed':<40} {'platform':<10} {'relevant':>8} {'leads':>6}  author")
+            for r in rows:
+                print(f"  {str(r['seed'])[:40]:<40} {r['platform']:<10} "
+                      f"{r['relevant_posts']:>8} {r['leads']:>6}  {r['author'] or ''}")
+        overlap = store.co_commenter_overlap(args.campaign, args.platform)
+        if overlap:
+            print("\nAccounts sharing OUR qualified commenters "
+                  "(share of their commenters that are already our leads):")
+            for r in overlap:
+                print(f"  {str(r['seed'])[:40]:<40} {r['shared_commenters']:>3}"
+                      f"/{r['total_commenters']:<4} = {r['overlap_share']:.0%}")
+        return 0
+    finally:
+        store.close()
+
+
+def cmd_gold(args: argparse.Namespace) -> int:
+    """Inspect / export the gold-set labelling queue (schema v26).
+
+    Campaign Lab, Remedy Sheet #3 / Remedy E. Comments the match gate rejected are
+    now captured instead of discarded; this is where a human turns them into
+    ground truth. Ordered most-informative-first — a labelling budget is small and
+    boundary cases are what a threshold sweep turns on.
+    """
+    store = Store(args.db)
+    try:
+        rows = store.eval_candidates(
+            args.campaign, platform=args.platform, band=args.band,
+            unlabelled_only=not args.all, limit=args.limit)
+        if args.export:
+            # The shape scripts/eval/run_eval.py already reads.
+            gold = [{"id": r["comment_id"], "text": r["text"],
+                     "lang": r["lang"] or "??", "match": bool(r["label"]),
+                     "note": f"{r['band']} · model={r['score']}"}
+                    for r in rows if r["label"] is not None]
+            Path(args.export).write_text(
+                json.dumps(gold, ensure_ascii=False, indent=1), encoding="utf-8")
+            print(f"Exported {len(gold)} labelled item(s) to {args.export}")
+            if not gold:
+                print("  (nothing labelled yet — run without --export to see the queue)")
+            return 0
+        total = store.eval_candidate_count(args.campaign)
+        if not rows:
+            print(f"No candidates for campaign {args.campaign!r}"
+                  + (f" on {args.platform}" if args.platform else "")
+                  + f". {total} captured overall.")
+            print("Candidates accumulate as runs score comments — the gate's "
+                  "REJECTS are the half a gold set needs and they were discarded "
+                  "before schema v26.")
+            return 0
+        labelled = sum(1 for r in store.eval_candidates(args.campaign, limit=10**6)
+                       if r["label"] is not None)
+        print(f"{total} captured · {labelled} labelled · showing {len(rows)}"
+              f"{'' if args.all else ' unlabelled'}, most-informative first\n")
+        for r in rows:
+            mark = {None: "?", 1: "Y", 0: "n"}.get(r["label"], "?")
+            score = "  --  " if r["score"] is None else f"{r['score']:6.2f}"
+            print(f"  [{mark}] {r['band']:<8} score={score} "
+                  f"lang={(r['lang'] or '??'):<5} @{(r['username'] or '')[:18]:<18} "
+                  f"{r['comment_id']}")
+            print(f"      {(r['text'] or '')[:100]}")
+        print(f"\nLabel with:  aizu --db {args.db} gold --campaign {args.campaign} "
+              f"--label <comment_id> --verdict yes|no")
+        return 0
+    finally:
+        store.close()
+
+
+def cmd_gold_label(args: argparse.Namespace) -> int:
+    store = Store(args.db)
+    try:
+        store.label_eval_candidate(
+            args.campaign, args.label, args.verdict == "yes",
+            platform=args.platform or DEFAULT_PLATFORM,
+            labeled_by=args.by or os.environ.get("USER", ""))
+        print(f"{args.label} labelled {args.verdict}")
+        return 0
+    finally:
+        store.close()
 
 
 def _verify_warm_identity(args: argparse.Namespace) -> Optional[str]:
@@ -859,12 +1072,21 @@ def build_parser() -> argparse.ArgumentParser:
                              "requires AIZU_STT_ENABLED + AIZU_STT_MODEL_PATH and "
                              "\"uz\" in language_mix to actually fire — Instagram only)")
         sp.add_argument("--cdp-url",
-                        default=os.environ.get("AIZU_CDP_URL", "http://127.0.0.1:9222"))
+                        default=os.environ.get("AIZU_CDP_URL", DEFAULT_CDP_URL))
         sp.add_argument("--spend-cap", type=float, default=20.0, help="USD cloud spend cap")
-        sp.add_argument("--text-model",
-                        default=os.environ.get("OPENROUTER_TEXT_MODEL", "openrouter/owl-alpha"))
-        sp.add_argument("--vision-model",
-                        default=os.environ.get("OPENROUTER_VISION_MODEL", "nex-agi/nex-n2-pro:free"))
+        # default=None, NOT a literal. `build_router` resolves
+        # `arg or AIZU_*_MODEL or OPENROUTER_*_MODEL or <router default>`
+        # (core/router.py:366-370) and an EXPLICIT argument outranks the whole
+        # chain — cli.py passes these through unconditionally, so a literal here
+        # shadowed the router's resolution entirely. Two consequences, both real:
+        # a model id could go stale in two places at once (memory/known-issues.md
+        # C0: both literals here were dead on OpenRouter), and `AIZU_TEXT_MODEL`
+        # — the local-Ollama knob router.py:364-366 exists to provide — was
+        # unreachable on the CLI path because the CLI always supplied a value.
+        # Passing None restores the single chain and leaves exactly one place a
+        # model default lives.
+        sp.add_argument("--text-model", default=None)
+        sp.add_argument("--vision-model", default=None)
 
     r = sub.add_parser("run", help="run a discovery session")
     r.add_argument("--campaign", default=None,
@@ -883,6 +1105,48 @@ def build_parser() -> argparse.ArgumentParser:
     _add_log_args(s)
     s.set_defaults(func=cmd_status)
 
+    src = sub.add_parser(
+        "sources", help="print the per-source discovery ledger for a campaign")
+    _add_log_args(src)
+    src.add_argument("--campaign", required=True, help="campaign id")
+    src.add_argument("--platform", default=None,
+                     help="restrict to one platform (default: all)")
+    src.add_argument("--mine", action="store_true",
+                     help="also mine co-occurring hashtags from this campaign's "
+                          "own labelled captions (no network)")
+    src.set_defaults(func=cmd_sources)
+
+    sd = sub.add_parser(
+        "seeds", help="propose new seed accounts mined from a campaign's own results")
+    _add_log_args(sd)
+    sd.add_argument("--campaign", required=True, help="campaign id")
+    sd.add_argument("--platform", default=None,
+                    help="restrict to one platform (default: all)")
+    sd.add_argument("--min-relevant", type=int, default=1,
+                    help="minimum relevant posts before an account is proposed")
+    sd.add_argument("--limit", type=int, default=25)
+    sd.set_defaults(func=cmd_seeds)
+
+    gd = sub.add_parser(
+        "gold", help="inspect, label and export the gold-set candidate queue")
+    _add_log_args(gd)
+    gd.add_argument("--campaign", required=True)
+    gd.add_argument("--platform", default=None)
+    gd.add_argument("--band", default=None,
+                    choices=("accepted", "near", "clear"),
+                    help="restrict to one capture band")
+    gd.add_argument("--all", action="store_true",
+                    help="include already-labelled items")
+    gd.add_argument("--limit", type=int, default=30)
+    gd.add_argument("--label", default=None, metavar="COMMENT_ID",
+                    help="record a human verdict for this comment id")
+    gd.add_argument("--verdict", default=None, choices=("yes", "no"))
+    gd.add_argument("--by", default=None, help="who labelled it")
+    gd.add_argument("--export", default=None, metavar="PATH",
+                    help="write the labelled items as a scripts/eval gold.json")
+    gd.set_defaults(func=lambda a: (cmd_gold_label(a) if a.label
+                                    else cmd_gold(a)))
+
     wr = sub.add_parser("warm-register",
                         help="register a logged-in account into the warming pool")
     _add_log_args(wr)
@@ -899,7 +1163,7 @@ def build_parser() -> argparse.ArgumentParser:
     wr.add_argument("--timezone", default=None,
                     help="account timezone id (e.g. America/New_York or UTC) for the daytime guard")
     wr.add_argument("--cdp-url",
-                    default=os.environ.get("AIZU_CDP_URL", "http://127.0.0.1:9222"))
+                    default=os.environ.get("AIZU_CDP_URL", DEFAULT_CDP_URL))
     wr.add_argument("--skip-verify", action="store_true",
                     help="register without attaching over CDP to confirm the login")
     wr.set_defaults(func=cmd_warm_register)

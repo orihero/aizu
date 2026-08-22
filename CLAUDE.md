@@ -12,6 +12,12 @@ Aizu is a brief-driven, multi-platform lead-discovery agent plus a multi-tenant 
 - `mockups/` — standalone UI mockups/prototypes (not part of the build).
 - `memory/` — running notes: `known-issues.md`, `feedback-ui-mistakes.md`.
 
+Campaign Lab (see `docs/prd/campaign-lab-PRD.md`) turns guessed campaign inputs into researched ones. Sheets #1 (hashtags & search terms) and #2 (seed accounts) are built; #3 (match prompt & threshold) is researched but not yet built.
+
+`engine/aizu/discovery/` is the package: offline oracles (`translit`, `patterns`, `banned`), the one live free layer (`autocomplete`), the orchestrator (`expand`), per-platform term validators (`validate`), seed-account prescore probes + liveness gate (`prescore`), and the buyer-density scorer (`buyer_density`). `engine/aizu/core/tagmine.py` mines new hashtags from our own labelled captions. Two tables carry the evidence: `source_stats` (what every seed actually produced, plus park/ban verdicts) and `seen_reels.source`/`author_id`, which is what makes `Store.seed_candidates()` / `co_commenter_overlap()` answerable.
+
+Two invariants worth knowing before touching any of it: `Reel.source` is the SEED TERM, never the URL (it is written through to `seen_reels.source` and joined against `source_stats`); and a signal a platform did not report is UNKNOWN, never zero — an unreachable probe must never read as a pass.
+
 ## How to run
 
 Requires Python ≥3.10 and Node. First-time setup:
@@ -20,7 +26,9 @@ Requires Python ≥3.10 and Node. First-time setup:
 
 **Dev (both servers):** `./dev.sh` (macOS/Linux) or `.\dev.ps1` (Windows) — starts the bridge on `127.0.0.1:8765` (via `engine/scripts/dev_panel.py`, auto-restarts on `engine/aizu/*.py` edits) and the Vite panel dev server on `http://localhost:5173`, which proxies `/api` to the bridge. The bare dev-server root serves the static landing (`admin-panel/public/index.html`); the SPA is at `http://localhost:5173/app/`. Ctrl+C tears both down; if either server dies the other is stopped too. Both scripts free their ports first, killing a stale bridge/panel left by an unclean exit. Overridable env: `BRIDGE_PORT` (8765), `BRIDGE_HOST` (127.0.0.1), `PANEL_PORT` (5173), `DB` (aizu.db) — these are shell vars read by the launcher, not by Python. `dev.ps1` also takes them as parameters (`-BridgePort`, `-BridgeHost`, `-PanelPort`, `-Database`; not `-Db`, which collides with the `-Debug` common parameter). Note that Vite binds `localhost` (IPv6 `::1`) on Windows, so use `http://localhost:5173`, not `127.0.0.1:5173`. Keep `dev.ps1` ASCII-only: Windows PowerShell 5.1 parses scripts as the ANSI codepage, and a UTF-8 em dash decodes into a curly quote that it treats as a string delimiter.
 
-**Bridge only (manual):** `aizu panel [--host 127.0.0.1] [--port 8765] [--panel-dir ../admin-panel/dist] [--config config] [--db aizu.db]`. Errors if either `index.html` (the landing) or `app/index.html` (the SPA shell) is missing under `--panel-dir`.
+**Bridge only (manual):** `aizu [--db aizu.db] panel [--host 127.0.0.1] [--port 8765] [--panel-dir ../admin-panel/dist] [--config config]`. Errors if either `index.html` (the landing) or `app/index.html` (the SPA shell) is missing under `--panel-dir`.
+
+⚠️ **`--db` is a TOP-LEVEL flag and MUST precede the subcommand** (`cli.py` adds it to the root parser, not to `panel`/`run`/`run-all`/`status`/`warm-register`). Trailing it — `aizu panel --port 8765 --db aizu.db` — dies instantly with `aizu: error: unrecognized arguments: --db aizu.db`, which reads like a missing feature rather than an argument-order mistake. Same for `-v`/`-q`, which ARE per-subcommand and must come *after* it.
 
 **Panel dev only:** `cd admin-panel && npm run dev`.
 
@@ -29,22 +37,27 @@ Requires Python ≥3.10 and Node. First-time setup:
 - `aizu run` — run the file brief `config/campaign.md`.
 - `aizu run-all [--org <id>]` — run every `live`, non-archived campaign.
 - `aizu status` — print open health flags. `aizu warm-register ...` — register a logged-in account into the warming pool.
+- `aizu seeds --campaign <id> [--platform <p>] [--min-relevant N]` — propose new seed ACCOUNTS mined from that campaign's own results: authors whose posts it already judged relevant, ranked leads-first, plus commenter-overlap lookalikes. Read-only, no network.
+- `aizu sources --campaign <id> [--platform <p>] [--mine]` — print the per-source discovery ledger (schema v24): per seed, how many items it actually produced vs. carried over from an earlier seed, its relevance/lead counts, and any park/ban verdict. `--mine` additionally ranks co-occurring hashtags from that campaign's own labelled captions (no network).
 - Useful run flags: `--dry-run` (fake feed, no network/LLM), `--target-leads N`, `--duration-minutes N`, `--engine-mode {harvest,warming}`, `--spend-cap`, `--cdp-url`. Global `--db` (default `aizu.db`), `-v/-q`.
 
-**Worker sidecar:** `aizu-worker` (PULL model; requires `AIZU_DISPATCH_URL`).
+**Worker sidecar:** `aizu-worker` (PULL model; requires `AIZU_DISPATCH_URL`). A dispatch **401** retires the box's persisted token and parks it pending re-enrolment (ledger B10) — but only after the rejection is *sustained*: `_UNAUTHORIZED_CONFIRM_LIMIT` consecutive 401s **and** at least `_UNAUTHORIZED_CONFIRM_WINDOW_SEC` (5 min) of them, with every 401 retry spaced by ≥`_UNAUTHORIZED_RETRY_MIN_SEC` (30s). So expect a genuinely revoked box to take ~5–8 minutes to halt, and a bridge restart/failover/volume-mount blip to cost nothing. Never make that confirmation count-only: `_backoff` starts sub-second, so a bare three-strike rule was worth ~2.5s of wall clock and a ~9-second server-side blip permanently bricked boxes enrolled with a per-worker token (recovery = a hand-minted enrolment token and an operator visit).
 
-**Production:** single server — `aizu panel` serves the built `admin-panel/dist` (the static landing at `/`, the SPA at `/app/`) plus the `/api/*` control plane from one process; run behind a reverse proxy. Build the panel first with `cd admin-panel && npm run build`.
+**Production:** single server — `aizu --db aizu.db panel --host 127.0.0.1 --port 8765 --panel-dir ../admin-panel/dist` serves the built `admin-panel/dist` (the static landing at `/`, the SPA at `/app/`) plus the `/api/*` control plane from one process; run behind a reverse proxy. Build the panel first with `cd admin-panel && npm run build`.
+
+The build deliberately does **not** ship source maps: `dist` is served statically and unauthenticated, and a Vite map embeds `sourcesContent` — i.e. the complete original TypeScript, RBAC mirror included. `vite.config.ts` sets `sourcemap: 'hidden'` (maps generated, no `//# sourceMappingURL=` pointer in the bundle) and its `keepSourceMapsOutOfDist` plugin moves every `.map` out of the bundle into `admin-panel/.vite/sourcemaps/` before Rollup writes it, so none is ever created under `dist/`. Keep them for symbolicating a production stack trace; never copy them into a deployed `--panel-dir`.
 
 **Key env vars** (`AIZU_*` and a few others; loaded from `./.env` then `engine/.env`, existing env wins):
 - `OPENROUTER_API_KEY` — required for any live (non-warming) run and for AI campaign generate/interview. `OPENROUTER_TEXT_MODEL` (default `openrouter/owl-alpha`), `OPENROUTER_VISION_MODEL` (default `nex-agi/nex-n2-pro:free`).
-- `AIZU_CDP_URL` — CDP attach URL for warmed Chrome (default `http://127.0.0.1:9222`).
+- `AIZU_CDP_URL` — CDP attach URL for warmed Chrome (default `http://127.0.0.1:9333`; canonical repo-wide since ledger F10, matching `scripts/warm_chrome.sh` and the desktop shell). 9222 is retired as a default but stays a detected sibling: the worker preflight probes the configured port, then the other well-known one, and **adopts** a live sibling with a logged warning when `AIZU_CDP_URL` was never set — while an explicit pin at the wrong port is reported as a named fatal rather than silently overridden. Setting this var at all counts as an explicit pin and disarms that auto-adoption.
 - `AIZU_SECRET_KEY` — Fernet key (32 bytes, urlsafe-base64) for per-org integration secrets and admin TOTP; required for integrations and admin bootstrap/login.
 - `AIZU_ADMIN_IP_ALLOWLIST` — CSV IPs/CIDRs for the superadmin plane; empty/unset = fail-closed (no admin access). `AIZU_TRUSTED_PROXIES` gates `X-Forwarded-For`.
 - `AIZU_ALLOWED_ORIGINS` — CSV of exact `scheme://host[:port]` origins the panel is served from on a hosted deployment (e.g. `https://aizu.uz`). Loopback is always allowed, so local-first runs need this unset; without it a network-served panel gets `403 cross-origin request rejected` on every POST.
 - `AIZU_WARMING_ENABLED` — layer-1 warming hard-stop (default off). `AIZU_IGNORE_DAYTIME` — disable daytime write guard (testing).
-- Worker plane: `AIZU_DISPATCH_URL` (required), `AIZU_WORKER_BOOTSTRAP_TOKEN`, `AIZU_DB` (default `aizu.db`), `AIZU_WORKER_STATE` (default `.worker-state`), `AIZU_SPEND_CAP`, `AIZU_CONTROL_SURFACE`/`AIZU_CONTROL_TOKEN`.
+- Worker plane: `AIZU_DISPATCH_URL` (required), `AIZU_WORKER_BOOTSTRAP_TOKEN`, `AIZU_DB` (default `aizu.db`), `AIZU_WORKER_STATE` (default `.worker-state`), `AIZU_SPEND_CAP`, `AIZU_CONTROL_SURFACE`/`AIZU_CONTROL_TOKEN`, `AIZU_PREFLIGHT_ENFORCE` (set `0`/`false`/`no`/`off` to downgrade every fatal preflight row to a warning; anything else, including unset or garbage, enforces), `AIZU_WORKER_WARMING_ONLY` (declares this box only ever runs warming jobs — the sole effect is demoting the launch preflight's LLM-backend check from fatal to warn. **Not** the same as the global `AIZU_WARMING_ENABLED` hard-stop, which a harvest box also has reason to set; setting this on a box that leases harvest work makes every live job dead-letter at attempt 5 behind an amber row).
 - Billing (Polar, optional; missing ⇒ billing disabled): `POLAR_ACCESS_TOKEN`, `POLAR_WEBHOOK_SECRET`, `POLAR_SERVER` (default `sandbox`), `POLAR_PRODUCTS`.
 - Per-platform live creds when no per-org stored secret: `YOUTUBE_API_KEY`; `TELEGRAM_BOT_TOKEN` or `TELEGRAM_API_ID`/`TELEGRAM_API_HASH`/`TELEGRAM_SESSION`; `REDDIT_CLIENT_ID`/`REDDIT_CLIENT_SECRET`/`REDDIT_USER_AGENT`.
+- Campaign Lab seed discovery (`engine/aizu/discovery/`, all optional): `AIZU_SEED_EXPANSION` (default on; set `0`/`false`/`no`/`off` to skip the free Google/YouTube suggest layer during AI campaign generation and use the deterministic layers only — the test suite forces this off in `tests/conftest.py`), `AIZU_SEED_GEO` (a `gl` market code such as `UZ`; unset lets the endpoint infer one), `AIZU_BANNED_TAGS_FILE` (path to an operator-maintained banned-hashtag list, one tag per line, `#` optional, `//` comments).
 - Logging: `AIZU_LOG_LEVEL`, `AIZU_LOG_FILE_LEVEL`, `AIZU_LOG_FILE`, `AIZU_LOG_COLOR`.
 - Defaults: DB is `aizu.db`, log file is `aizu.log`.
 
@@ -60,7 +73,7 @@ Superadmins are created out-of-band only: `python -m aizu.admin_bootstrap --db <
 - Python package is `aizu` — always `import aizu...`. Two console entry points: `aizu` (CLI: `run`/`run-all`/`status`/`panel`/`warm-register`) and `aizu-worker` (distributed worker sidecar; same target packaged via PyInstaller for desktop).
 - The bridge is stdlib only (`ThreadingHTTPServer`, no web framework); the panel is a pure client with a never-throw `Result`-based repository and Zod-validated boundaries. Only one engine run executes at a time (single browser/account), enforced by a lock in the run manager.
 - RBAC (`engine/aizu/rbac.py`) is an explicit action→roles matrix (owner/admin/member/viewer), NOT a linear rank; the frontend mirror `admin-panel/src/shared/auth/roles.ts` must stay in lockstep. The server is the real gate; UI gating is UX only.
-- Some READMEs (`engine/README.md`, `admin-panel/README.md`) are stale (single-platform / pre-multi-tenancy, CDP port 9333, "dark default"). Trust the code over the READMEs.
+- Some READMEs (`engine/README.md`, `admin-panel/README.md`) are stale (single-platform / pre-multi-tenancy, "dark default"). Trust the code over the READMEs. (Their CDP port 9333 is no longer stale — it is now the canonical default.)
 
 ## Pointers
 

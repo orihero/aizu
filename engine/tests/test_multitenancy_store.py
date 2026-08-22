@@ -267,6 +267,29 @@ def test_per_campaign_rollup_is_org_scoped():
         store.close()
 
 
+def test_per_campaign_rollup_scopes_lead_less_spend_by_campaign_meta():
+    """A campaign with spend but NO leads still gets a row — attributed to its org
+    through campaign_meta, since spend_log carries no org_id of its own. Without
+    this, the panel card reported $0 while /api/reports summed the same money."""
+    store = Store(_tmp())
+    try:
+        a = store.create_org_with_owner(email="a@x.io", password_hash="h", token="ta",
+                                        expires_at=9e12, company_name="A")["orgId"]
+        b = store.create_org_with_owner(email="b@x.io", password_hash="h", token="tb",
+                                        expires_at=9e12, company_name="B")["orgId"]
+        store.upsert_campaign_meta("ca-dry", org_id=a)
+        store.upsert_campaign_meta("cb-dry", org_id=b)
+        store.log_spend("ca-dry", "vision", 12.5)
+        store.log_spend("cb-dry", "vision", 7.0)
+        rollup_a = store.per_campaign_rollup(a)
+        assert [(r["campaignId"], r["leads"], r["spend"]) for r in rollup_a] \
+            == [("ca-dry", 0, 12.5)]
+        # Another org's lead-less spend never leaks into this org's rollup.
+        assert [r["campaignId"] for r in store.per_campaign_rollup(b)] == ["cb-dry"]
+    finally:
+        store.close()
+
+
 def test_campaign_in_org_is_the_composite_tenant_filter():
     """store.campaign_in_org is the single repository-level ownership gate (PRD §10):
     a campaign matches ONLY its own org; a foreign org, an unknown campaign, and a

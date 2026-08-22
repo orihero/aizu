@@ -13,6 +13,7 @@ Confirm endpoint URL substrings in DevTools (they drift); see DEFAULT_*_HINTS.
 """
 from __future__ import annotations
 
+import re
 from typing import Any, Iterator, Optional
 
 from .feed import Comment, Reel
@@ -30,6 +31,47 @@ DEFAULT_COMMENT_URL_HINTS = ("/comments/", "/comments?", "graphql")
 # (often a *different* reel in the same feed batch). Hunting comments inside
 # them is how leads end up attributed to the wrong reel/author.
 COMMENT_SKIP_KEYS = ("caption", "edge_media_to_caption", "preview_comments")
+
+# The canonical hashtag extractor. `\w` is Unicode-aware under Python 3, so this
+# matches Cyrillic and Latin-with-diacritics tags (`#ремонт`, `#toshkentda`) as
+# well as ASCII — which matters because the briefs this engine runs are uz/ru.
+# A tag must contain at least one letter and must not open with an underscore:
+# `#123` is noise and a leading underscore is almost always a truncated mention.
+#
+# Two near-identical regexes already exist in the tree (instagram/cascade.py's
+# thin-caption check and warming/executor.py's token set) but both exist to
+# DELETE tags from a string. This one exists to read them, which is what the
+# co-occurrence ledger needs (Campaign Lab, Remedy Sheet #1 / Remedy A.4).
+_HASHTAG_RE = re.compile(r"#(?!_)(\w*[^\W\d_]\w*)", re.UNICODE)
+
+
+def extract_hashtags(text: str) -> list[str]:
+    """Every hashtag in `text`, lowercased, deduped, in first-appearance order.
+
+    The `#` is stripped: a campaign brief's `seed_hashtags` carry bare terms, and
+    the ledger has to compare the two without a normalisation step at every call
+    site."""
+    out: list[str] = []
+    seen: set[str] = set()
+    for raw in _HASHTAG_RE.findall(text or ""):
+        tag = raw.lower()
+        if tag not in seen:
+            seen.add(tag)
+            out.append(tag)
+    return out
+
+
+def co_occurring_tags(caption: str, exclude: "Iterator[str] | tuple[str, ...]" = ()
+                      ) -> list[str]:
+    """Hashtags in `caption` other than the ones we already seeded.
+
+    The seed tag is in its own captions by construction — a post found on
+    `#remont` almost always carries `#remont` — so leaving it in makes it the top
+    co-occurrence result every time and buries everything the miner exists to
+    find."""
+    drop = {str(x).lstrip("#").lower() for x in exclude}
+    return [t for t in extract_hashtags(caption) if t not in drop]
+
 
 
 def _walk(obj: Any, skip_keys: tuple[str, ...] = ()) -> Iterator[dict]:
@@ -60,6 +102,26 @@ def _username(node: dict) -> Optional[str]:
     if isinstance(user, dict):
         return _first_str(user, "username", "handle")
     return _first_str(node, "username")
+
+
+def _user_pk(node: dict) -> str:
+    """The posting account's STABLE numeric id (`user.pk` / `user.id`).
+
+    Already in every media payload and dropped until now. `_username` returns the
+    handle, which is what a rename changes — so an account mined as a seed
+    candidate by handle silently becomes a different (or dead) account later. The
+    pk does not move (Campaign Lab, Remedy Sheet #2: key seeds on the stable id,
+    never the handle).
+    """
+    user = node.get("user") or node.get("owner")
+    if not isinstance(user, dict):
+        return ""
+    for key in ("pk", "id", "pk_id"):
+        v = user.get(key)
+        if isinstance(v, (str, int)) and str(v).strip():
+            # `id` is sometimes "123456_789" (pk_userid); the pk is the head.
+            return str(v).split("_", 1)[0]
+    return ""
 
 
 def _caption_text(node: dict) -> str:
@@ -154,6 +216,7 @@ def parse_reels(body: Any) -> list[Reel]:
             reel_id=rid,
             caption=_caption_text(d),
             author=_username(d) or "",
+            author_id=_user_pk(d),
         ))
     return out
 

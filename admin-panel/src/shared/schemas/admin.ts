@@ -66,6 +66,51 @@ export const currentJobSchema = z.object({
 });
 export type CurrentJob = z.infer<typeof currentJobSchema>;
 
+/**
+ * One non-passing row of a worker's launch preflight (ledger F9/F10, engine
+ * `worker/preflight.py`). `title` and `remedy` deliberately never ride the wire — they are
+ * UI copy this panel resolves client-side from the id (see `features/admin/preflightCopy`),
+ * which halves the body and keeps operator-facing text under our control rather than a
+ * worker's.
+ *
+ * SECURITY: `detail` is WORKER-AUTHORED text rendered in the superadmin console. Render it
+ * as text, never as markup (the E1/E2/F18 family — an off-cloud caller's string reaching a
+ * privileged surface).
+ */
+export const preflightFailureSchema = z.object({
+  id: z.string(),
+  // Same reasoning as `status` below, and the same failure mode `failed[]`'s own
+  // `.catch([])` guards: without a fallback ONE row carrying a severity this panel has
+  // not learned yet (a newer sidecar's) fails the row, which fails the array, which the
+  // outer `.catch([])` swallows whole — every other failing check silently vanishes from
+  // the console. Falls back to 'fatal', the reading that never under-reports.
+  severity: z.enum(['fatal', 'warn']).catch('fatal'),
+  // `failed[]` mixes "checked, it is broken" (fail) with "could not check at all"
+  // (unknown), and those need different operator copy — the commonest red state of all is
+  // Chrome being down, which marks every `login.*` row unknown. An older sidecar that
+  // omits this degrades to 'fail', the reading that never under-reports a problem.
+  status: z.enum(['fail', 'unknown', 'pass', 'skip']).catch('fail'),
+  detail: z.string().nullable().catch(null),
+});
+export type PreflightFailure = z.infer<typeof preflightFailureSchema>;
+
+/**
+ * The compact preflight summary a box carries on register/heartbeat. `null` means the
+ * server has never stored one (a pre-v23 sidecar, or a box whose report was dropped for
+ * being malformed/oversized) — it is "unknown", NEVER "healthy".
+ */
+export const preflightSummarySchema = z
+  .object({
+    ok: z.boolean(),
+    blocking: z.boolean(),
+    enforced: z.boolean(),
+    ranAt: z.number().nullable().catch(null),
+    failed: z.array(preflightFailureSchema).catch([]),
+  })
+  .nullable()
+  .catch(null);
+export type PreflightSummary = z.infer<typeof preflightSummarySchema>;
+
 export const fleetWorkerSchema = z.object({
   id: z.string(),
   orgId: z.number().nullable(),
@@ -84,6 +129,11 @@ export const fleetWorkerSchema = z.object({
   // Enrichment: what the box is running now. `.catch(null)` keeps an older/absent
   // server payload valid (the field is additive).
   currentJob: currentJobSchema.nullable().catch(null),
+  // v23 launch preflight. This key MUST be declared: z.object() STRIPS unknown keys, so
+  // omitting it is not "the field passes through untouched" — it is the field being
+  // silently discarded at the last hop after the worker, the server and the store all
+  // carried it correctly (the B4 trap, which has shipped inert twice).
+  preflight: preflightSummarySchema,
 });
 export type FleetWorker = z.infer<typeof fleetWorkerSchema>;
 

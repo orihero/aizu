@@ -44,7 +44,7 @@ export function LeadBoard({ leads, threshold, onOpen, onRequestTerminalMove }: L
   const onDragEnd = (event: DragEndEvent) => {
     const target = event.over?.id;
     if (!isStatus(target)) return;
-    const lead = leads.find((m) => m.commentId === event.active.id);
+    const lead = leads.find((m) => m.id === event.active.id);
     if (!lead || lead.status === target) return;
     if (isTerminalStatus(target)) {
       // Terminal moves need a reason — defer the write to the modal.

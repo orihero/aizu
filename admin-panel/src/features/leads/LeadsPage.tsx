@@ -8,7 +8,8 @@ import { useLeads } from '@/shared/hooks/useLeads';
 import { useSetMatchStatus } from '@/shared/hooks/useSetMatchStatus';
 import { cn } from '@/shared/lib/cn';
 import { formatNumber, formatPercent } from '@/shared/lib/formatters';
-import { pageCount, type LeadSortKey } from '@/shared/selectors/leads';
+import { leadRoute } from '@/shared/lib/leadId';
+import { pageCount, selectLeadById, type LeadSortKey } from '@/shared/selectors/leads';
 import type { LeadsQuery, Match } from '@/shared/types/domain';
 import { LeadBoard } from './board/LeadBoard';
 import { ReasonMoveModal, type PendingMove } from './board/ReasonMoveModal';
@@ -132,20 +133,22 @@ export function LeadsPage() {
   const totalPages = Math.max(1, pageCount(total, pageSize));
   const safePage = Math.min(page, totalPages);
 
+  // Selection, the drawer lookup and the route all key on the composite lead `id`
+  // — a bare commentId is shared by leads in different campaigns/platforms.
   const selectedLeads = useMemo(
-    () => items.filter((m) => selected.has(m.commentId)),
+    () => items.filter((m) => selected.has(m.id)),
     [items, selected],
   );
 
   // The drawer resolves the lead from the loaded page (the common path: the operator
   // clicked a visible row). A deep link to an off-page lead is out of scope for now.
   const selectedLead = useMemo(
-    () => (leadId ? items.find((m) => m.commentId === leadId) ?? null : null),
+    () => (leadId ? selectLeadById(items, leadId) : null),
     [items, leadId],
   );
 
   const openLead = useCallback(
-    (lead: Match) => void navigate(`/leads/${lead.commentId}`),
+    (lead: Match) => void navigate(leadRoute(lead.id)),
     [navigate],
   );
   const closeDrawer = useCallback(() => void navigate('/leads'), [navigate]);

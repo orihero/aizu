@@ -251,3 +251,45 @@ def test_child_dict_round_trips():
     rebuilt = WorkerConfig.from_child_dict(cfg.to_child_dict())
     assert rebuilt.db_path == "d.db" and rebuilt.cdp_url == "http://127.0.0.1:9333"
     assert rebuilt.spend_cap == 12.5 and rebuilt.max_job_minutes == 45
+
+
+# ----- B9: priorSpendUsd on the JobSpec + the spend-cap override ------------------
+
+def test_from_payload_parses_prior_spend_usd():
+    job = JobSpec.from_payload({"id": "j", "campaignId": "c", "platform": "x",
+                                "priorSpendUsd": 4.5})
+    assert job.prior_spend_usd == 4.5
+    # snake_case spelling too (the stub dispatch mirrors both).
+    assert JobSpec.from_payload({"id": "j", "campaignId": "c", "platform": "x",
+                                 "prior_spend_usd": "2"}).prior_spend_usd == 2.0
+    # Absent → None: a legacy job / an older server. The box falls back to its local
+    # total alone, i.e. exactly today's behaviour.
+    assert JobSpec.from_payload({"id": "j", "campaignId": "c",
+                                 "platform": "x"}).prior_spend_usd is None
+
+
+@pytest.mark.parametrize("value", ["many", -1, True, float("nan"), float("inf"), []])
+def test_from_payload_degrades_a_bad_prior_spend_to_none(value):
+    # Deliberately tolerant, UNLIKE targetLeads: an accounting hint must never make an
+    # otherwise-runnable job unrunnable, so a garbage value degrades instead of raising.
+    job = JobSpec.from_payload({"id": "j", "campaignId": "c", "platform": "x",
+                                "priorSpendUsd": value})
+    assert job.prior_spend_usd is None
+
+
+def test_to_payload_omits_prior_spend_unless_present():
+    job = JobSpec(id="j", org_id=1, campaign_id="c", platform="instagram")
+    assert "priorSpendUsd" not in job.to_payload()
+    priced = JobSpec(id="j", org_id=1, campaign_id="c", platform="instagram",
+                     prior_spend_usd=7.25)
+    assert priced.to_payload()["priorSpendUsd"] == 7.25
+    # Round-trip identity holds through the supervisor→child spec file.
+    assert JobSpec.from_payload(priced.to_payload()) == priced
+
+
+def test_run_args_spend_cap_override_replaces_the_box_cap(cfg: WorkerConfig):
+    job = JobSpec(id="j", org_id=1, campaign_id="c", platform="instagram")
+    assert cfg.run_args(job).spend_cap == cfg.spend_cap          # None → the box cap
+    assert cfg.run_args(job, spend_cap_override=2.5).spend_cap == 2.5
+    # 0.0 is a real value (a campaign already over budget), not "unset".
+    assert cfg.run_args(job, spend_cap_override=0.0).spend_cap == 0.0

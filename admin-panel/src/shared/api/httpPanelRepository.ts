@@ -509,7 +509,14 @@ export class HttpPanelRepository implements PanelRepository {
   }
 
   getAgentReadiness(opts?: AgentReadinessOptions): Promise<Result<AgentReadiness>> {
-    const path = opts?.refresh ? `${AGENT_READINESS_ENDPOINT}?refresh=1` : AGENT_READINESS_ENDPOINT;
+    // URLSearchParams rather than string concatenation: campaignId is org-scoped user
+    // data ("o1.q4-outbound") and goes in a query string, so it gets encoded, not
+    // interpolated. The server ownership-checks the id before it narrows anything.
+    const params = new URLSearchParams();
+    if (opts?.refresh) params.set('refresh', '1');
+    if (opts?.campaignId) params.set('campaign', opts.campaignId);
+    const query = params.toString();
+    const path = query ? `${AGENT_READINESS_ENDPOINT}?${query}` : AGENT_READINESS_ENDPOINT;
     return this.getRaw(path, agentReadinessSchema, 'agent readiness');
   }
 

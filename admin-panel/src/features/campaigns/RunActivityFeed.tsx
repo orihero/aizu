@@ -65,6 +65,25 @@ function EventRow({ event }: { readonly event: RunEvent }) {
 const FLEET_TERMINAL = new Set(['done', 'failed', 'interrupted']);
 const FLEET_ACTIVE = new Set(['leased', 'running']);
 
+// Worker nack codes → one plain-language clause. Anything not listed falls back to the
+// raw code, which is still infinitely better than the bare "Finished on the fleet" an
+// operator used to get for a run whose worker never even attached its browser.
+const FLEET_REASONS: Readonly<Record<string, string>> = {
+  cdp_unreachable: "the worker's Chrome could not be attached",
+  worker_timeout: 'the run exceeded its time cap on the worker',
+  worker_stall: 'the run stopped making progress on the worker',
+  credential_fetch_failed: 'the worker could not fetch this platform’s credential',
+  campaign_not_found: 'the worker could not resolve this campaign',
+  soul_missing: 'the worker has no soul/voice profile for this campaign',
+  campaign_malformed: 'the campaign brief could not be parsed',
+  error: 'the run crashed on the worker',
+  halted: 'the run was halted',
+};
+
+function humanFleetReason(reason: string): string {
+  return FLEET_REASONS[reason] ?? reason;
+}
+
 /**
  * Status row for a run routed to the worker fleet. Renders nothing for an
  * in-process run (fleetJob null). For a fleet run it turns the four job states
@@ -78,7 +97,7 @@ const FLEET_ACTIVE = new Set(['leased', 'running']);
 export function FleetJobBanner({ fleetJob }: { readonly fleetJob: FleetJob | null }) {
   if (!fleetJob) return null;
 
-  const { status, lastEventAt } = fleetJob;
+  const { status, lastEventAt, reason } = fleetJob;
   const nowSec = Date.now() / 1000;
   const ageSec = lastEventAt === null ? null : Math.max(0, Math.round(nowSec - lastEventAt));
 
@@ -94,6 +113,8 @@ export function FleetJobBanner({ fleetJob }: { readonly fleetJob: FleetJob | nul
   }
 
   if (FLEET_TERMINAL.has(status)) {
+    // The wording is keyed off `status` only — a `done` job can carry a reason too, and
+    // labelling that one "Failed" would be a lie.
     const failed = status !== 'done';
     return (
       <div
@@ -101,7 +122,7 @@ export function FleetJobBanner({ fleetJob }: { readonly fleetJob: FleetJob | nul
         role="status"
       >
         {failed ? <X className="size-3.5" aria-hidden /> : <Check className="size-3.5" aria-hidden />}
-        Finished on the fleet
+        {failed && reason ? `Failed on the fleet — ${humanFleetReason(reason)}` : 'Finished on the fleet'}
       </div>
     );
   }

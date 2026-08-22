@@ -250,6 +250,39 @@ def _file_formatter() -> logging.Formatter:
     )
 
 
+# ---- console line cap ----------------------------------------------------
+
+# Hard ceiling on ONE rendered console line. The console sink is the expensive
+# one: Rich word-wraps, highlights and styles every character it is handed, and
+# it does that while holding the GIL — so a single log line carrying a huge
+# request-controlled token (an attacker can put ~64 KB in a URL, which is
+# http.server's request-line ceiling) makes every other thread wait on it. The
+# server truncates such input at its own boundary; this is the backstop that
+# keeps the property true no matter which caller logs what. The plain rotating
+# FILE handler is left uncapped — it is O(n) and cheap, and the archive should
+# stay complete.
+_CONSOLE_LINE_MAX = 2000
+
+
+def _cap_line(line: str) -> str:
+    if len(line) <= _CONSOLE_LINE_MAX:
+        return line
+    return f"{line[:_CONSOLE_LINE_MAX]}…[+{len(line) - _CONSOLE_LINE_MAX} chars truncated]"
+
+
+class LineCapFormatter(logging.Formatter):
+    """Format as usual, then cap every line of the result.
+
+    Per LINE, not per record, so a multi-line traceback keeps all of its frames —
+    only a single absurdly long one is trimmed."""
+
+    def format(self, record: logging.LogRecord) -> str:
+        text = super().format(record)
+        if len(text) <= _CONSOLE_LINE_MAX:
+            return text          # fast path: the overwhelming majority of lines
+        return "\n".join(_cap_line(line) for line in text.split("\n"))
+
+
 def _make_file_handler(path: Path, level: int) -> RotatingFileHandler:
     path.parent.mkdir(parents=True, exist_ok=True)
     handler = RotatingFileHandler(
@@ -265,7 +298,8 @@ def _make_console_handler(level: int, color: Optional[str]) -> logging.Handler:
     if not _HAVE_RICH:
         handler = logging.StreamHandler(sys.stderr)
         handler.setLevel(level)
-        handler.setFormatter(logging.Formatter("%(emoji)s %(levelname)-7s %(name)s: %(message)s"))
+        handler.setFormatter(
+            LineCapFormatter("%(emoji)s %(levelname)-7s %(name)s: %(message)s"))
         return handler
     force = _want_color(color)
     console = Console(
@@ -286,7 +320,10 @@ def _make_console_handler(level: int, color: Optional[str]) -> logging.Handler:
     )
     # Emoji + dimmed logger name; message content is left to Rich's highlighter,
     # which auto-colors numbers/urls/quoted strings for "informative" output.
-    handler.setFormatter(logging.Formatter("%(emoji)s %(name)s — %(message)s"))
+    # LineCapFormatter bounds what that highlighter/wrapper is ever handed — see
+    # _CONSOLE_LINE_MAX: rendering is per-character work under the GIL, so an
+    # unbounded line is a stall for every other thread in the process.
+    handler.setFormatter(LineCapFormatter("%(emoji)s %(name)s — %(message)s"))
     return handler
 
 

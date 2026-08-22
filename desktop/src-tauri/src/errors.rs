@@ -1,4 +1,4 @@
-//! Error types for the AIZU Worker desktop shell (Phase 6 SCAFFOLD, UNCOMPILED).
+//! Error types for the AIZU Worker desktop shell (BUILD-PLAN Phase 6).
 //!
 //! One `thiserror` enum for the whole shell. Every fallible boundary — Chrome lifecycle,
 //! sidecar spawn, config load, control-surface HTTP, log read — maps to a variant so the

@@ -27,6 +27,7 @@ import type {
   TeamMember,
   Invite,
 } from '@/shared/types/domain';
+import { leadUidOf } from '@/shared/lib/leadId';
 
 export function buildSession(overrides: Partial<Session> = {}): Session {
   return {
@@ -51,9 +52,15 @@ export function buildSession(overrides: Partial<Session> = {}): Session {
   };
 }
 
+/**
+ * A lead. `id` is DERIVED from the composite identity (campaignId, platform,
+ * commentId) unless explicitly overridden, so a fixture that only varies
+ * `commentId` — or only `campaignId` — still gets a distinct, realistic id. That
+ * mirrors what the engine emits and what matchSchema recomputes at the boundary.
+ */
 export function buildMatch(overrides: Partial<Match> = {}): Match {
-  return {
-    id: 'c1',
+  const match: Match = {
+    id: '',
     commentId: 'c1',
     campaignId: 'cmp-001',
     platform: 'instagram',
@@ -75,6 +82,7 @@ export function buildMatch(overrides: Partial<Match> = {}): Match {
     notes: [],
     ...overrides,
   };
+  return { ...match, id: overrides.id ?? leadUidOf(match) };
 }
 
 export function buildStatusChange(overrides: Partial<StatusChange> = {}): StatusChange {
@@ -281,6 +289,9 @@ export function buildFleetJob(overrides: Partial<FleetJob> = {}): FleetJob {
     status: 'running',
     lastEventAt: 1_718_800_000,
     leaseExpiresAt: 1_718_800_060,
+    reason: null,
+    attempts: 1,
+    maxAttempts: 3,
     ...overrides,
   };
 }

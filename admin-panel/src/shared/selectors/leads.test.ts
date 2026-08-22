@@ -99,9 +99,23 @@ describe('selectSortedLeads', () => {
 });
 
 describe('selectLeadById', () => {
-  test('finds by commentId or returns null', () => {
+  test('finds by the composite lead id or returns null', () => {
     expect(selectLeadById(leads, 'b')?.username).toBe('bek');
     expect(selectLeadById(leads, 'zzz')).toBeNull();
+  });
+
+  test('two campaigns sharing a commentId resolve to their own records', () => {
+    // A bare commentId is NOT unique: matching on it returned whichever copy came
+    // first, so the drawer opened (and wrote status to) the wrong campaign's lead.
+    const a = buildMatch({ commentId: 'dup', campaignId: 'cmp-a', username: 'alice' });
+    const b = buildMatch({ commentId: 'dup', campaignId: 'cmp-b', username: 'bob' });
+    const x = buildMatch({ commentId: 'dup', campaignId: 'cmp-a', platform: 'x', username: 'carol' });
+    const all = [a, b, x];
+    expect(selectLeadById(all, a.id)?.username).toBe('alice');
+    expect(selectLeadById(all, b.id)?.username).toBe('bob');
+    expect(selectLeadById(all, x.id)?.username).toBe('carol');
+    // The raw comment id resolves to nothing — it is not an identity.
+    expect(selectLeadById(all, 'dup')).toBeNull();
   });
 });
 

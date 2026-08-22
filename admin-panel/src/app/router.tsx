@@ -21,7 +21,13 @@ import { OrgDetailPage } from '@/features/admin/OrgDetailPage';
 import { AuditPage } from '@/features/admin/AuditPage';
 import { ModelPerformancePage } from '@/features/admin/ModelPerformancePage';
 
-/** Old /matches/:id deep links fold into the Leads drawer (params can't ride a string redirect). */
+/**
+ * Old /matches/:id deep links fold into the Leads drawer (params can't ride a string
+ * redirect). NOTE the legacy id is a bare comment id, which is NOT a lead identity —
+ * a lead is (campaignId, platform, commentId). Such a link now lands on the leads list
+ * with no drawer instead of opening whichever same-commentId lead sorted first, which
+ * is the honest outcome: the URL genuinely does not say which lead it meant.
+ */
 function RedirectMatchToLead() {
   const { matchId } = useParams();
   return <Navigate to={matchId ? `/leads/${matchId}` : '/leads'} replace />;

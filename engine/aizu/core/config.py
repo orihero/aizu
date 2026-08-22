@@ -11,6 +11,7 @@ engine has zero extra install surface for config.
 from __future__ import annotations
 
 import json
+import math
 import re
 import unicodedata
 from dataclasses import dataclass, field
@@ -337,14 +338,38 @@ def load_soul(path: str | Path) -> Soul:
     return Soul(text=p.read_text(encoding="utf-8"), path=p)
 
 
+def _validated_band(band: Any) -> tuple[float, float]:
+    """Validate `escalate_band` as `[lo, hi]` with `0 <= lo <= hi <= 1`.
+
+    Shape was checked before; the RANGE was not, so `[0.9, 0.2]` (inverted) or
+    `[-1, 5]` parsed happily and then made `_unsure()` — the escalate-if-unsure
+    predicate that decides whether a borderline verdict gets a second look —
+    either always true or never true, with no error anywhere. An inverted band is
+    the likelier typo of the two and is the one that silently disables escalation
+    entirely (Campaign Lab, Remedy Sheet #3 / Remedy E).
+    """
+    if not isinstance(band, (list, tuple)) or len(band) != 2:
+        raise ValueError("campaign.escalate_band must be a 2-element list [lo, hi]")
+    try:
+        lo, hi = float(band[0]), float(band[1])
+    except (TypeError, ValueError):
+        raise ValueError(
+            f"campaign.escalate_band values must be numbers, got {band!r}") from None
+    if not (math.isfinite(lo) and math.isfinite(hi)):
+        raise ValueError("campaign.escalate_band values must be finite")
+    if not (0.0 <= lo <= hi <= 1.0):
+        raise ValueError(
+            f"campaign.escalate_band must satisfy 0 <= lo <= hi <= 1, got "
+            f"[{lo}, {hi}]")
+    return (lo, hi)
+
+
 def load_campaign(path: str | Path) -> Campaign:
     p = Path(path)
     text = p.read_text(encoding="utf-8")
     knobs = _parse_yaml_block(text)
 
-    band = knobs.get("escalate_band", [0.4, 0.75])
-    if not isinstance(band, (list, tuple)) or len(band) != 2:
-        raise ValueError("campaign.escalate_band must be a 2-element list [lo, hi]")
+    band = _validated_band(knobs.get("escalate_band", [0.4, 0.75]))
 
     cid = knobs.get("campaign_id")
     if not cid:
@@ -364,7 +389,7 @@ def load_campaign(path: str | Path) -> Campaign:
         campaign_id=str(cid),
         goal=str(knobs.get("goal", "signal")),
         threshold=float(knobs.get("threshold", 0.70)),
-        escalate_band=(float(band[0]), float(band[1])),
+        escalate_band=band,
         language_mix=[str(x) for x in knobs.get("language_mix", [])],
         relevance_def=_section(text, "Relevance"),
         match_def=_section(text, "Match"),
@@ -415,9 +440,7 @@ def campaign_from_brief(campaign_id: str, brief: dict[str, Any]) -> Campaign:
         raise ValueError(
             f"campaign.platform {platform!r} not supported; "
             f"expected one of {', '.join(SUPPORTED_PLATFORMS)}")
-    band = brief.get("escalate_band", [0.4, 0.75])
-    if not isinstance(band, (list, tuple)) or len(band) != 2:
-        raise ValueError("campaign.escalate_band must be a 2-element list [lo, hi]")
+    band = _validated_band(brief.get("escalate_band", [0.4, 0.75]))
     seed_hashtags = [str(x) for x in brief.get("seed_hashtags", [])]
     seed_accounts = [str(x) for x in brief.get("seed_accounts", [])]
     seed_channels = [str(x) for x in brief.get("seed_channels", [])]
@@ -434,7 +457,7 @@ def campaign_from_brief(campaign_id: str, brief: dict[str, Any]) -> Campaign:
         campaign_id=str(campaign_id),
         goal=str(brief.get("goal", "lead")),
         threshold=float(brief.get("threshold", 0.70)),
-        escalate_band=(float(band[0]), float(band[1])),
+        escalate_band=band,
         language_mix=[str(x) for x in brief.get("language_mix", [])],
         relevance_def=str(brief.get("relevance_def", "")),
         match_def=str(brief.get("match_def", "")),

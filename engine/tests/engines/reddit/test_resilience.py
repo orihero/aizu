@@ -5,7 +5,10 @@ A 429 (rate limit / client throttle) must not crash the run with a raw HTTP
 traceback. `_get` retries transient 429/5xx with backoff; a persistent failure
 raises RedditApiError, which the session folds into a clean halt (leads found so
 far are kept; the summary carries halt_reason so the back-to-back CLI loop stops).
-401/403 keep the raw httpx error so the CLI flags needs-reconnect.
+401 keeps the raw httpx error so the CLI flags needs-reconnect. 403/404 do NOT:
+every `_get` path is `r/<subreddit>/...`, so those name the SUBREDDIT, and raising
+them raw let one private seed subreddit disconnect the org's whole integration
+(Campaign Lab, Remedy Sheet #2 — "Bugs found during the audit" #3).
 """
 import os
 import tempfile
@@ -15,7 +18,8 @@ import pytest
 from aizu.core.feed import Comment, Reel
 from aizu.core.router import Decision
 from aizu.engines.reddit import feed as rfeed
-from aizu.engines.reddit.feed import RedditApiError, RedditDataApiClient
+from aizu.engines.reddit.feed import (RedditApiError, RedditDataApiClient,
+                                      RedditSeedError)
 from aizu.engines.reddit.session import run_session
 
 
@@ -88,9 +92,26 @@ def test_get_honors_ratelimit_reset_header(monkeypatch):
     assert waited == [2.0]
 
 
-def test_get_does_not_wrap_403(monkeypatch):
-    # 401/403 must keep raising the raw httpx error so the CLI flags needs-reconnect.
-    c = _client([_Resp(403)], monkeypatch)
+@pytest.mark.parametrize("status", [403, 404])
+def test_get_reports_an_unreadable_subreddit_as_a_seed_error(status, monkeypatch):
+    """A private/quarantined/banned/missing subreddit is a SEED problem.
+
+    It used to raise the raw httpx error, whose `.response.status_code == 403`
+    matched `cli._is_auth_error` — so one bad seed flipped the org's entire Reddit
+    integration to needs-reconnect and broke every other campaign on it."""
+    c = _client([_Resp(status)], monkeypatch)
+    with pytest.raises(RedditSeedError) as exc:
+        c._get("r/x/new", {})
+    assert exc.value.subreddit == "x"
+    assert exc.value.status == status
+    # Must not look like an auth failure to the CLI's structural matcher.
+    assert getattr(exc.value, "response", None) is None
+    assert "reconnect" not in str(exc.value).lower()
+
+
+def test_get_still_raises_401_raw_for_reconnect(monkeypatch):
+    # 401 IS the credential failure — it must keep .response so the CLI flags it.
+    c = _client([_Resp(401)], monkeypatch)
     with pytest.raises(FakeHttpx.HTTPStatusError):
         c._get("r/x/new", {})
 

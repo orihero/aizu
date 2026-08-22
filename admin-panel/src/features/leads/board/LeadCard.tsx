@@ -24,7 +24,8 @@ function lastActivity(lead: Match): string | null {
 
 export function LeadCard({ lead, threshold, onOpen, draggable }: LeadCardProps) {
   const { attributes, listeners, setNodeRef, isDragging } = useDraggable({
-    id: lead.commentId,
+    // The draggable id is the composite lead id — a bare commentId is not unique.
+    id: lead.id,
     disabled: !draggable,
   });
   const activity = lastActivity(lead);

@@ -154,8 +154,14 @@ export function selectLeadStats(matches: readonly Match[]): LeadStats {
   };
 }
 
+/**
+ * Resolve a lead by its composite `id`. Never match on `commentId`: the same comment
+ * id legitimately exists under two campaigns (and on two platforms), so that lookup
+ * returned whichever copy happened to sort first — the drawer then showed, and wrote
+ * status to, the wrong campaign's lead.
+ */
 export function selectLeadById(matches: readonly Match[], leadId: string): Match | null {
-  return matches.find((m) => m.commentId === leadId) ?? null;
+  return matches.find((m) => m.id === leadId) ?? null;
 }
 
 /** A Kanban column: one status with the leads currently in it, in column order. */

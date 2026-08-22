@@ -208,3 +208,45 @@ def test_traceback_secrets_are_redacted(caplog):
     assert rec.exc_text is not None
     assert "sk-supersecret-abc123" not in rec.exc_text
     assert "«redacted»" in rec.exc_text
+
+
+# ---- console line cap (unbounded-log DoS backstop) ----
+
+def test_line_cap_formatter_truncates_a_huge_line():
+    """One absurdly long line is trimmed to _CONSOLE_LINE_MAX + a marker. The console
+    sink renders per character while holding the GIL, so an unbounded line is a stall
+    for every other thread — see server._LOG_PATH_MAX for the first line of defence."""
+    fmt = logsetup.LineCapFormatter("%(message)s")
+    rec = logging.LogRecord("aizu.t", logging.INFO, __file__, 1,
+                            "A" * 64_000, (), None)
+    out = fmt.format(rec)
+    assert len(out) < logsetup._CONSOLE_LINE_MAX + 100
+    assert out.startswith("A" * 100)
+    assert out.endswith(f"[+{64_000 - logsetup._CONSOLE_LINE_MAX} chars truncated]")
+
+
+def test_line_cap_formatter_leaves_normal_lines_untouched():
+    fmt = logsetup.LineCapFormatter("%(message)s")
+    rec = logging.LogRecord("aizu.t", logging.INFO, __file__, 1, "hello", (), None)
+    assert fmt.format(rec) == "hello"
+
+
+def test_line_cap_formatter_keeps_every_traceback_frame():
+    """The cap is PER LINE, so a multi-line traceback keeps all its frames — only a
+    single overlong line inside it is trimmed."""
+    fmt = logsetup.LineCapFormatter("%(message)s")
+    rec = logging.LogRecord("aizu.t", logging.ERROR, __file__, 1, "boom", (), None)
+    rec.exc_text = "Traceback:\n  frame one\n  " + "B" * 64_000 + "\n  frame three"
+    out = fmt.format(rec)
+    lines = out.split("\n")
+    assert lines[0] == "boom"
+    assert "  frame one" in lines and "  frame three" in lines
+    assert max(len(line) for line in lines) < logsetup._CONSOLE_LINE_MAX + 100
+
+
+def test_console_handler_uses_the_line_cap_formatter(tmp_path):
+    """Wiring check: the cap only helps if the configured console handler carries it."""
+    logsetup.configure_logging(log_file=str(tmp_path / "a.log"), force=True)
+    console = _console_handlers()
+    assert console
+    assert isinstance(console[0].formatter, logsetup.LineCapFormatter)

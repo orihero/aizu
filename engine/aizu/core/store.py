@@ -13,14 +13,16 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import os
 import sqlite3
 import time
+import uuid
 from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Iterator, Optional
+from typing import TYPE_CHECKING, Any, Iterator, Optional, Sequence
 
 from ..auth import hash_session_token
 from . import accounts as accounts_lib
@@ -32,7 +34,7 @@ if TYPE_CHECKING:
 
 logger = get_logger(__name__)
 
-SCHEMA_VERSION = 22  # v2: platform dimension; v3: panel ops tables; v4: campaign_briefs; v5: auth; v6: lead Kanban (status set + audit log + notes); v7: multi-tenancy (organizations + memberships role + invites; per-org settings/integrations); v8: encrypted per-(org, platform) integration secrets; v9: security audit log; v10: run_events live activity feed; v11: account warming (accounts + state_changes + campaign_accounts + account_secrets; sessions.engine_mode/account_id, health_flags.account_id, actions.account_id); v12: campaign lifecycle controls (campaign_meta.archived_at/paused_reason + fixed-cadence schedule cols: schedule_enabled/kind/dow/hour/minute/tz, next_run_at, last_scheduled_run_at, schedule_target_leads, schedule_duration_minutes); v13: billing subscriptions (Polar + provider-agnostic, soft run-cap); v14: distributed workers pool (token-based registry + presence; status DERIVED not stored); v15: superadmin plane (platform_admins + platform_admin_sessions with impersonation principal + hash-chained admin_audit_log + DB-backed admin_login_throttle); v16: platform_settings (superadmin execution_backend switch — route runs to in-process RunManager vs distributed worker fleet); v17: model comparison (superadmin-switchable LLM fan-out — matches.found_by_models + model_comparison_log; platform_settings.model_comparison_enabled); v18: Uzbek-only local STT transcript (seen_reels.transcript/transcript_lang/transcript_ms; sessions.transcriptions); v19: video-analysis tier (seen_reels.video_analyzed/video_analysis_summary; sessions.video_analyses); v20: session liveness heartbeat (sessions.last_activity_at/pid) so SessionWatchdog can detect a wedged-but-never-excepting session; v21: self-healing anti-bot cooldown (session_cooldowns: per-(campaign_id, platform) attempt counter + exponential-backoff cooldown_until for a SOFT halt, gap #1); v22: per-worker enrolment tokens (worker_enrolment_tokens: single-use, admin-minted, server-assigned org/pool scope for worker enrolment, closing gap B8 — shared bootstrap token could self-declare pool-wide capability)
+SCHEMA_VERSION = 26  # v2: platform dimension; v3: panel ops tables; v4: campaign_briefs; v5: auth; v6: lead Kanban (status set + audit log + notes); v7: multi-tenancy (organizations + memberships role + invites; per-org settings/integrations); v8: encrypted per-(org, platform) integration secrets; v9: security audit log; v10: run_events live activity feed; v11: account warming (accounts + state_changes + campaign_accounts + account_secrets; sessions.engine_mode/account_id, health_flags.account_id, actions.account_id); v12: campaign lifecycle controls (campaign_meta.archived_at/paused_reason + fixed-cadence schedule cols: schedule_enabled/kind/dow/hour/minute/tz, next_run_at, last_scheduled_run_at, schedule_target_leads, schedule_duration_minutes); v13: billing subscriptions (Polar + provider-agnostic, soft run-cap); v14: distributed workers pool (token-based registry + presence; status DERIVED not stored); v15: superadmin plane (platform_admins + platform_admin_sessions with impersonation principal + hash-chained admin_audit_log + DB-backed admin_login_throttle); v16: platform_settings (superadmin execution_backend switch — route runs to in-process RunManager vs distributed worker fleet); v17: model comparison (superadmin-switchable LLM fan-out — matches.found_by_models + model_comparison_log; platform_settings.model_comparison_enabled); v18: Uzbek-only local STT transcript (seen_reels.transcript/transcript_lang/transcript_ms; sessions.transcriptions); v19: video-analysis tier (seen_reels.video_analyzed/video_analysis_summary; sessions.video_analyses); v20: session liveness heartbeat (sessions.last_activity_at/pid) so SessionWatchdog can detect a wedged-but-never-excepting session; v21: self-healing anti-bot cooldown (session_cooldowns: per-(campaign_id, platform) attempt counter + exponential-backoff cooldown_until for a SOFT halt, gap #1); v22: per-worker enrolment tokens (worker_enrolment_tokens: single-use, admin-minted, server-assigned org/pool scope for worker enrolment, closing gap B8 — shared bootstrap token could self-declare pool-wide capability); v23: worker launch preflight (workers.preflight_json — the box's own self-check summary, carried on register/heartbeat and surfaced in the fleet console so a box that is online-but-cannot-work says WHY, ledger F9/F10/F12); v24: Campaign Lab per-source attribution (source_stats: one row per (campaign, platform, seed) carrying navigations/yield/redirect/dead verdicts + park/ban lifecycle; seen_reels.source and matches.source so "which seed produced this lead" is finally answerable — Remedy Sheet #1/D); v25: Campaign Lab seed mining (seen_reels.author_id — the author's STABLE, seed-shaped id (YouTube UC-id, LinkedIn canonical profile URL, Telegram @channel) alongside the display name, so mining our own leads yields actionable seeds rather than strings that break on a rename — Remedy Sheet #2/A); v26: Campaign Lab negative capture (eval_candidates — a sampled, labellable record of comments the match gate REJECTED, which the engine paid a model call for and then threw away; plus matches.confidence/raw. Without it a gold set cannot be built at all: the DB held 2 accepted comments and zero rejects — Remedy Sheet #3/E)
 
 
 def _now_iso() -> str:
@@ -147,6 +149,7 @@ CREATE TABLE IF NOT EXISTS matches (
     tier        TEXT,                       -- which model tier decided (local/cloud)
     captured_at REAL NOT NULL,
     updated_at  REAL NOT NULL,
+    source      TEXT,                       -- v24: seed term whose page produced this lead
     PRIMARY KEY (campaign_id, platform, comment_id)
 );
 CREATE INDEX IF NOT EXISTS idx_matches_reel   ON matches(campaign_id, platform, reel_id);
@@ -168,6 +171,8 @@ CREATE TABLE IF NOT EXISTS seen_reels (
     transcript_ms   INTEGER,                -- v18: reserved for future audio-duration tracking
     video_analyzed  INTEGER,                -- v19: 1 when the video-analysis tier ran, else NULL
     video_analysis_summary TEXT,            -- v19: compact JSON of the fusion verdict extras
+    source          TEXT,                   -- v24: seed term this item was intercepted on ('' / NULL = unattributed)
+    author_id       TEXT,                   -- v25: author's stable, seed-shaped id (NULL = platform exposes none)
     PRIMARY KEY (campaign_id, platform, reel_id)
 );
 
@@ -618,9 +623,15 @@ CREATE TABLE IF NOT EXISTS workers (
     worker_token_hash TEXT NOT NULL,            -- SHA-256 at rest (never plaintext)
     token_expires_at  REAL,                     -- NULL = no expiry (long-lived; rotation is Phase 4)
     revoked_at        REAL,                     -- NULL = active; set = revoked
-    enrolment_scope_kind TEXT                   -- v22: 'org'|'pool' if enrolled via a token, else
+    enrolment_scope_kind TEXT,                  -- v22: 'org'|'pool' if enrolled via a token, else
                                                  -- NULL (legacy/self-declared). Sticky across
                                                  -- re-register — see register_worker.
+    preflight_json    TEXT                      -- v23: the box's own launch self-check summary
+                                                 -- {ok, blocking, enforced, ranAt, failed[]}, carried
+                                                 -- on register/heartbeat. DIAGNOSTIC ONLY — never an
+                                                 -- auth/dispatch input; a blocking box withholds its
+                                                 -- capabilities instead. NULL = a pre-v23 sidecar
+                                                 -- that has never reported one (F9/F10/F12).
 );
 CREATE INDEX IF NOT EXISTS idx_workers_org   ON workers(org_id);
 CREATE INDEX IF NOT EXISTS idx_workers_token ON workers(worker_token_hash);
@@ -811,6 +822,87 @@ CREATE TABLE IF NOT EXISTS model_comparison_log (
     created_at   REAL NOT NULL
 );
 
+-- v24: per-source discovery ledger (Campaign Lab, Remedy Sheet #1 / Remedy D).
+-- One row per (campaign, platform, seed term). `walk()` has computed per-source
+-- yield every run since the source stamp landed and dropped it at a debug line;
+-- this is where it goes instead. Counters are cumulative across sessions, which
+-- is what the park rule and the generator feedback both need.
+--
+-- `kind` is 'home' | 'hashtag' | 'account' | 'unknown'. `navigations` counts how
+-- many times the walk visited this seed at all (NOT how many sessions ran, so a
+-- multi-session run credits each visit). `yielded` counts items intercepted ON
+-- this seed; `carried_over` counts items it drained that an earlier seed queued
+-- (the 2026-08-19 mis-attribution, now recorded rather than hidden).
+--
+-- Lifecycle columns are SOFT and reversible: `parked_at` means the park rule
+-- (see park_dry_sources) fired; `banned_at` means the platform said the page does
+-- not exist. Neither deletes anything and both clear the moment the seed produces
+-- again, so a transient outage cannot permanently kill a good seed.
+CREATE TABLE IF NOT EXISTS source_stats (
+    campaign_id   TEXT NOT NULL,
+    platform      TEXT NOT NULL,
+    source        TEXT NOT NULL,        -- the seed term ('home' for the algorithmic feed)
+    kind          TEXT NOT NULL DEFAULT 'unknown',
+    navigations   INTEGER NOT NULL DEFAULT 0,
+    yielded       INTEGER NOT NULL DEFAULT 0,
+    carried_over  INTEGER NOT NULL DEFAULT 0,
+    redirects     INTEGER NOT NULL DEFAULT 0,
+    dead_hits     INTEGER NOT NULL DEFAULT 0,   -- times the page reported "doesn't exist"
+    seconds       REAL    NOT NULL DEFAULT 0,   -- cumulative walk time spent here
+    first_seen    REAL NOT NULL,
+    last_seen     REAL NOT NULL,
+    last_yield_at REAL,                          -- last time this seed produced anything
+    banned_at     REAL,                          -- platform says the page does not exist
+    parked_at     REAL,                          -- park rule fired (skip on the next build_feed)
+    park_reason   TEXT,
+    PRIMARY KEY (campaign_id, platform, source)
+);
+
+-- v26: the flip-list substrate (Campaign Lab, Remedy Sheet #3 / Remedy E).
+--
+-- Every comment the match gate REJECTS is scored, costs a model call, and is then
+-- discarded — `session.py`'s `if res.is_match:` is the only path to `matches`. So
+-- the engine has been paying for exactly the data a gold set needs and keeping
+-- none of it: measured 2026-08-21 on the live DB, `matches` held 2 rows (both
+-- accepted, both Russian price questions) and there was no table anywhere holding
+-- a rejected comment.
+--
+-- The negatives are the expensive half. Easy positives do not discriminate
+-- between two prompts; the HARD negatives do — price complaints, past-purchase
+-- reviews, competing vendors quoting their own prices. None of that was
+-- recoverable after the fact.
+--
+-- `band` records WHY a row was captured, because the sampling is not uniform:
+--   'accepted' — passed the gate (rare, and every one is a positive worth having)
+--   'near'     — rejected within NEAR_BAND of the threshold; ALWAYS captured,
+--                these are the boundary cases a threshold sweep turns on
+--   'clear'    — rejected well below it; deterministically sampled, so the set
+--                does not fill up with obvious noise
+-- `label` is the HUMAN verdict and is NULL until someone supplies it. The model's
+-- own score is stored beside it precisely so the two can disagree.
+CREATE TABLE IF NOT EXISTS eval_candidates (
+    campaign_id TEXT NOT NULL,
+    platform    TEXT NOT NULL,
+    comment_id  TEXT NOT NULL,
+    session_id  TEXT,
+    reel_id     TEXT,
+    username    TEXT,
+    text        TEXT NOT NULL,
+    lang        TEXT,
+    score       REAL,
+    confidence  REAL,
+    threshold   REAL,                    -- the gate this verdict was judged against
+    reason      TEXT,
+    tier        TEXT,
+    raw         TEXT,                    -- sampled: the model's unparsed reply
+    band        TEXT NOT NULL,           -- accepted | near | clear
+    label       INTEGER,                 -- human ground truth 1/0; NULL = unlabelled
+    labeled_at  REAL,
+    labeled_by  TEXT,
+    created_at  REAL NOT NULL,
+    PRIMARY KEY (campaign_id, platform, comment_id)
+);
+
 -- Time-bucketed dashboard/report queries filter on these timestamps.
 CREATE INDEX IF NOT EXISTS idx_matches_time     ON matches(campaign_id, captured_at);
 CREATE INDEX IF NOT EXISTS idx_spend_time       ON spend_log(campaign_id, created_at);
@@ -861,6 +953,22 @@ DEFAULT_JOB_MAX_ATTEMPTS = 5
 # stops at its lead target (10–100), so this is generous headroom, not a real ceiling.
 MAX_SYNC_LEADS = 500
 
+# Max spend rollup rows synced back to the cloud in a single ack/nack (B9 fleet spend
+# roll-up). The worker GROUPs its delta by (stage, model) before shipping it, so one
+# run's whole spend collapses into a handful of rows — 50 is generous headroom for the
+# stage×model matrix, not a per-call ceiling. Excess is dropped + logged, never silent.
+MAX_SYNC_SPEND_ROWS = 50
+
+# Stable per-database identity (platform_settings key), minted lazily on first read.
+# Its ONLY job is letting the ack/nack spend roll-up tell "the worker wrote its spend
+# rows into a DIFFERENT database from mine" (roll them up) from "the worker's db_path
+# IS my db_path" (skip — the rows are already in this very table). AIZU_DB defaults to
+# the same `aizu.db` filename the bridge uses, and the same-box dev/desktop topology
+# genuinely shares one file, so this case is common, not theoretical — and spend_log
+# has an AUTOINCREMENT PK with no unique key, so a second insert would silently DOUBLE
+# a campaign's spend (halving its effective cap) rather than being idempotent.
+DATABASE_ID_KEY = "db_id"
+
 # v16 platform-wide execution backend (superadmin switch). `in_process` runs the engine
 # on the cloud box via RunManager (the historical default); `distributed` enqueues a job
 # for the worker fleet instead. Stored in platform_settings under EXECUTION_BACKEND_KEY.
@@ -902,12 +1010,20 @@ def _lead_str(value: Any) -> Optional[str]:
 
 
 def _lead_float(value: Any, default: Optional[float]) -> Optional[float]:
-    """Coerce an untrusted synced-lead field to a float, or `default` on anything odd."""
+    """Coerce an untrusted synced-lead field to a float, or `default` on anything odd.
+
+    OverflowError is caught alongside TypeError/ValueError and is NOT theoretical: JSON
+    has no integer bound, so a worker (or anything that can reach an ack/nack/sync body)
+    can send an integer literal too large for a C double — `float(10**400)` raises
+    OverflowError, which would escape this coercion and roll back the whole ack/nack
+    transaction it runs inside. Every caller here is best-effort accounting/display
+    (`score`, `capturedAt`, spend `usd`/`at`, run-event `seq`/`createdAt`): a junk value
+    must degrade to `default`, never to a 500 that strands a leased job."""
     if isinstance(value, bool) or value is None:
         return default
     try:
         return float(value)
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
         return default
 
 
@@ -1030,6 +1146,20 @@ def _decode_capabilities(raw: Optional[str]) -> list:
     return decoded if isinstance(decoded, list) else []
 
 
+def _decode_preflight(raw: Optional[str]) -> Optional[dict]:
+    """Tolerantly decode the v23 `preflight_json` blob to a dict, or None. NEVER raises
+    — a corrupt or non-dict blob yields None, which every reader renders as "no
+    preflight reported" (same external-boundary discipline as _decode_capabilities). A
+    diagnostic field must never be able to break a fleet read."""
+    if not raw:
+        return None
+    try:
+        decoded = json.loads(raw)
+    except (json.JSONDecodeError, TypeError):
+        return None
+    return decoded if isinstance(decoded, dict) else None
+
+
 def _decode_job_spec(raw: Optional[str]) -> dict:
     """Tolerantly decode a job's `spec` JSON to a dict (never raises; a corrupt blob
     yields {} so a single bad row can't crash a lease scan)."""
@@ -1086,7 +1216,8 @@ def _enrolment_token_row_to_dict(row) -> dict[str, Any]:
     }
 
 
-def _job_row_to_lease(row, *, lease_expires_at: float) -> dict[str, Any]:
+def _job_row_to_lease(row, *, lease_expires_at: float,
+                      prior_spend_usd: float = 0.0) -> dict[str, Any]:
     """The lease payload the worker plane returns — the JobSpec fields the sidecar's
     ``JobSpec.from_payload`` consumes, flattened from the row + its decoded spec. The
     `spec` blob holds the run knobs (target_leads/duration/engine_mode/soul_text/
@@ -1101,7 +1232,14 @@ def _job_row_to_lease(row, *, lease_expires_at: float) -> dict[str, Any]:
     decrypted per-org secret must never ride the lease response OR the `spec` column it
     is read from (server._dispatch_run_to_fleet no longer bakes one there either) — a
     worker instead pulls its job's credential fresh, per request, via the lease-holder-
-    gated POST /api/worker/jobs/{id}/credential (Handler._handle_job_credential)."""
+    gated POST /api/worker/jobs/{id}/credential (Handler._handle_job_credential).
+
+    `priorSpendUsd` is NOT read from the spec — it is resolved LIVE at lease time from
+    the cloud spend_log (see `lease_one_job`), because a value baked at enqueue would be
+    stale by the time a queued job is picked up. It closes B9: without it a box's spend
+    cap silently resets per machine, since the cap is checked against whichever DB the
+    process opened. It MUST be whitelisted here, not merely computed — this dict is the
+    literal HTTP body a remote worker's POST /api/worker/lease receives (B4)."""
     spec = _decode_job_spec(row["spec"])
     return {
         "id": row["id"],
@@ -1115,6 +1253,7 @@ def _job_row_to_lease(row, *, lease_expires_at: float) -> dict[str, Any]:
         "soulText": spec.get("soul_text"),
         "campaignBrief": spec.get("campaign_brief"),
         "runId": spec.get("run_id"),
+        "priorSpendUsd": prior_spend_usd,
         "leaseExpiresAt": lease_expires_at,
     }
 
@@ -1292,11 +1431,59 @@ class Store:
             # register_worker/the register handler treat as "legacy/self-declared"
             # (BUILD-PLAN B8 fix — see server.py._handle_worker_register).
             self._add_column_if_missing(c, "workers", "enrolment_scope_kind TEXT")
+            # v23: preflight_json on an upgrading `workers` table (fresh DBs get it from
+            # SCHEMA already). Purely additive — existing rows take NULL, which every
+            # reader treats as "this box has never reported a preflight" (a pre-v23
+            # sidecar), NOT as a failure. Self-healing per ledger D4: the ADD COLUMN
+            # runs on every open, so a DB restored from an older backup repairs itself.
+            self._add_column_if_missing(c, "workers", "preflight_json TEXT")
+            # v24: per-source attribution columns (Campaign Lab, Remedy Sheet #1/D).
+            # Purely additive — existing rows take NULL, which every reader treats as
+            # "captured before attribution existed", NOT as a source named "". The
+            # source_stats table itself is net-new so SCHEMA's CREATE IF NOT EXISTS
+            # self-heals it; only these two need the ALTER.
+            self._add_column_if_missing(c, "seen_reels", "source TEXT")
+            self._add_column_if_missing(c, "matches", "source TEXT")
+            # v25: the author's stable id (Campaign Lab, Remedy Sheet #2/A). Additive
+            # — existing rows take NULL, which every reader treats as "this platform
+            # exposed no stable id", falling back to the display name.
+            self._add_column_if_missing(c, "seen_reels", "author_id TEXT")
+            # v26: keep the two fields that make a stored verdict re-examinable.
+            # `confidence` drives the escalate band and was never persisted, so a
+            # match could not be re-judged after the fact; `raw` is the model's
+            # unparsed reply, sampled.
+            self._add_column_if_missing(c, "matches", "confidence REAL")
+            self._add_column_if_missing(c, "matches", "raw TEXT")
             # org_id indexes — created now (not in SCHEMA) because the columns may be
-            # added by the v7 migration above, after executescript ran.
+            # added by the v7 migration above, after executescript ran. The v24
+            # source indexes are here for the same reason.
             c.execute("CREATE INDEX IF NOT EXISTS idx_users_org ON users(org_id)")
             c.execute("CREATE INDEX IF NOT EXISTS idx_matches_org ON matches(org_id)")
             c.execute("CREATE INDEX IF NOT EXISTS idx_campaign_meta_org ON campaign_meta(org_id)")
+            # v24 reads: the seen_reels index carries `relevant` so the per-source
+            # relevance rollup is index-only; matches.username is indexed for the
+            # commenter x author overlap query (Remedy Sheet #2/D3).
+            #
+            # Each is guarded on its columns actually existing. CREATE TABLE IF NOT
+            # EXISTS never widens a table that is already there, so a DB carrying a
+            # hand-rolled or truncated `matches` reaches here without `username` —
+            # and an unguarded CREATE INDEX would then abort the whole open,
+            # bricking a database over a diagnostic index.
+            self._create_index_if_columns(
+                c, "idx_seen_reels_source", "seen_reels",
+                ("campaign_id", "platform", "source", "relevant"))
+            self._create_index_if_columns(
+                c, "idx_matches_source", "matches",
+                ("campaign_id", "platform", "source"))
+            self._create_index_if_columns(
+                c, "idx_matches_username", "matches", ("username",))
+            # v26: the labelling queue reads "everything not yet labelled".
+            self._create_index_if_columns(
+                c, "idx_eval_candidates_label", "eval_candidates",
+                ("campaign_id", "platform", "label"))
+            self._create_index_if_columns(
+                c, "idx_seen_reels_author", "seen_reels",
+                ("campaign_id", "platform", "relevant"))
             c.execute(
                 "INSERT OR IGNORE INTO meta(key, value) VALUES('schema_version', ?)",
                 (str(SCHEMA_VERSION),),
@@ -1324,6 +1511,19 @@ class Store:
     @staticmethod
     def _has_column(c: sqlite3.Cursor, table: str, col: str) -> bool:
         return any(r[1] == col for r in c.execute(f"PRAGMA table_info({table})").fetchall())
+
+    @staticmethod
+    def _create_index_if_columns(c: sqlite3.Cursor, name: str, table: str,
+                                 cols: tuple[str, ...]) -> None:
+        """CREATE INDEX IF NOT EXISTS, but only when every named column exists.
+
+        An index is a read optimisation; failing to create one must never abort
+        `_init_schema` and take the whole database offline with it."""
+        if not all(Store._has_column(c, table, col) for col in cols):
+            logger.debug("DB skipping index %s — %s is missing one of %s",
+                         name, table, ", ".join(cols))
+            return
+        c.execute(f"CREATE INDEX IF NOT EXISTS {name} ON {table}({', '.join(cols)})")
 
     @staticmethod
     def _add_column_if_missing(c: sqlite3.Cursor, table: str, coldef: str) -> None:
@@ -1489,7 +1689,12 @@ class Store:
                   transcript_lang: Optional[str] = None,
                   video_analyzed: Optional[bool] = None,
                   video_analysis_summary: Optional[str] = None,
+                  source: Optional[str] = None,
+                  author_id: Optional[str] = None,
                   platform: str = DEFAULT_PLATFORM) -> None:
+        """`source` is the seed term this item was intercepted on (v24). Like every
+        other field here it is COALESCEd, so a re-poll never blanks the original
+        attribution — first sighting owns provenance, which is the whole point."""
         now = time.time()
         rel = None if relevant is None else int(relevant)
         va = None if video_analyzed is None else int(video_analyzed)
@@ -1498,8 +1703,9 @@ class Store:
                 """INSERT INTO seen_reels(campaign_id, platform, reel_id, first_seen,
                                           last_seen, relevant, author, caption, ocr_text,
                                           transcript, transcript_lang,
-                                          video_analyzed, video_analysis_summary)
-                   VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)
+                                          video_analyzed, video_analysis_summary,
+                                          source, author_id)
+                   VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
                    ON CONFLICT(campaign_id, platform, reel_id) DO UPDATE SET
                      last_seen=excluded.last_seen,
                      relevant=COALESCE(excluded.relevant, seen_reels.relevant),
@@ -1509,10 +1715,593 @@ class Store:
                      transcript=COALESCE(excluded.transcript, seen_reels.transcript),
                      transcript_lang=COALESCE(excluded.transcript_lang, seen_reels.transcript_lang),
                      video_analyzed=COALESCE(excluded.video_analyzed, seen_reels.video_analyzed),
-                     video_analysis_summary=COALESCE(excluded.video_analysis_summary, seen_reels.video_analysis_summary)""",
+                     video_analysis_summary=COALESCE(excluded.video_analysis_summary, seen_reels.video_analysis_summary),
+                     source=COALESCE(seen_reels.source, excluded.source),
+                     author_id=COALESCE(excluded.author_id, seen_reels.author_id)""",
                 (campaign_id, platform, reel_id, now, now, rel, author, caption, ocr_text,
-                 transcript, transcript_lang, va, video_analysis_summary),
+                 transcript, transcript_lang, va, video_analysis_summary,
+                 (source or None), (author_id or None)),
             )
+
+    # ----- per-source discovery ledger (v24, Campaign Lab Remedy Sheet #1/D) -----
+    def record_source_walk(self, campaign_id: str, source: str, *,
+                           platform: str = DEFAULT_PLATFORM,
+                           kind: str = "unknown",
+                           yielded: int = 0, carried_over: int = 0,
+                           redirected: bool = False, unavailable: bool = False,
+                           seconds: float = 0.0) -> None:
+        """Fold one source's walk outcome into the cumulative ledger.
+
+        Called from `CDPFeedBase.walk()`'s per-source epilogue (via the
+        `FeedSource.on_source_done` sink), which has computed exactly these
+        numbers on every run since the source stamp landed and thrown them away
+        at a debug line.
+
+        Self-healing by design: a source that yields anything CLEARS `banned_at`,
+        `parked_at` and `park_reason`. A tag that 404s for one render, or a
+        profile behind a momentary outage, therefore recovers on its own — the
+        lifecycle columns are a running verdict, never a tombstone.
+        """
+        if not source:
+            return
+        now = time.time()
+        produced = int(yielded) > 0
+        with self._tx() as c:
+            c.execute(
+                """INSERT INTO source_stats(campaign_id, platform, source, kind,
+                                            navigations, yielded, carried_over,
+                                            redirects, dead_hits, seconds,
+                                            first_seen, last_seen, last_yield_at,
+                                            banned_at)
+                   VALUES(?,?,?,?,1,?,?,?,?,?,?,?,?,?)
+                   ON CONFLICT(campaign_id, platform, source) DO UPDATE SET
+                     kind=excluded.kind,
+                     navigations=source_stats.navigations + 1,
+                     yielded=source_stats.yielded + excluded.yielded,
+                     carried_over=source_stats.carried_over + excluded.carried_over,
+                     redirects=source_stats.redirects + excluded.redirects,
+                     dead_hits=CASE WHEN excluded.yielded > 0 THEN 0
+                                    ELSE source_stats.dead_hits + excluded.dead_hits END,
+                     seconds=source_stats.seconds + excluded.seconds,
+                     last_seen=excluded.last_seen,
+                     last_yield_at=COALESCE(excluded.last_yield_at,
+                                            source_stats.last_yield_at),
+                     banned_at=CASE WHEN excluded.yielded > 0 THEN NULL
+                                    ELSE COALESCE(source_stats.banned_at,
+                                                  excluded.banned_at) END,
+                     parked_at=CASE WHEN excluded.yielded > 0 THEN NULL
+                                    ELSE source_stats.parked_at END,
+                     park_reason=CASE WHEN excluded.yielded > 0 THEN NULL
+                                      ELSE source_stats.park_reason END""",
+                (campaign_id, platform, source, kind or "unknown",
+                 max(0, int(yielded)), max(0, int(carried_over)),
+                 1 if redirected else 0, 1 if unavailable else 0,
+                 max(0.0, float(seconds)), now, now,
+                 now if produced else None,
+                 (now if (unavailable and not produced) else None)),
+            )
+
+    def source_stats(self, campaign_id: str,
+                     platform: Optional[str] = None) -> list[dict[str, Any]]:
+        """The ledger, enriched with the two numbers that actually decide a seed's
+        fate: how many of its items passed the relevance gate, and how many leads
+        it produced. Those live on `seen_reels.source` / `matches.source`, so they
+        are DERIVED here rather than double-counted into `source_stats` — one
+        writer per fact.
+
+        Ordered best-first (leads, then relevant, then yield) so the caller can
+        take the head of the list as "what is working"."""
+        q = """
+            SELECT ss.*,
+                   (SELECT COUNT(*) FROM seen_reels sr
+                     WHERE sr.campaign_id=ss.campaign_id AND sr.platform=ss.platform
+                       AND sr.source=ss.source AND sr.relevant=1) AS relevant_reels,
+                   (SELECT COUNT(*) FROM matches m
+                     WHERE m.campaign_id=ss.campaign_id AND m.platform=ss.platform
+                       AND m.source=ss.source) AS leads
+              FROM source_stats ss
+             WHERE ss.campaign_id=?
+        """
+        args: list[Any] = [campaign_id]
+        if platform:
+            q += " AND ss.platform=?"
+            args.append(platform)
+        q += " ORDER BY leads DESC, relevant_reels DESC, ss.yielded DESC, ss.source ASC"
+        return [dict(r) for r in self._conn.execute(q, args).fetchall()]
+
+    # Park thresholds. A seed must have been given a REAL chance before it is set
+    # aside: three separate visits AND thirty intercepted items AND not one
+    # relevance pass. Any one of those alone is noise — a tag can trivially serve
+    # 30 items in one unlucky session, and three visits that intercepted 4 items
+    # total have proven nothing.
+    PARK_MIN_NAVIGATIONS = 3
+    PARK_MIN_YIELDED = 30
+    # A "does not exist" verdict is much stronger evidence than dryness, so it
+    # parks far sooner — but still not on the first sighting, because a single
+    # failed render reads identical to a banned page.
+    PARK_MIN_DEAD_HITS = 2
+    # Never park below this many live sources: a campaign with one working seed
+    # left must keep walking it, and a campaign parked down to zero sources
+    # silently turns into the home feed (core/config.py:197-210) or into nothing.
+    PARK_MIN_ACTIVE = 2
+
+    def park_dry_sources(self, campaign_id: str,
+                         platform: str = DEFAULT_PLATFORM) -> list[dict[str, Any]]:
+        """Park seeds that have earned it, and return the rows actually parked.
+
+        Two grounds, both reversible (`record_source_walk` clears them the moment
+        the seed produces again):
+          * dead — the platform said the page does not exist, twice;
+          * dry  — enough visits and enough intercepted items to be sure, with
+                   zero relevance passes.
+
+        The `home` source is never parked (it is not a seed and cannot be
+        re-proposed), and the floor at PARK_MIN_ACTIVE stops the rule from
+        disarming a campaign it was supposed to sharpen. Candidates are parked
+        worst-first so the floor sacrifices the least-bad seed last."""
+        rows = [r for r in self.source_stats(campaign_id, platform)
+                if r.get("source") != "home" and not r.get("parked_at")]
+        active = len(rows)
+        candidates = []
+        for r in rows:
+            if r.get("dead_hits", 0) >= self.PARK_MIN_DEAD_HITS:
+                candidates.append((r, "dead: page does not exist"))
+            elif (r.get("navigations", 0) >= self.PARK_MIN_NAVIGATIONS
+                  and r.get("yielded", 0) >= self.PARK_MIN_YIELDED
+                  and not r.get("relevant_reels")):
+                candidates.append((
+                    r, f"dry: {r['navigations']} visits, {r['yielded']} items, "
+                       f"0 relevant"))
+        # Worst first: dead before dry, then fewest relevant, then fewest leads.
+        candidates.sort(key=lambda rc: (0 if rc[1].startswith("dead") else 1,
+                                        rc[0].get("relevant_reels", 0),
+                                        rc[0].get("leads", 0)))
+        parked: list[dict[str, Any]] = []
+        now = time.time()
+        with self._tx() as c:
+            for row, reason in candidates:
+                if active <= self.PARK_MIN_ACTIVE:
+                    logger.info("DB park_dry_sources · floor reached (%d active) · "
+                                "leaving %s parked-eligible but live",
+                                active, row["source"])
+                    break
+                c.execute(
+                    "UPDATE source_stats SET parked_at=?, park_reason=? "
+                    "WHERE campaign_id=? AND platform=? AND source=?",
+                    (now, reason, campaign_id, platform, row["source"]))
+                active -= 1
+                out = dict(row)
+                out["parked_at"], out["park_reason"] = now, reason
+                parked.append(out)
+        if parked:
+            logger.info("DB park_dry_sources · campaign=%s platform=%s parked=%s",
+                        campaign_id, platform,
+                        ", ".join(r["source"] for r in parked))
+        return parked
+
+    def parked_sources(self, campaign_id: str,
+                       platform: Optional[str] = None) -> set[str]:
+        """Seed terms currently parked or banned — what `build_feed` should skip
+        and what the campaign generator must stop re-proposing."""
+        q = ("SELECT source FROM source_stats WHERE campaign_id=? "
+             "AND (parked_at IS NOT NULL OR banned_at IS NOT NULL)")
+        args: list[Any] = [campaign_id]
+        if platform:
+            q += " AND platform=?"
+            args.append(platform)
+        return {r["source"] for r in self._conn.execute(q, args).fetchall()}
+
+    def live_seeds(self, campaign_id: str, seeds: Sequence[str], *,
+                   platform: str = DEFAULT_PLATFORM,
+                   kind: str = "hashtag") -> list[str]:
+        """Filter a brief's seed list down to the ones still worth walking.
+
+        This is where the ledger stops being a report and starts saving time: a
+        parked or banned seed costs a navigation plus four empty-scroll rounds
+        (~45s) every single session, forever, and produces nothing.
+
+        Two guardrails, both deliberate:
+          * never return an EMPTY list when seeds were supplied — an empty seed
+            list flips the home feed back on (`core/config.py` include_home_feed)
+            and silently turns a targeted campaign into an untargeted one;
+          * keep at least `PARK_MIN_ACTIVE` seeds alive, restoring the
+            best-performing parked ones if the filter would go below it.
+
+        When every supplied seed is parked/banned it raises the `seeds_all_dead`
+        health flag — the case that used to be a green, zero-lead `completed` run
+        with no DB row anywhere.
+        """
+        wanted = [str(x) for x in seeds if str(x).strip()]
+        if not wanted:
+            return []
+        dead = self.parked_sources(campaign_id, platform)
+        live = [x for x in wanted if x not in dead]
+        if len(live) == len(wanted):
+            return live
+        if not live:
+            self.raise_flag(
+                "seeds_all_dead", "soft",
+                f"every {kind} seed on {platform} is parked or banned "
+                f"({', '.join(wanted)}) — walking them anyway; re-seed the campaign",
+                campaign_id=campaign_id)
+            logger.warning("DB live_seeds · campaign=%s platform=%s · ALL %d seed(s) "
+                           "dead — refusing to empty the seed list", campaign_id,
+                           platform, len(wanted))
+            return wanted
+        if len(live) < self.PARK_MIN_ACTIVE:
+            # Restore best-first from the ledger so the floor keeps the least-bad
+            # seeds, not an arbitrary two.
+            ranked = [r["source"] for r in self.source_stats(campaign_id, platform)
+                      if r["source"] in dead and r["source"] in wanted]
+            for src in ranked:
+                if len(live) >= self.PARK_MIN_ACTIVE:
+                    break
+                live.append(src)
+            live = [x for x in wanted if x in set(live)]   # keep the brief's order
+        skipped = [x for x in wanted if x not in live]
+        if skipped:
+            logger.info("DB live_seeds · campaign=%s platform=%s · skipping %s",
+                        campaign_id, platform, ", ".join(skipped))
+        return live
+
+    def seed_history(self, org_id: Optional[int] = None, *,
+                     platform: Optional[str] = None,
+                     kind: Optional[str] = None,
+                     limit: int = 12) -> dict[str, list[str]]:
+        """What this org's past runs proved about seed terms, as two flat lists.
+
+        `productive` = seeds that produced at least one lead, best first.
+        `dead`       = seeds parked or banned by the ledger.
+
+        Fed to the AI campaign generator (`campaign_gen`), which today invents
+        seeds from parametric memory alone and will happily re-propose the exact
+        tag that 302'd on every run last month. Scoped to the org, NOT to one
+        campaign, because a brand-new campaign has no history of its own — the
+        transferable knowledge is "on this platform, for this tenant, these terms
+        work and these do not".
+
+        The `home` pseudo-source is excluded: it is not a seed and cannot be
+        proposed.
+
+        `kind` ('hashtag' | 'account') splits the two, and the caller should
+        almost always pass it. `source_stats.kind` has always carried the
+        distinction — `core/cdp.py::_source_seeds` labels account seeds
+        correctly — but this function ignored it, so handles and hashtags came
+        back in one undifferentiated list and were rendered to the campaign
+        generator as one heading. A model told that `@acme_remont` and `remont`
+        are the same kind of thing will happily propose a hashtag where a handle
+        belongs.
+        """
+        args: list[Any] = []
+        where = ["ss.source <> 'home'"]
+        join = ""
+        if kind:
+            where.append("ss.kind = ?")
+            args.append(kind)
+        if org_id is not None:
+            join = " JOIN campaign_meta cm ON cm.campaign_id = ss.campaign_id"
+            where.append("cm.org_id = ?")
+            args.append(org_id)
+        if platform:
+            where.append("ss.platform = ?")
+            args.append(platform)
+        clause = " AND ".join(where)
+        # SUM over the group, NOT a bare correlated subquery. The subquery
+        # references ss.campaign_id/ss.platform, which are NOT in the GROUP BY —
+        # SQLite then evaluates them against ONE ARBITRARY row of each group, so
+        # `leads` was the count for a single campaign rather than the org total.
+        # A seed proven on one campaign and parked on another therefore flipped
+        # between `productive` and `dead` purely on which campaign the tenant
+        # created FIRST (the group representative follows campaign_meta rowid
+        # order, not the id's collation), and in the losing case a seed that had
+        # produced real leads was rendered to the generator as
+        # "Do NOT propose them or close variants".
+        productive = [r["source"] for r in self._conn.execute(
+            f"""SELECT ss.source,
+                       SUM((SELECT COUNT(*) FROM matches m
+                             WHERE m.campaign_id=ss.campaign_id
+                               AND m.platform=ss.platform
+                               AND m.source=ss.source)) AS leads
+                  FROM source_stats ss{join}
+                 WHERE {clause}
+                 GROUP BY ss.source
+                HAVING leads > 0
+                 ORDER BY leads DESC, ss.source ASC
+                 LIMIT ?""", (*args, limit)).fetchall()]
+        # No LIMIT in the SQL: the productive-subtraction below happens AFTER the
+        # fetch, so limiting here could silently return fewer than `limit` dead
+        # terms (or none) whenever the head of the list is also productive.
+        dead = [r["source"] for r in self._conn.execute(
+            f"""SELECT DISTINCT ss.source FROM source_stats ss{join}
+                 WHERE {clause}
+                   AND (ss.parked_at IS NOT NULL OR ss.banned_at IS NOT NULL)
+                 ORDER BY ss.source ASC""", args).fetchall()]
+        # A term can be dead on one campaign and productive on another; proof of
+        # leads outranks a park verdict, so it is only reported as dead when it has
+        # never produced anywhere.
+        proven = set(productive)
+        dead = [d for d in dead if d not in proven][:limit]
+        return {"productive": productive, "dead": dead}
+
+    def unpark_source(self, campaign_id: str, source: str,
+                      platform: str = DEFAULT_PLATFORM) -> None:
+        """Operator override — clear a park/ban verdict without touching counters.
+        The counters stay so the rule can re-fire on fresh evidence rather than
+        re-litigating the old evidence immediately."""
+        with self._tx() as c:
+            c.execute(
+                "UPDATE source_stats SET parked_at=NULL, park_reason=NULL, "
+                "banned_at=NULL, dead_hits=0 "
+                "WHERE campaign_id=? AND platform=? AND source=?",
+                (campaign_id, platform, source))
+
+    # ----- seed mining (v25, Campaign Lab Remedy Sheet #2/A) -----
+    def seed_candidates(self, campaign_id: str,
+                        platform: Optional[str] = None,
+                        exclude: Sequence[str] = (),
+                        min_relevant: int = 1,
+                        limit: int = 25) -> list[dict[str, Any]]:
+        """Accounts whose posts this campaign already judged relevant, best first.
+
+        The best possible seed candidates, and they cost ZERO new requests: every
+        engine already writes `seen_reels.author` plus the `relevant` label, and
+        `matches` already records which posts produced actual leads. Nothing
+        aggregated any of it — "which accounts produce our leads" was unanswerable
+        against a database that had always held the answer.
+
+        Ranked leads-first, because a lead is proof and a relevance pass is only a
+        signal. `author_id` (v25) is the grouping key when the platform exposes
+        one, so a rename reads as the same candidate; the display name is carried
+        along for the operator and is the fallback key on platforms that expose no
+        stable id.
+
+        `exclude` should carry the campaign's current seeds — an account we are
+        already walking is not a discovery.
+        """
+        drop = {str(x).strip().lower().lstrip("@") for x in exclude if str(x).strip()}
+        q = """
+            SELECT COALESCE(NULLIF(sr.author_id, ''), sr.author) AS seed_key,
+                   MAX(sr.author)    AS author,
+                   MAX(sr.author_id) AS author_id,
+                   sr.platform       AS platform,
+                   COUNT(DISTINCT sr.reel_id) AS relevant_posts,
+                   COUNT(DISTINCT m.comment_id) AS leads
+              FROM seen_reels sr
+              LEFT JOIN matches m
+                ON m.campaign_id = sr.campaign_id
+               AND m.platform    = sr.platform
+               AND m.reel_id     = sr.reel_id
+             WHERE sr.campaign_id = ?
+               AND sr.relevant = 1
+               AND sr.author IS NOT NULL AND TRIM(sr.author) <> ''
+        """
+        args: list[Any] = [campaign_id]
+        if platform:
+            q += " AND sr.platform = ?"
+            args.append(platform)
+        q += """
+             GROUP BY seed_key, sr.platform
+             HAVING relevant_posts >= ?
+             ORDER BY leads DESC, relevant_posts DESC, seed_key ASC
+        """
+        args.append(max(1, int(min_relevant)))
+        out: list[dict[str, Any]] = []
+        for r in self._conn.execute(q, args).fetchall():
+            row = dict(r)
+            key = str(row.get("seed_key") or "")
+            if key.strip().lower().lstrip("@") in drop:
+                continue
+            # `seed` is what an operator would paste back into the brief: the
+            # stable id when there is one, else the display name.
+            row["seed"] = str(row.get("author_id") or "").strip() or row.get("author") or ""
+            out.append(row)
+            if len(out) >= limit:
+                break
+        return out
+
+    def co_commenter_overlap(self, campaign_id: str,
+                             platform: Optional[str] = None,
+                             min_shared: int = 2,
+                             limit: int = 25) -> list[dict[str, Any]]:
+        """Authors ranked by how much of their commenting audience we ALSO see
+        under other authors we have discovered.
+
+        The bipartite `matches.username` x `seen_reels.author` join the audit
+        flagged as computable-today-but-computed-nowhere.
+
+        "Shared" means: a commenter on this author's posts who also comments under
+        at least one DIFFERENT author in this campaign. Defining it against every
+        lead in the campaign instead — the obvious first cut — makes the set
+        include the author's own commenters, so every author trivially overlaps
+        100% with "our commenters" and the metric says nothing.
+
+        Reported as `overlap_share` (shared ÷ that author's own commenters), never
+        as a raw count. Raw overlap ranks giant generic accounts first purely
+        because they are large — the failure mode SubredditStats' published
+        formula exists to correct. A niche account whose whole audience we already
+        know is a far better lookalike than a huge one where we know 2%.
+
+        Needs `idx_matches_username` (added in v24) to stay cheap.
+        """
+        where_platform = " AND sr.platform = ?" if platform else ""
+        q = f"""
+            WITH ac AS (
+                SELECT DISTINCT
+                       COALESCE(NULLIF(sr.author_id, ''), sr.author) AS seed_key,
+                       sr.platform  AS platform,
+                       sr.author    AS author,
+                       sr.author_id AS author_id,
+                       m.username   AS username
+                  FROM seen_reels sr
+                  JOIN matches m
+                    ON m.campaign_id = sr.campaign_id
+                   AND m.platform    = sr.platform
+                   AND m.reel_id     = sr.reel_id
+                 WHERE sr.campaign_id = ?
+                   AND sr.author IS NOT NULL AND TRIM(sr.author) <> ''
+                   AND m.username IS NOT NULL AND TRIM(m.username) <> ''
+                   {where_platform}
+            )
+            SELECT a.seed_key                     AS seed_key,
+                   a.platform                     AS platform,
+                   MAX(a.author)                  AS author,
+                   MAX(a.author_id)               AS author_id,
+                   COUNT(DISTINCT a.username)     AS total_commenters,
+                   COUNT(DISTINCT CASE WHEN EXISTS (
+                       SELECT 1 FROM ac b
+                        WHERE b.username = a.username
+                          AND b.seed_key <> a.seed_key
+                   ) THEN a.username END)         AS shared_commenters
+              FROM ac a
+             GROUP BY a.seed_key, a.platform
+            HAVING shared_commenters >= ?
+             ORDER BY shared_commenters * 1.0 / total_commenters DESC,
+                      shared_commenters DESC, seed_key ASC
+        """
+        args: list[Any] = [campaign_id]
+        if platform:
+            args.append(platform)
+        args.append(max(1, int(min_shared)))
+        out: list[dict[str, Any]] = []
+        for r in self._conn.execute(q, args).fetchall():
+            row = dict(r)
+            total = row.get("total_commenters") or 0
+            row["overlap_share"] = (row["shared_commenters"] / total) if total else 0.0
+            row["seed"] = str(row.get("author_id") or "").strip() or row.get("author") or ""
+            out.append(row)
+            if len(out) >= limit:
+                break
+        return out
+
+    # ----- eval candidates: the flip-list substrate (v26, Sheet #3/E) -----
+    # A rejected comment is scored, paid for, and thrown away. These capture a
+    # sampled record of them so a gold set can exist at all.
+    #
+    # Sampling is deliberately NOT uniform. Boundary cases decide where a
+    # threshold lands and are rare; obvious noise is abundant and worthless.
+    NEAR_BAND = 0.15          # |score - threshold| within this = always captured
+    CLEAR_SAMPLE_RATE = 8     # keep 1 in N of the obvious rejects
+    EVAL_SESSION_CAP = 200    # per session, so a long run cannot flood the table
+
+    @staticmethod
+    def eval_band(score: Optional[float], threshold: float,
+                  is_match: bool) -> str:
+        """Which capture band a verdict falls in: accepted | near | clear."""
+        if is_match:
+            return "accepted"
+        if score is None:
+            return "clear"
+        # +epsilon: the band is documented as inclusive, and binary floating point
+        # puts the exact edge on the wrong side of it — `0.7 - 0.15` is
+        # 0.5499999999999999, whose distance from 0.7 is 0.15000000000000002.
+        # Without this the boundary case the band exists to capture is the one
+        # case it drops.
+        return "near" if abs(float(score) - float(threshold)) <= Store.NEAR_BAND + 1e-9 \
+            else "clear"
+
+    @staticmethod
+    def eval_should_capture(comment_id: str, band: str) -> bool:
+        """Deterministic sampling — a hash of the comment id, not `random`.
+
+        Deterministic on purpose: a re-polled comment must land on the same side
+        of the sample every time, or the table fills with near-duplicates of
+        whatever happened to be re-scored; and a test can assert the decision."""
+        if band != "clear":
+            return True
+        digest = hashlib.sha256(str(comment_id).encode("utf-8")).hexdigest()
+        return int(digest[:8], 16) % Store.CLEAR_SAMPLE_RATE == 0
+
+    def record_eval_candidate(self, *, campaign_id: str, comment_id: str,
+                              text: str, band: str,
+                              platform: str = DEFAULT_PLATFORM,
+                              session_id: Optional[str] = None,
+                              reel_id: Optional[str] = None,
+                              username: Optional[str] = None,
+                              lang: Optional[str] = None,
+                              score: Optional[float] = None,
+                              confidence: Optional[float] = None,
+                              threshold: Optional[float] = None,
+                              reason: Optional[str] = None,
+                              tier: Optional[str] = None,
+                              raw: Optional[str] = None) -> bool:
+        """Persist one labelling candidate. Returns True if a row was written.
+
+        Idempotent on `comment_id`, and a re-poll REFRESHES the model's fields
+        while leaving any human `label` untouched — same rule as `matches.status`.
+        A human verdict outranks every later machine opinion about it."""
+        if not str(text or "").strip():
+            return False
+        now = time.time()
+        with self._tx() as c:
+            c.execute(
+                """INSERT INTO eval_candidates
+                     (campaign_id, platform, comment_id, session_id, reel_id,
+                      username, text, lang, score, confidence, threshold, reason,
+                      tier, raw, band, created_at)
+                   VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                   ON CONFLICT(campaign_id, platform, comment_id) DO UPDATE SET
+                     score=excluded.score,
+                     confidence=excluded.confidence,
+                     threshold=excluded.threshold,
+                     reason=excluded.reason,
+                     tier=excluded.tier,
+                     raw=COALESCE(excluded.raw, eval_candidates.raw),
+                     band=excluded.band""",
+                (campaign_id, platform, str(comment_id), session_id, reel_id,
+                 username, text, lang, score, confidence, threshold, reason,
+                 tier, raw, band, now))
+        return True
+
+    def eval_candidate_count(self, campaign_id: str,
+                             session_id: Optional[str] = None) -> int:
+        """How many candidates exist, optionally for one session (the cap check)."""
+        if session_id:
+            row = self._conn.execute(
+                "SELECT COUNT(*) FROM eval_candidates WHERE campaign_id=? "
+                "AND session_id=?", (campaign_id, session_id)).fetchone()
+        else:
+            row = self._conn.execute(
+                "SELECT COUNT(*) FROM eval_candidates WHERE campaign_id=?",
+                (campaign_id,)).fetchone()
+        return int(row[0]) if row else 0
+
+    def eval_candidates(self, campaign_id: str, *,
+                        platform: Optional[str] = None,
+                        band: Optional[str] = None,
+                        unlabelled_only: bool = False,
+                        limit: int = 500) -> list[dict[str, Any]]:
+        """The labelling queue / gold-set export.
+
+        Ordered near-band first, then by how close the score sat to the
+        threshold: the most informative items to label are the ones the model was
+        least sure about, and a human labelling budget is small."""
+        q = ["SELECT * FROM eval_candidates WHERE campaign_id=?"]
+        args: list[Any] = [campaign_id]
+        if platform:
+            q.append("AND platform=?")
+            args.append(platform)
+        if band:
+            q.append("AND band=?")
+            args.append(band)
+        if unlabelled_only:
+            q.append("AND label IS NULL")
+        q.append("ORDER BY CASE band WHEN 'near' THEN 0 WHEN 'accepted' THEN 1 "
+                 "ELSE 2 END, ABS(COALESCE(score,0) - COALESCE(threshold,0)) ASC, "
+                 "created_at ASC LIMIT ?")
+        args.append(limit)
+        return [dict(r) for r in self._conn.execute(" ".join(q), args).fetchall()]
+
+    def label_eval_candidate(self, campaign_id: str, comment_id: str,
+                             label: bool, *, platform: str = DEFAULT_PLATFORM,
+                             labeled_by: str = "") -> None:
+        """Record the HUMAN verdict. This is the ground truth everything else is
+        measured against, so it is never written by the engine."""
+        with self._tx() as c:
+            c.execute(
+                "UPDATE eval_candidates SET label=?, labeled_at=?, labeled_by=? "
+                "WHERE campaign_id=? AND platform=? AND comment_id=?",
+                (int(bool(label)), time.time(), labeled_by, campaign_id,
+                 platform, str(comment_id)))
 
     # ----- comment cursors -----
     def get_cursor(self, campaign_id: str, reel_id: str,
@@ -1544,6 +2333,7 @@ class Store:
                      platform: str = DEFAULT_PLATFORM,
                      captured_at: Optional[float] = None,
                      found_by_models: Optional[list[str]] = None,
+                     source: Optional[str] = None,
                      initial_status: str = "new") -> None:
         """Insert a match, or refresh its scored fields on re-poll.
 
@@ -1569,7 +2359,8 @@ class Store:
                 username=username, text=text, lang=lang, score=score, reason=reason,
                 extracted=extracted, tier=tier, session_id=session_id,
                 platform=platform, captured_at=captured_at,
-                found_by_models=found_by_models, initial_status=initial_status)
+                found_by_models=found_by_models, source=source,
+                initial_status=initial_status)
         logger.debug("DB upsert_match · campaign=%s comment=%s score=%.2f tier=%s",
                      campaign_id, comment_id, score, tier)
 
@@ -1580,6 +2371,7 @@ class Store:
                           session_id: Optional[str], platform: str,
                           captured_at: Optional[float],
                           found_by_models: Optional[list[str]] = None,
+                          source: Optional[str] = None,
                           initial_status: str = "new") -> None:
         """Run the match upsert on the caller's cursor `c` — the caller owns the
         transaction. Extracted from `upsert_match` so the distributed-worker ack can
@@ -1591,6 +2383,17 @@ class Store:
         `session_id`/`captured_at` record first-capture provenance."""
         now = time.time()
         cap = captured_at if captured_at is not None else now
+        # v24 provenance: the seed that produced this lead. Derived from the reel
+        # rather than passed by every engine — `mark_seen` stamped it on first
+        # sighting, and deriving keeps ONE writer for the fact. It also fixes the
+        # case an engine could not get right anyway: a watchlist re-poll builds a
+        # bare Reel with no source, but the seen_reels row still knows.
+        if not source:
+            row = c.execute(
+                "SELECT source FROM seen_reels "
+                "WHERE campaign_id=? AND platform=? AND reel_id=?",
+                (campaign_id, platform, reel_id)).fetchone()
+            source = row["source"] if row else None
         blob = json.dumps(extracted, ensure_ascii=False) if extracted is not None else None
         found_by_blob = (json.dumps(found_by_models, ensure_ascii=False)
                          if found_by_models else None)
@@ -1599,8 +2402,8 @@ class Store:
             """INSERT INTO matches
                  (campaign_id, org_id, platform, reel_id, comment_id, session_id,
                   username, text, lang, score, reason, extracted, status, tier,
-                  found_by_models, captured_at, updated_at)
-               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                  found_by_models, source, captured_at, updated_at)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
                ON CONFLICT(campaign_id, platform, comment_id) DO UPDATE SET
                  org_id=COALESCE(matches.org_id, excluded.org_id),
                  reel_id=excluded.reel_id,
@@ -1612,10 +2415,11 @@ class Store:
                  extracted=excluded.extracted,
                  tier=excluded.tier,
                  found_by_models=excluded.found_by_models,
+                 source=COALESCE(matches.source, excluded.source),
                  updated_at=excluded.updated_at""",
             (campaign_id, org_id, platform, reel_id, comment_id, session_id, username,
              text, lang, score, reason, blob, initial_status, tier, found_by_blob,
-             cap, now),
+             (source or None), cap, now),
         )
 
     def matches_for_run(self, run_id: str) -> list[dict[str, Any]]:
@@ -1891,6 +2695,30 @@ class Store:
                  session_id),
             )
 
+    def touch_session(self, session_id: str) -> None:
+        """Bump ONLY ``sessions.last_activity_at`` (the v20 liveness heartbeat the
+        SessionWatchdog reads) — one single-row UPDATE, no read, no counter rewrite.
+
+        Why this exists beside ``update_counters``, which also bumps the column: an
+        engine session's ``_flush()`` first runs ``total_spend()`` (an aggregate
+        SELECT over spend_log) and then rewrites all nine counter columns. That is
+        the right price ONCE PER REEL, but the 2026-08-20 fleet stall
+        (job-2099fb29e88b: 5 attempts, every one killed with "stalled: no activity
+        for over 180s") forced heartbeats down to per-model-verdict and per-comment
+        granularity — dozens of bumps per reel with no counter changed in between.
+        This path is what makes that granularity cost one indexed row write instead
+        of an aggregate scan plus a nine-column write.
+
+        Deliberately NOT a timer: callers invoke it only after real progress (a
+        model verdict came back, a comment was scored, a permalink opened), so a
+        genuinely wedged session still goes quiet and is still halted by the
+        watchdog. A blind ticker here would disarm the watchdog entirely."""
+        with self._tx() as c:
+            c.execute(
+                "UPDATE sessions SET last_activity_at=? WHERE session_id=?",
+                (time.time(), session_id),
+            )
+
     def end_session(self, session_id: str, status: str = "completed",
                     halt_reason: Optional[str] = None) -> None:
         with self._tx() as c:
@@ -2046,6 +2874,67 @@ class Store:
             (campaign_id,),
         ).fetchone()
         return float(row["t"])
+
+    def max_spend_id(self, campaign_id: str) -> int:
+        """The high-water mark of `spend_log.id` FOR ONE CAMPAIGN — the cursor a worker
+        takes BEFORE a run so it can ship exactly that run's delta on ack/nack (B9).
+
+        An id cursor, NOT a run_id join: a requeued attempt REUSES the job's run_id
+        (`nack_job` reads it back out of the unchanged spec), so a run-scoped query would
+        re-report attempt 1's rows on a same-box retry.
+
+        SCOPED TO THE CAMPAIGN, matching `spend_since`'s own `WHERE campaign_id=?`, so
+        an unrelated campaign's write can never move this campaign's mark. NOTE that the
+        cursor is NOT what keeps two overlapping attempts on ONE campaign from
+        re-reporting each other's rows — no choice of mark can, since the second
+        attempt's rows land inside the first's window either way. `spend_since`'s
+        `run_id` filter is what does that; see its docstring. The old docstring here
+        claimed `JobSpec.lock_key()` made overlap impossible, which is false: that key is
+        `f"{org_id}-{platform}-{account or '_default'}"` — per (org, PLATFORM), not per
+        campaign."""
+        row = self._conn.execute(
+            "SELECT COALESCE(MAX(id),0) AS m FROM spend_log WHERE campaign_id=?",
+            (campaign_id,)).fetchone()
+        return int(row["m"])
+
+    def spend_since(self, campaign_id: str, after_id: int,
+                    run_id: Optional[str] = None) -> list[dict[str, Any]]:
+        """This campaign's spend rows newer than `after_id`, rolled up per (stage,
+        model) — the compact delta a worker ships back on ack/nack (see
+        `max_spend_id`). `at` is the EARLIEST created_at in each group so the cloud can
+        stamp the rollup row near when the money was actually spent rather than at ack
+        time (otherwise `spend_by_day`, which buckets on created_at, puts a whole run's
+        spend on the ack day and skews a run that spanned midnight).
+
+        `run_id` EXCLUDES rows that provably belong to a DIFFERENT run, and without it
+        the id cursor alone is not enough. Two jobs for the SAME campaign on DIFFERENT
+        platforms take different `JobSpec.lock_key()` single-flight locks (the key is
+        `org-platform-account`, i.e. per platform, NOT per campaign), so on a box running
+        more than one sidecar against one AIZU_DB they overlap — and each attempt's
+        window then contains the other's rows. Narrowing the cursor cannot fix that: B's
+        rows land INSIDE A's window no matter where A's mark is. Since the cloud
+        `spend_log` has an AUTOINCREMENT PK and no unique key, both reports are inserted
+        and the campaign's spend is inflated (its effective cap correspondingly halved).
+
+        Rows with NO session (an LLM call made outside a session) are always KEPT: they
+        cannot be attributed to another run, and dropping them would lose real money from
+        the roll-up. Rows of a PRIOR ATTEMPT of this same run are kept too — a requeue
+        reuses the run_id, and with the sidecar's parked cursor those dollars have not
+        been banked yet and must still be reported."""
+        sql = ["""SELECT stage, model, COALESCE(SUM(usd),0) AS usd, MIN(created_at) AS at
+                    FROM spend_log
+                   WHERE campaign_id=? AND id>?"""]
+        params: list[Any] = [campaign_id, int(after_id)]
+        if run_id:
+            sql.append("""AND (session_id IS NULL
+                               OR session_id NOT IN (
+                                   SELECT session_id FROM sessions
+                                    WHERE run_id IS NOT NULL AND run_id<>?))""")
+            params.append(run_id)
+        sql.append("GROUP BY stage, model HAVING SUM(usd) > 0")
+        rows = self._conn.execute(" ".join(sql), tuple(params)).fetchall()
+        return [{"stage": r["stage"], "model": r["model"],
+                 "usd": float(r["usd"]), "at": r["at"]} for r in rows]
 
     # ----- engagement actions -----
     def log_action(self, campaign_id: str, action_type: str, *,
@@ -2694,8 +3583,22 @@ class Store:
 
     def per_campaign_rollup(self, org_id: Optional[int] = None) -> list[dict[str, Any]]:
         """Per-campaign lead/spend rollup, scoped to `org_id` when given (panel use).
-        Filtering matches by org_id yields only this org's campaigns, so the per-cid
-        spend lookups below stay within the org without a second org filter."""
+
+        SPEND IS READ FROM `spend_log`, never inferred from the existence of leads.
+        Building the row set from `matches` alone silently DROPPED every campaign
+        that had burned budget without producing a match, and the panel then
+        defaulted the missing row to `spent: 0` — while `/api/reports`, which sums
+        `spend_by_stage` over the org's campaign ids, reported the same money. Two
+        payloads, one DB, contradicting each other; budget caps looked untouched.
+
+        Org scoping: `matches` carries `org_id` (stamped from the campaign), but
+        `spend_log` does NOT, so a lead-less campaign is attributed to its org
+        through `campaign_meta`. A campaign whose matches are org-stamped is kept
+        even if it has no `campaign_meta` row, preserving the previous behaviour.
+
+        Rows are ordered by campaign id. Callers key them by `campaignId`, so the
+        order is for determinism, not meaning.
+        """
         win_in = ",".join(f"'{s}'" for s in sorted(WIN_STATUS))
         q = (f"SELECT m.campaign_id AS campaign_id, COUNT(*) AS leads, "
              f"SUM(CASE WHEN m.status IN ({win_in}) THEN 1 ELSE 0 END) AS won "
@@ -2705,15 +3608,22 @@ class Store:
             q += " WHERE m.org_id=?"
             args.append(org_id)
         q += " GROUP BY m.campaign_id"
-        rows = self._conn.execute(q, args).fetchall()
+        leads = {r["campaign_id"]: r for r in self._conn.execute(q, args).fetchall()}
+        spend = {r["campaign_id"]: float(r["t"]) for r in self._conn.execute(
+            "SELECT campaign_id, COALESCE(SUM(usd),0) AS t FROM spend_log "
+            "GROUP BY campaign_id").fetchall()}
+        cids = set(leads) | set(spend)
+        if org_id is not None:
+            owned = {r["campaign_id"] for r in self._conn.execute(
+                "SELECT campaign_id FROM campaign_meta WHERE org_id=?", (org_id,)).fetchall()}
+            cids = {cid for cid in cids if cid in leads or cid in owned}
         out = []
-        for r in rows:
-            cid = r["campaign_id"]
-            spend = self._conn.execute(
-                "SELECT COALESCE(SUM(usd),0) AS t FROM spend_log WHERE campaign_id=?",
-                (cid,)).fetchone()["t"]
-            out.append({"campaignId": cid, "leads": int(r["leads"]),
-                        "won": int(r["won"]), "spend": float(spend)})
+        for cid in sorted(cids):
+            r = leads.get(cid)
+            out.append({"campaignId": cid,
+                        "leads": int(r["leads"]) if r else 0,
+                        "won": int(r["won"]) if r else 0,
+                        "spend": spend.get(cid, 0.0)})
         return out
 
     # ----- v3 campaign_meta (panel-editable overlay) -----
@@ -3164,6 +4074,7 @@ class Store:
         capabilities: Optional[list] = None,
         token_expires_at: Optional[float] = None,
         enrolment_scope_kind: Optional[str] = None,
+        preflight: Optional[dict] = None,
     ) -> dict[str, Any]:
         """Idempotent register/re-register by stable worker id (UPSERT on PK).
 
@@ -3185,13 +4096,23 @@ class Store:
         capabilities on every subsequent call — see server.py's
         _handle_worker_register docstring.
 
+        `preflight` (v23) is the box's own launch self-check summary — JSON-encoded
+        verbatim, DIAGNOSTIC ONLY, never read back into an auth or dispatch decision
+        (a box that cannot work says so by registering with EMPTY capabilities; this
+        field only says WHY, which is the whole point when nobody can SSH into the box
+        — ledger F12). Register REPLACES it, including with NULL: a register is a full
+        re-statement of the box's identity, exactly like `capabilities`, so a downgrade
+        to a pre-v23 sidecar clears a stale report rather than leaving a lie on screen.
+        The heartbeat, by contrast, only ever refreshes it (COALESCE).
+
         Returns the stored row shape (NO token, NO hash):
             {"id", "orgId", "displayName", "host", "os", "agentVersion",
              "maxSessions", "currentSessions", "capabilities", "registeredAt",
-             "lastHeartbeatAt", "tokenExpiresAt", "revokedAt"}.
+             "lastHeartbeatAt", "tokenExpiresAt", "revokedAt", "preflight"}.
         """
         now = time.time()
         caps_json = json.dumps(capabilities or [])
+        preflight_json = json.dumps(preflight) if preflight is not None else None
         token_hash = hash_session_token(token)
         with self._tx() as c:
             c.execute(
@@ -3199,8 +4120,9 @@ class Store:
                        (id, org_id, display_name, host, os, agent_version,
                         last_heartbeat_at, registered_at, max_sessions,
                         current_sessions, capabilities, worker_token_hash,
-                        token_expires_at, revoked_at, enrolment_scope_kind)
-                   VALUES (?,?,?,?,?,?, ?,?,?, 0, ?, ?, ?, NULL, ?)
+                        token_expires_at, revoked_at, enrolment_scope_kind,
+                        preflight_json)
+                   VALUES (?,?,?,?,?,?, ?,?,?, 0, ?, ?, ?, NULL, ?, ?)
                    ON CONFLICT(id) DO UPDATE SET
                        org_id            = excluded.org_id,
                        display_name      = excluded.display_name,
@@ -3215,10 +4137,11 @@ class Store:
                        token_expires_at  = excluded.token_expires_at,
                        revoked_at        = NULL,
                        enrolment_scope_kind = COALESCE(excluded.enrolment_scope_kind,
-                                                        workers.enrolment_scope_kind)""",
+                                                        workers.enrolment_scope_kind),
+                       preflight_json    = excluded.preflight_json""",
                 (worker_id, org_id, display_name, host, os, agent_version,
                  now, now, int(max_sessions), caps_json, token_hash,
-                 token_expires_at, enrolment_scope_kind),
+                 token_expires_at, enrolment_scope_kind, preflight_json),
             )
             # Read back canonical timestamps: on a re-register the ON CONFLICT clause
             # PRESERVES the original registered_at, so the returned shape must mirror
@@ -3240,6 +4163,7 @@ class Store:
             "lastHeartbeatAt": stored["last_heartbeat_at"],
             "tokenExpiresAt": token_expires_at,
             "revokedAt": None,
+            "preflight": preflight,
         }
 
     def record_worker_heartbeat(
@@ -3247,30 +4171,35 @@ class Store:
         *,
         worker_id: str,
         current_sessions: Optional[int] = None,
+        preflight: Optional[dict] = None,
     ) -> bool:
         """Presence heartbeat: stamp last_heartbeat_at = now() on the worker's OWN row
         only (WHERE id=? AND revoked_at IS NULL). Optionally update current_sessions
-        when the body carries a load number. Returns True iff exactly one live row was
+        when the body carries a load number, and preflight_json (v23) when the body
+        carries a self-check summary. Returns True iff exactly one live row was
         updated (rowcount == 1); False when the worker is unknown or revoked — the
         caller maps False to 404/401. Touches NO other worker's row."""
-        # Two fully-hardcoded statements rather than an f-string-assembled SET clause:
+        # ONE fully-hardcoded statement rather than an f-string-assembled SET clause:
         # there is NO dynamic SQL surface here, so a future field added to a `sets`
         # list can never become an injection point (security review M5). All values
-        # remain parameterised.
+        # remain parameterised. v23 collapsed the previous two-branch form into this
+        # single COALESCE statement instead of adding a third and fourth branch — an
+        # omitted field (NULL param) keeps whatever is stored, which is exactly what
+        # "the body didn't carry it" means for both current_sessions and preflight.
         now = time.time()
+        preflight_json = json.dumps(preflight) if preflight is not None else None
         with self._tx() as c:
-            if current_sessions is None:
-                cur = c.execute(
-                    "UPDATE workers SET last_heartbeat_at = ? "
-                    "WHERE id = ? AND revoked_at IS NULL",
-                    (now, worker_id),
-                )
-            else:
-                cur = c.execute(
-                    "UPDATE workers SET last_heartbeat_at = ?, current_sessions = ? "
-                    "WHERE id = ? AND revoked_at IS NULL",
-                    (now, int(current_sessions), worker_id),
-                )
+            cur = c.execute(
+                "UPDATE workers "
+                "   SET last_heartbeat_at = ?, "
+                "       current_sessions  = COALESCE(?, current_sessions), "
+                "       preflight_json    = COALESCE(?, preflight_json) "
+                " WHERE id = ? AND revoked_at IS NULL",
+                (now,
+                 None if current_sessions is None else int(current_sessions),
+                 preflight_json,
+                 worker_id),
+            )
             return cur.rowcount == 1
 
     def get_worker_by_token(self, token: str) -> Optional[dict[str, Any]]:
@@ -3282,7 +4211,12 @@ class Store:
         Returns the authenticated worker identity (NO hash):
             {"id", "orgId", "capabilities", "maxSessions", "currentSessions",
              "agentVersion", "enrolmentScopeKind"}
-        or None."""
+        or None.
+
+        v23 deliberately does NOT add `preflight` here: this shape is the AUTH
+        identity, not a console view, and nothing on the auth/lease path may branch on
+        a self-reported diagnostic (a box withholds its capabilities to stop being
+        leased to — that is the only mechanism). Stated so nobody "helpfully" adds it."""
         if not token:
             return None
         row = self._conn.execute(
@@ -3315,7 +4249,12 @@ class Store:
             {"id", "orgId", "displayName", "host", "os", "agentVersion",
              "maxSessions", "currentSessions", "capabilities",
              "registeredAt", "lastHeartbeatAt", "lastSeenAgeSec",
-             "status", "revokedAt", "currentJob"}.
+             "status", "revokedAt", "currentJob", "preflight"}.
+        `preflight` (v23) is the box's last reported launch self-check
+        `{ok, blocking, enforced, ranAt, failed[]}` or None for a box that has never
+        sent one (a pre-v23 sidecar). It is what turns "online with 0 capabilities"
+        into "online, token_persistence FAIL, here is the remedy" for an admin who
+        cannot SSH into that PC (F12). `readiness.fleet_readiness` also consumes it.
         `currentJob` is the leased/running job the box is executing right now (or None):
         `{"jobId","campaignId","platform","status","runId","leaseExpiresAt"}` — so the
         console shows WHAT each worker is doing, not just that it is online. A revoked
@@ -3326,7 +4265,8 @@ class Store:
         rows = self._conn.execute(
             """SELECT id, org_id, display_name, host, os, agent_version,
                       last_heartbeat_at, registered_at, max_sessions,
-                      current_sessions, capabilities, token_expires_at, revoked_at
+                      current_sessions, capabilities, token_expires_at, revoked_at,
+                      preflight_json
                  FROM workers
                 ORDER BY registered_at DESC, id ASC""",
         ).fetchall()
@@ -3350,6 +4290,7 @@ class Store:
                 "status": derive_worker_status(last_hb, now_v),
                 "revokedAt": row["revoked_at"],
                 "currentJob": current_by_worker.get(row["id"]),
+                "preflight": _decode_preflight(row["preflight_json"]),
             })
         return out
 
@@ -3395,6 +4336,18 @@ class Store:
                 (now_v, worker_id),
             )
             return cur.rowcount == 1
+
+    def is_worker_revoked(self, worker_id: str) -> bool:
+        """True iff a worker row EXISTS for ``worker_id`` and carries a revoked_at.
+
+        Read by the register handler's legacy-bootstrap branch (ledger B10): a box whose
+        token was retired must not be able to walk back in on the shared bootstrap secret,
+        because `register_worker` UPSERTs `revoked_at = NULL` and would silently undo the
+        revocation an operator just performed. An UNKNOWN worker returns False — a fresh
+        box, or one whose row a DB reset removed (C3), still enrols normally. Read-only."""
+        row = self._conn.execute(
+            "SELECT revoked_at FROM workers WHERE id = ?", (worker_id,)).fetchone()
+        return row is not None and row["revoked_at"] is not None
 
     # ----- v22 worker enrolment tokens (BUILD-PLAN B8 fix) -----
     # Per-worker, single-use, admin-minted tokens that carry a SERVER-ASSIGNED scope
@@ -3694,7 +4647,16 @@ class Store:
                     (worker_id, now_v + ttl, now_v, row["id"], worker_id, now_v),
                 )
                 if cur.rowcount == 1:
-                    return _job_row_to_lease(row, lease_expires_at=now_v + ttl)
+                    # B9: ship the campaign's cloud-side spend total WITH the lease, on
+                    # the same _tx_immediate as the claim, so the box can subtract it
+                    # from its box-local AIZU_SPEND_CAP instead of starting at $0.
+                    # Resolved here (not baked at enqueue) because a queued job may sit
+                    # while other boxes spend against the same campaign.
+                    prior = c.execute(
+                        "SELECT COALESCE(SUM(usd),0) AS t FROM spend_log WHERE campaign_id=?",
+                        (row["campaign_id"],)).fetchone()
+                    return _job_row_to_lease(row, lease_expires_at=now_v + ttl,
+                                             prior_spend_usd=float(prior["t"]))
         return None
 
     def extend_lease(
@@ -3724,16 +4686,23 @@ class Store:
             return cur.rowcount == 1
 
     def ack_job(self, *, job_id: str, worker_id: str,
-                summary: dict, leads: Optional[list[dict]] = None) -> bool:
+                summary: dict, leads: Optional[list[dict]] = None,
+                spend: Optional[list[dict]] = None,
+                worker_db_id: Optional[str] = None) -> bool:
         """Mark a leased job `done`, store its result summary, and persist the captured
-        lead BODIES (`leads`) — ALL IN ONE TRANSACTION so a crash can never leave a job
-        `done` with its leads lost (Phase-3 atomicity fix). Idempotent: a second ack (row
-        already terminal or owned by no one) updates nothing and returns False, so the
-        sync runs exactly once. Every lead is FORCED under the job's own campaign/org
+        lead BODIES (`leads`) plus the run's SPEND rollup (`spend`, B9) — ALL IN ONE
+        TRANSACTION so a crash can never leave a job `done` with its leads or its spend
+        lost (Phase-3 atomicity fix). Idempotent: a second ack (row already terminal or
+        owned by no one) updates nothing and returns False, so the sync runs exactly
+        once. Every lead and every spend row is FORCED under the job's own campaign/org
         (BOLA guard). The `sessions` mirror is observational (panel display only) and
         stays best-effort OUTSIDE the transaction — losing it never loses lead data."""
         now = time.time()
         session_id = summary.get("session_id") or summary.get("sessionId")
+        # Warm the (possibly freshly minted) local database identity BEFORE the tx —
+        # see database_id(): minting inside would nest a _tx() and commit early.
+        if spend and worker_db_id:
+            self.database_id()
         with self._tx() as c:
             cur = c.execute(
                 """UPDATE jobs
@@ -3751,6 +4720,8 @@ class Store:
             # lead is committed, or the whole ack rolls back and the job stays leased
             # for ReclaimManager to requeue. No partial 'done-but-leads-gone' window.
             self._sync_acked_leads(c, job, leads)
+            self._sync_acked_spend(c, job, spend, session_id=session_id,
+                                   worker_db_id=worker_db_id)
         self._mirror_acked_session(job, session_id, summary)
         return True
 
@@ -3823,6 +4794,71 @@ class Store:
         logger.info("lead sync: %d/%d leads upserted for campaign %s",
                     synced, len(rows), campaign_id)
 
+    def _sync_acked_spend(self, c: sqlite3.Cursor, job,
+                          spend: Optional[list[dict]], *,
+                          session_id: Optional[str] = None,
+                          worker_db_id: Optional[str] = None) -> None:
+        """Roll the worker-reported spend delta into the CLOUD `spend_log` on the
+        caller's cursor `c` (the ack/nack transaction) — B9.
+
+        Without this the cloud spend_log never sees a single fleet dollar: the only
+        writer of spend is `router._record` on the box, so a campaign's cap silently
+        restarted at $0 on every machine and the panel showed `spent` $0 / `cpl` None
+        for a fleet-run campaign. Rows are FORCED under the job's OWN campaign (org
+        stamped from that campaign — the same BOLA guard as `_sync_acked_leads`).
+
+        SHARED-DATABASE GUARD (the reason `worker_db_id` exists): the worker's
+        `AIZU_DB` defaults to the SAME `aizu.db` filename the bridge uses, and the
+        same-box dev/desktop topology genuinely points both at one file. There the
+        child ALREADY wrote these rows into this very table, and spend_log is an
+        append-only AUTOINCREMENT table with no unique key — so unlike
+        `_sync_acked_leads` (idempotent via the matches PK) a second insert would
+        silently DOUBLE the campaign's spend and trip its cap at half the budget. When
+        the reported database identity is ours, the rollup is skipped entirely.
+
+        A malformed/zero/non-finite row is SKIPPED, never raised on — losing a
+        best-effort accounting row must not roll back a legitimate ack/nack."""
+        if not spend or job is None or not isinstance(spend, list):
+            return
+        if worker_db_id and worker_db_id == self.database_id():
+            logger.debug("spend sync skipped: worker reports our own database id")
+            return
+        campaign_id = job["campaign_id"]
+        if self.org_for_campaign(campaign_id) is None:
+            logger.warning("spend sync skipped: job %s campaign %s resolves to no org",
+                           job["id"], campaign_id)
+            return
+        rows = spend[:MAX_SYNC_SPEND_ROWS]
+        if len(spend) > MAX_SYNC_SPEND_ROWS:
+            logger.warning(
+                "spend sync capped at %d of %d for campaign %s (excess dropped)",
+                MAX_SYNC_SPEND_ROWS, len(spend), campaign_id)
+        now = time.time()
+        synced, total = 0, 0.0
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            usd = _lead_float(row.get("usd"), None)
+            if usd is None or not math.isfinite(usd) or usd <= 0:
+                continue  # zero/negative/NaN spend carries no information — drop it
+            stage = _lead_str(row.get("stage")) or "fleet"
+            model = _lead_str(row.get("model"))
+            at = _lead_float(
+                row.get("at") or row.get("createdAt") or row.get("created_at"), None)
+            # Clamp to now: `spend_by_day` buckets on created_at, so an honest earlier
+            # timestamp keeps a midnight-spanning run on the right day, while a bogus
+            # future one can never park spend in a day that has not happened.
+            created_at = min(at, now) if (at is not None and math.isfinite(at)
+                                          and at > 0) else now
+            c.execute(
+                """INSERT INTO spend_log(campaign_id, session_id, stage, model, usd, created_at)
+                   VALUES(?,?,?,?,?,?)""",
+                (campaign_id, session_id, stage, model, float(usd), created_at))
+            synced += 1
+            total += float(usd)
+        logger.info("spend sync: %d/%d rows ($%.4f) rolled up for campaign %s",
+                    synced, len(rows), total, campaign_id)
+
     # ----- v16 platform settings (superadmin execution-backend switch) -----
 
     def get_platform_setting(self, key: str, default: Optional[str] = None) -> Optional[str]:
@@ -3843,6 +4879,36 @@ class Store:
                      value=excluded.value, updated_at=excluded.updated_at,
                      updated_by=excluded.updated_by""",
                 (key, value, now, by))
+
+    def database_id(self) -> str:
+        """This database's stable identity (see DATABASE_ID_KEY), minted on first read.
+
+        Lives in `platform_settings`, which is base DDL — so EVERY Store has it,
+        worker-local ones included, with no migration. Cached per Store instance: the
+        ack/nack spend roll-up compares it inside a write transaction, and minting it
+        there would open a NESTED `_tx()` whose commit would prematurely commit the
+        ack's own UPDATE. `ack_job`/`nack_job` therefore warm this BEFORE opening their
+        transaction; the in-transaction call is then always a cache hit."""
+        cached = getattr(self, "_database_id", None)
+        if cached:
+            return cached
+        existing = self.get_platform_setting(DATABASE_ID_KEY)
+        if not existing:
+            # DO NOTHING, not set_platform_setting's DO UPDATE: in the shared-db
+            # topology the worker's Store and the bridge's Store are the SAME file and
+            # may mint concurrently. First writer must win — a last-writer upsert would
+            # leave the two processes holding different ids, defeating the guard exactly
+            # when it matters. Re-read afterwards so we adopt whoever won.
+            with self._tx() as c:
+                c.execute(
+                    """INSERT INTO platform_settings(key, value, updated_at, updated_by)
+                       VALUES(?,?,?,NULL) ON CONFLICT(key) DO NOTHING""",
+                    (DATABASE_ID_KEY, uuid.uuid4().hex, time.time()))
+            existing = self.get_platform_setting(DATABASE_ID_KEY)
+            if not existing:  # unreachable in practice; never cache/return an empty id
+                raise RuntimeError("could not establish a database id")
+        self._database_id = existing
+        return existing
 
     def execution_backend(self) -> str:
         """The active run execution backend — `in_process` (default) or `distributed`.
@@ -3988,16 +5054,33 @@ class Store:
     def nack_job(self, *, job_id: str, worker_id: str, reason: str,
                  retry_after_at: Optional[float] = None,
                  poison: bool = False,
+                 spend: Optional[list[dict]] = None,
+                 worker_db_id: Optional[str] = None,
                  now: Optional[float] = None) -> dict[str, Any]:
         """Fail a leased job: requeue with backoff, or dead-letter when attempts are
         exhausted or the failure is poison (won't fix itself on retry). Increments
         `attempts`. Returns ``{"outcome": "requeued"|"dead_lettered"|"ignored",
         "attempts", "retryAfterAt"}``. Idempotent on a terminal/foreign row (outcome
-        'ignored' — never double-counts attempts or resurrects a done job)."""
+        'ignored' — never double-counts attempts or resurrects a done job).
+
+        `spend` is the B9 rollup: a crashed/halted attempt spent real money before it
+        died, and a REQUEUE is unpinned (attempt 2 can land on a box that has neither
+        the local spend rows nor any cloud record of them), so the nack path must roll
+        spend up exactly like the ack path or up to DEFAULT_JOB_MAX_ATTEMPTS attempts'
+        worth of spend goes unaccounted. Nothing is recorded on the 'ignored' outcome —
+        that row is not this worker's to write against."""
         now_v = now if now is not None else time.time()
+        # See ack_job: warm the local database identity outside the transaction.
+        if spend and worker_db_id:
+            self.database_id()
         with self._tx() as c:
+            # id/org_id/campaign_id/platform are selected for _sync_acked_spend's BOLA
+            # forcing — reading them off the sqlite3.Row would otherwise raise IndexError
+            # inside the tx, 500 the nack, and strand the job leased until reclaim.
             row = c.execute(
-                "SELECT attempts, max_attempts, status, leased_by, spec FROM jobs WHERE id=?",
+                """SELECT id, org_id, campaign_id, platform, attempts, max_attempts,
+                          status, leased_by, spec
+                     FROM jobs WHERE id=?""",
                 (job_id,)).fetchone()
             if row is None or row["leased_by"] != worker_id \
                     or row["status"] not in ("leased", "running"):
@@ -4021,20 +5104,29 @@ class Store:
                 self._close_sessions_for_run(
                     c, run_id, now=now_v,
                     halt_reason="job dead-lettered: worker never closed session")
+                self._sync_acked_spend(c, row, spend, worker_db_id=worker_db_id)
                 return {"outcome": "dead_lettered", "attempts": attempts,
                         "retryAfterAt": None}
             ra = retry_after_at if retry_after_at is not None \
                 else now_v + nack_backoff_sec(attempts)
+            # Persist the reason on the REQUEUE branch too (B6): without it a job that
+            # fails its CDP probe leaves no record of why anywhere but the worker box's
+            # local log, and the panel renders a blank "Finished on the fleet". `result`
+            # is diagnostic only — `status`/`dead_lettered_at` remain the sole terminal
+            # signal, and a later ack_job overwrites this blob with the run summary.
             c.execute(
                 """UPDATE jobs
-                      SET status='queued', attempts=?, retry_after_at=?,
+                      SET status='queued', attempts=?, retry_after_at=?, result=?,
                           leased_by=NULL, lease_expires_at=NULL, updated_at=?
                     WHERE id=?""",
-                (attempts, ra, now_v, job_id),
+                (attempts, ra,
+                 json.dumps({"reason": reason, "poison": poison, "requeued": True}),
+                 now_v, job_id),
             )
             self._close_sessions_for_run(
                 c, run_id, now=now_v,
                 halt_reason="job requeued: prior attempt session abandoned")
+            self._sync_acked_spend(c, row, spend, worker_db_id=worker_db_id)
             return {"outcome": "requeued", "attempts": attempts, "retryAfterAt": ra}
 
     def get_job(self, job_id: str) -> Optional[dict[str, Any]]:

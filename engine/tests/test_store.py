@@ -291,6 +291,23 @@ def test_aggregations_window_and_funnel():
         {"campaignId": "c", "leads": 1, "won": 1, "spend": 0.14}]
 
 
+def test_per_campaign_rollup_reports_spend_without_leads():
+    """Spend comes from spend_log, never from the existence of leads.
+
+    The rollup used to be built with `FROM matches ... GROUP BY campaign_id`, so a
+    campaign that burned budget without capturing a single lead had no row at all
+    and the panel defaulted its card to `spent: 0` — while the very same
+    /api/reports payload summed that money under spendByStage."""
+    store, _ = fresh_store()
+    store.log_spend("dry", "vision", 999.0)
+    store.upsert_match(campaign_id="wet", reel_id="r", comment_id="cm1", username="u",
+                       text="hi", lang="en", score=0.9, reason="x", extracted=None,
+                       tier="local")
+    rollup = {r["campaignId"]: r for r in store.per_campaign_rollup()}
+    assert rollup["dry"] == {"campaignId": "dry", "leads": 0, "won": 0, "spend": 999.0}
+    assert rollup["wet"] == {"campaignId": "wet", "leads": 1, "won": 0, "spend": 0.0}
+
+
 def test_campaign_meta_coalesce_merge():
     store, _ = fresh_store()
     store.upsert_campaign_meta("c", budget_cap=50.0, status="paused")

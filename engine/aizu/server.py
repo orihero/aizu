@@ -17,12 +17,15 @@ SQLite remains the durable record of what a run did. Stdlib only — no web fram
 """
 from __future__ import annotations
 
+import errno
 import hmac
 import json
 import logging
+import math
 import os
 import re
 import sqlite3
+import ssl
 import threading
 import time
 import uuid
@@ -30,7 +33,7 @@ from datetime import datetime, timezone
 from http.cookies import CookieError, SimpleCookie
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from typing import Any, Callable, Optional
+from typing import Any, Callable, Iterable, Optional
 from urllib.parse import parse_qs, unquote, urlparse
 
 from . import campaign_gen, connections, rbac
@@ -56,7 +59,8 @@ from .core.logsetup import configure_logging, get_logger
 from .core.store import (CONTROL_FLAG_SCOPES, DEFAULT_PLATFORM,
                     EXECUTION_BACKENDS, EXECUTION_DISTRIBUTED, EXECUTION_IN_PROCESS,
                     FORCED_REASON_STATUS,
-                    MAX_NOTE_LENGTH, MAX_SYNC_LEADS, VALID_CAMPAIGN_STATUS, VALID_STATUS,
+                    MAX_NOTE_LENGTH, MAX_SYNC_LEADS, MAX_SYNC_SPEND_ROWS,
+                    VALID_CAMPAIGN_STATUS, VALID_STATUS,
                     WORKER_HEARTBEAT_INTERVAL_SEC, WORKER_TOKEN_TTL_SEC,
                     default_lease_ttl_sec, Store)
 from .core.schedule import SCHEDULE_KINDS, next_fire
@@ -170,6 +174,30 @@ MIN_AGENT_VERSION_ENV = "AIZU_MIN_AGENT_VERSION"
 _WORKER_MAX_STR = 200
 _WORKER_MAX_SESSIONS_CEIL = 50
 _WORKER_MAX_CAPABILITIES = 100
+# v23 worker launch preflight (ledger F9/F10/F12): the compact self-check summary a box
+# carries on register/heartbeat. Mirrors worker/preflight.py's own MAX_UPSTREAM_* caps —
+# the worker already trims to these before sending, so a body over budget here is a box
+# we do not recognise, not a box we should reject.
+_WORKER_MAX_PREFLIGHT_FAILED = 16
+_WORKER_MAX_PREFLIGHT_DETAIL = 200
+_WORKER_MAX_PREFLIGHT_BYTES = 8192
+_WORKER_PREFLIGHT_SEVERITIES = frozenset({"fatal", "warn"})
+# Only non-passing rows ride the wire, so `pass`/`skip` never legitimately appear here —
+# but accept them rather than drop the row, since a dropped row loses a diagnostic and
+# gains nothing. An unrecognised/absent status reads as "fail" (see the docstring).
+_WORKER_PREFLIGHT_STATUSES = frozenset({"fail", "unknown", "pass", "skip"})
+# The closed set of non-login check ids. Kept as literals rather than imported from
+# worker/preflight.py so the BRIDGE never takes a static dependency on the sidecar
+# package it validates input from — but drift is caught mechanically by
+# tests/worker/test_worker_server.py::test_preflight_check_id_whitelist_covers_the_preflight_module,
+# which asserts every CHECK_* constant in that module appears here. Per-platform login
+# rows (`login.<platform>`) are matched separately against CDP_PLATFORMS below.
+_WORKER_PREFLIGHT_CHECK_IDS = frozenset({
+    "state_dir_writable", "token_persistence", "dispatch_credential", "capabilities",
+    "llm_backend", "playwright", "cdp_reachable", "cdp_port_drift", "cdp_attachable",
+    "chrome_profile", "preflight_error",
+})
+_WORKER_PREFLIGHT_LOGIN_PREFIX = "login."
 # AI campaign generation can carry a base64 product screenshot, far over the
 # default body cap — so /api/campaign/generate gets its own larger ceiling.
 GENERATE_MAX_BODY_BYTES = 8 * 1024 * 1024
@@ -185,13 +213,72 @@ _GEN_MAX_QA_LEN = 4000                  # max chars per question or answer
 _GEN_MAX_PLATFORMS = 6
 _GEN_MAX_PLATFORM_LEN = 40
 GENERATE_SPEND_CAP_USD = 2.0            # bound the cost of one generate call
+# The ceiling a worker box falls back to when it has no AIZU_SPEND_CAP of its own —
+# kept in lockstep with worker.config.WorkerConfig.spend_cap's default. Deliberately NOT
+# used as a cloud-side fallback: see _fleet_spend_cap_usd for why guessing the fleet's
+# cap from the bridge's env would permanently 409 a hosted deployment.
+DEFAULT_FLEET_SPEND_CAP_USD = 20.0
 _DATA_URL_PREFIX = re.compile(r"^data:image/[A-Za-z0-9.+-]+;base64,", re.IGNORECASE)
 # Max chars of a request/response body to echo in the DEBUG firehose (secrets are
 # scrubbed by the logging RedactingFilter before any line is emitted).
 _BODY_LOG_MAX = 4000
+# Max chars of the request PATH to echo in any log line. The path is 100%
+# attacker-controlled and can be ~64 KB (http.server's request-line ceiling);
+# rendering that through the console handler is per-character work done while
+# holding the GIL, so an anonymous client could stall every thread in the process
+# just by asking for a very long URL. The tail of such a path has no diagnostic
+# value — log a bounded prefix plus the true length. (core.logsetup's
+# LineCapFormatter is the second, sink-side belt on the same braces.)
+_LOG_PATH_MAX = 300
 MAX_RUN_DURATION_MINUTES = 720  # 12h ceiling on a timed run (the panel offers up to 4h)
 MAX_RUN_LEAD_TARGET = 1000  # ceiling on a lead-target run (the panel offers up to 100)
 INVITE_TTL_SECONDS = 14 * 24 * 3600     # an invite link is valid for 14 days
+
+
+def _log_path(path: Any) -> str:
+    """A request path trimmed to `_LOG_PATH_MAX` for safe logging.
+
+    Used EVERYWHERE `self.path` reaches a log line: the access log, the API-error
+    line, and the DEBUG request/response firehose."""
+    text = path if isinstance(path, str) else str(path)
+    if len(text) <= _LOG_PATH_MAX:
+        return text
+    return f"{text[:_LOG_PATH_MAX]}…(truncated, {len(text)} chars total)"
+
+
+def _json_sanitize(value: Any) -> Any:
+    """Deep-copy `value` with every non-finite float replaced by None."""
+    if isinstance(value, float):
+        return value if math.isfinite(value) else None
+    if isinstance(value, dict):
+        return {k: _json_sanitize(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_json_sanitize(v) for v in value]
+    return value
+
+
+def _json_bytes(payload: Any) -> bytes:
+    """Serialize a response body, guaranteeing the result is *valid* JSON.
+
+    `allow_nan=False` makes the encoder REFUSE a non-finite float rather than emit
+    a bare `NaN`/`Infinity` token, which is invalid JSON per RFC 8259 and which
+    every strict parser — the panel's included — rejects outright. One such value
+    in one row used to brick an entire org's panel (GET /api/state answering 200
+    with an unparseable body) with no in-app way to fix it.
+
+    The numeric boundaries (`_finite_number`) are the real gate; this is the
+    backstop that keeps the guarantee true for values arriving from any other
+    door (an older row already in the DB, a worker report, a computed ratio). On
+    that path we scrub and re-encode instead of failing the response: a null is a
+    value the panel can render, an unparseable body is not."""
+    try:
+        return json.dumps(payload, ensure_ascii=False, allow_nan=False).encode("utf-8")
+    except ValueError:
+        log.error("response body carried a non-finite number — scrubbed to null "
+                  "(invalid JSON would have broken the panel's parser)")
+        return json.dumps(_json_sanitize(payload), ensure_ascii=False,
+                          allow_nan=False).encode("utf-8")
+
 
 # Invite-creation rate limit (mirrors LoginThrottle, keyed by actor user id):
 # at most MAX_INVITE_CREATES creates per actor inside a rolling INVITE_RATE_WINDOW.
@@ -346,6 +433,24 @@ def _fleet_run_finished(fleet_job: dict, sessions: list, session_finished: bool)
     return False  # queued
 
 
+def _fleet_job_reason(result: Any) -> Optional[str]:
+    """The operator-facing failure code carried by a fleet job's `result` blob, or None.
+
+    Two shapes land in that column: `nack_job` writes ``{"reason", "poison", …}`` on a
+    requeue/dead-letter, and `ack_job` overwrites it with the engine run summary (whose
+    equivalent key is `halt_reason`) on success — so read both, reason first. The value
+    is worker-authored (a fixed code by design: sidecar never sends a raw exception
+    string), but re-cap it before echoing it to a browser. Callers must key the
+    failed/succeeded wording off the job's STATUS, never off the presence of a reason:
+    a `done` job can legitimately carry one (e.g. a daytime halt that still acked)."""
+    if not isinstance(result, dict):
+        return None
+    value = result.get("reason") or result.get("halt_reason")
+    if not isinstance(value, str) or not value.strip():
+        return None
+    return value.strip()[:_WORKER_MAX_STR]
+
+
 class InviteThrottle:
     """Thread-safe, in-memory invite-creation limiter, keyed by actor user id.
 
@@ -422,15 +527,52 @@ def _opt_note(value: Any) -> tuple[Optional[str], Optional[str]]:
     return (note or None), None
 
 
-def _opt_number(value: Any, name: str) -> tuple[Optional[float], Optional[str]]:
-    """Validate an optional non-negative number; (None,None) when absent."""
-    if value is None:
-        return None, None
+# Every number arriving over the wire must be REPRESENTABLE, not merely well-typed.
+# Two holes this closes, both of which used to be reachable from a plain POST:
+#
+#   * `json.loads` accepts JSON's non-standard `NaN` / `Infinity` / `-Infinity`
+#     literals (and `1e400` overflows to `inf`) by default. A non-finite float
+#     sails through an `x < 0` range check — every comparison against NaN is
+#     False — is stored, and is then re-emitted by `json.dumps` as a BARE
+#     `Infinity`/`NaN` token. That is invalid JSON per RFC 8259, so /api/state and
+#     /api/campaigns come back 200 with a body the panel's parser rejects: the
+#     whole org's panel is dead with no in-app way to undo it.
+#   * A 400-digit integer literal blows up `float()` with OverflowError, and a
+#     merely huge one blows up SQLite's INTEGER binding — exceptions that used to
+#     escape the handler entirely (see `_dispatch_guarded`).
+#
+# _MAX_WIRE_NUMBER is comfortably above any legitimate budget/goal/epoch a panel
+# field carries, and below both SQLite's signed-64-bit INTEGER ceiling (2**63-1)
+# and float's exact-integer limit, so a value that passes here can always be
+# stored and re-serialized.
+_MAX_WIRE_NUMBER = 1e15
+
+
+def _finite_number(value: Any, name: str) -> tuple[Optional[float], Optional[str]]:
+    """Coerce a wire number to a finite, storable float; (None, error) otherwise."""
     if isinstance(value, bool) or not isinstance(value, (int, float)):
         return None, f"{name} must be a number"
-    if value < 0:
+    try:
+        number = float(value)
+    except (OverflowError, ValueError):     # e.g. a 400-digit integer literal
+        return None, f"{name} is out of range"
+    if not math.isfinite(number):
+        return None, f"{name} must be a finite number"
+    if abs(number) > _MAX_WIRE_NUMBER:
+        return None, f"{name} is out of range"
+    return number, None
+
+
+def _opt_number(value: Any, name: str) -> tuple[Optional[float], Optional[str]]:
+    """Validate an optional finite, non-negative number; (None,None) when absent."""
+    if value is None:
+        return None, None
+    number, err = _finite_number(value, name)
+    if err is not None:
+        return None, err
+    if number < 0:
         return None, f"{name} must be >= 0"
-    return float(value), None
+    return number, None
 
 
 def _validate_bulk_status(payload: Any) -> tuple[Optional[dict], Optional[str]]:
@@ -496,12 +638,78 @@ def _validate_lead_note(payload: Any) -> tuple[Optional[dict], Optional[str]]:
     return {"op": op, "noteId": note_id}, None
 
 
+class PortInUseError(RuntimeError):
+    """`serve()` could not bind its listen port. Carries an operator-facing message
+    (no errno, no traceback) so the CLI can print it in the same `error: …` style it
+    already uses for a missing panel build."""
+
+
+def _is_soft_landing_path(path: str) -> bool:
+    """Whether an unknown, non-API, non-/app path should soft-land on the marketing
+    page instead of 404ing. True only for a single bare segment with no file
+    extension ("/pricing"), where the landing's RELATIVE asset URLs still resolve
+    against "/". Nested ("/pricing/enterprise") or extensioned ("/robots.txt") paths
+    are real 404s — see the call site."""
+    segments = [s for s in path.split("/") if s]
+    return len(segments) == 1 and "." not in segments[0]
+
+
+# POST /api/campaign is one endpoint for two operations. `op` names which.
+CAMPAIGN_OPS = frozenset({"create", "edit"})
+CAMPAIGN_EXISTS_MESSAGE = ("a campaign with this id already exists — rename it or "
+                           "edit the existing campaign")
+# Separator for an org-scoped campaign key. '.' is deliberate: the panel slugifies a
+# campaign name down to [a-z0-9-] (useCampaignForm.slugify), so a scoped key can
+# never be mistaken for — or collide with — a client-chosen slug.
+_ORG_SCOPE_SEP = "."
+# The reserved shape `_org_scoped_campaign_id` mints. A client may only ever name an
+# id in this namespace when it already OWNS that row (its own campaign, sent back on
+# an edit); a write that would REGISTER a fresh one is refused. Without that guard the
+# namespace is squattable: since the key still lives in one global campaign_meta PK,
+# a tenant could pre-register `o<victimOrg>.<slug>` and lock the victim out of that
+# name for good (they would 409 on create and 404 on edit, with no remedy).
+_ORG_SCOPE_RE = re.compile(r"^o\d+\.")
+
+
+def _is_org_scoped_campaign_id(campaign_id: str) -> bool:
+    """Whether `campaign_id` sits in the reserved per-org key namespace."""
+    return bool(_ORG_SCOPE_RE.match(campaign_id))
+
+
+def _org_scoped_campaign_id(org_id: Optional[int], requested: str) -> str:
+    """The storage key for a campaign CREATED by `org_id`.
+
+    campaign_meta.campaign_id is a single global primary key, so ids were a shared
+    namespace across tenants: org B creating an ordinarily-named 'Q4 Outbound' that
+    org A already had was answered `404 unknown campaign` — nonsensical on a create,
+    with no remedy — and the same guard doubled as a cross-tenant existence oracle
+    (probe an id, learn whether somebody else owns it).
+
+    Namespacing the key by org makes identity per-org: two tenants can both have
+    'Q4 Outbound', and — crucially for the oracle — the allocated key depends ONLY on
+    the caller's own org, never on whether another tenant holds the bare id, so the
+    outcome carries no information about anyone else's data. Legacy bare ids (rows
+    created before this, file-backed campaigns, the CLI) keep resolving unchanged;
+    only a create allocates a scoped key.
+    """
+    return f"o{org_id}{_ORG_SCOPE_SEP}{requested}"
+
+
 def _validate_campaign(payload: Any) -> tuple[Optional[dict], Optional[str]]:
     if not isinstance(payload, dict):
         return None, "body must be a JSON object"
     cid = payload.get("campaignId")
     if not isinstance(cid, str) or not cid.strip():
         return None, "missing or empty field: campaignId"
+    # CREATE and EDIT used to be the SAME request: same path, same payload, no
+    # discriminator — so a second campaign whose name slugs onto an existing id
+    # silently overwrote that campaign's brief, and (because `matches` is keyed on
+    # campaign_id) re-pointed its whole lead history at what the operator believed
+    # was a new campaign. `op` makes the intent explicit; absent, the legacy
+    # infer-from-existence behaviour is kept so older clients keep working.
+    op = payload.get("op")
+    if op is not None and op not in CAMPAIGN_OPS:
+        return None, f"invalid op (expected one of {sorted(CAMPAIGN_OPS)})"
     status = payload.get("status")
     if status is not None and status not in VALID_CAMPAIGN_STATUS:
         return None, f"invalid status (expected one of {sorted(VALID_CAMPAIGN_STATUS)})"
@@ -517,7 +725,27 @@ def _validate_campaign(payload: Any) -> tuple[Optional[dict], Optional[str]]:
     brief = payload.get("brief")
     if brief is not None and not isinstance(brief, dict):
         return None, "brief must be an object"
-    return {"campaignId": cid.strip(), "status": status, "budgetCap": budget,
+    if isinstance(brief, dict):
+        # The one numeric field the brief form carries. `_brief_to_snake` drops an
+        # unusable threshold silently (a blank means "keep the stored one"), but a
+        # NUMERIC one that is non-finite deserves a loud 400: it is exactly the
+        # value that would otherwise be persisted and then re-emitted as a bare
+        # NaN/Infinity token. A numeric *string* keeps its historic tolerance.
+        threshold = brief.get("threshold")
+        if isinstance(threshold, (int, float)) and not isinstance(threshold, bool):
+            value, err = _finite_number(threshold, "brief.threshold")
+            if err:
+                return None, err
+            # RANGE, not just finiteness (Campaign Lab, Remedy Sheet #3 / Remedy E).
+            # The gate is `score >= campaign.threshold`, so 0 accepts every comment
+            # ever scored and 1 accepts none — both are silent, both look like a
+            # working campaign, and neither raises anything anywhere. Only the
+            # explicit numeric form is checked; a numeric *string* keeps its
+            # historic tolerance, and a blank still means "keep the stored one".
+            if value is not None and not (0.0 < float(value) < 1.0):
+                return None, ("brief.threshold must be between 0 and 1 "
+                              "(exclusive) — 0 matches every comment, 1 matches none")
+    return {"campaignId": cid.strip(), "op": op, "status": status, "budgetCap": budget,
             "goalTarget": int(goal) if goal is not None else None,
             "displayName": name.strip() if isinstance(name, str) else None,
             "brief": _brief_to_snake(brief) if isinstance(brief, dict) else None}, None
@@ -693,9 +921,15 @@ def _brief_to_snake(brief: dict) -> dict[str, Any]:
             out[snake] = _to_bool(value)
         elif snake == "threshold":
             try:
-                out[snake] = float(value)
-            except (TypeError, ValueError):
+                number = float(value)
+            except (TypeError, ValueError, OverflowError):
                 continue
+            # Defence in depth behind _validate_campaign's 400: a NaN/Infinity
+            # persisted here re-serializes as a bare NaN/Infinity token, which is
+            # invalid JSON and kills the panel's parser for the whole org.
+            if not math.isfinite(number):
+                continue
+            out[snake] = number
         else:
             sval = str(value)
             if snake in _BRIEF_BLANK_DROP_KEYS and not sval.strip():
@@ -934,9 +1168,16 @@ def _validate_settings(payload: Any) -> tuple[Optional[dict], Optional[str]]:
             return None, f"unknown setting: {key}"
         if key in _SETTINGS_STR and not isinstance(value, str):
             return None, f"{key} must be a string"
-        if key in _SETTINGS_NUM and (isinstance(value, bool)
-                                     or not isinstance(value, (int, float))):
-            return None, f"{key} must be a number"
+        if key in _SETTINGS_NUM:
+            # _finite_number, not a bare isinstance: Python's json parser accepts the
+            # non-standard NaN/Infinity literals, and a type-only check let one through
+            # to `json.dumps` (allow_nan defaults True), which wrote the bare token into
+            # settings.value — invalid JSON for every other reader of that column, and
+            # a setting the operator then sees blank forever (the response scrubber
+            # rewrites it to null on every single read).
+            _, err = _finite_number(value, key)
+            if err:
+                return None, err
         if key == "pacing" and not isinstance(value, dict):
             return None, "pacing must be an object"
     return {"settings": settings}, None
@@ -1002,6 +1243,73 @@ def _opt_str_field(payload: dict, key: str) -> tuple[Optional[str], Optional[str
     return (v or None), None
 
 
+def _validate_preflight_summary(value: Any) -> Optional[dict]:
+    """Coerce the v23 worker launch-preflight summary (spec §5.3) — TOLERANT, TOTAL, and
+    NEVER an error return.
+
+    Anything unrecognised is DROPPED, never a 400. This is the B9 rule applied to a
+    diagnostic: a self-check hint must never become the reason a workable box cannot
+    register or heartbeat. Nothing on the auth or lease path may branch on this field —
+    it exists so an admin can read the real cause in the fleet console instead of
+    visiting a PC nobody can SSH into (F12).
+
+    Kept keys: ok/blocking/enforced (coerced bool), ranAt (finite float, else dropped),
+    and failed[] rows of {id, severity, status, detail}. `title`/`remedy` deliberately do
+    NOT ride the wire — they are UI copy the console resolves client-side from the id, so
+    operator-facing text stays under our control rather than a worker's. `status` DOES,
+    because failed[] mixes "we checked and it is broken" with "we could not check at all"
+    and those need different operator copy; a row from an older sidecar that omits it
+    degrades to "fail", the reading that never under-reports a problem."""
+    if not isinstance(value, dict):
+        return None
+    out: dict[str, Any] = {
+        "ok": bool(value.get("ok")),
+        "blocking": bool(value.get("blocking")),
+        # A body that omits `enforced` is an older/hand-rolled sidecar; assume the
+        # safe reading (enforcement ON) rather than silently showing a fleet as
+        # unenforced.
+        "enforced": bool(value.get("enforced", True)),
+    }
+    ran_at = value.get("ranAt")
+    if isinstance(ran_at, (int, float)) and not isinstance(ran_at, bool):
+        ran_at = float(ran_at)
+        if math.isfinite(ran_at):
+            out["ranAt"] = ran_at
+    rows: list[dict] = []
+    raw_failed = value.get("failed")
+    if isinstance(raw_failed, list):
+        for entry in raw_failed[:_WORKER_MAX_PREFLIGHT_FAILED]:
+            if not isinstance(entry, dict):
+                continue
+            check_id = entry.get("id")
+            if not isinstance(check_id, str):
+                continue
+            check_id = check_id.strip()
+            if check_id not in _WORKER_PREFLIGHT_CHECK_IDS:
+                # The only open-ended shape: one row per advertised CDP platform.
+                platform = check_id[len(_WORKER_PREFLIGHT_LOGIN_PREFIX):] \
+                    if check_id.startswith(_WORKER_PREFLIGHT_LOGIN_PREFIX) else ""
+                if platform not in CDP_PLATFORMS:
+                    continue
+            severity = entry.get("severity")
+            if severity not in _WORKER_PREFLIGHT_SEVERITIES:
+                continue
+            status = entry.get("status")
+            if status not in _WORKER_PREFLIGHT_STATUSES:
+                status = "fail"
+            detail = entry.get("detail")
+            detail = (detail.strip()[:_WORKER_MAX_PREFLIGHT_DETAIL] or None
+                      if isinstance(detail, str) else None)
+            rows.append({"id": check_id, "severity": severity, "status": status,
+                         "detail": detail})
+    out["failed"] = rows
+    try:
+        size = len(json.dumps(out, ensure_ascii=False).encode("utf-8"))
+    except (TypeError, ValueError):  # pragma: no cover — every field is a primitive
+        return None
+    return out if size <= _WORKER_MAX_PREFLIGHT_BYTES else None
+
+
 def _validate_worker_register(payload: Any) -> tuple[Optional[dict], Optional[str]]:
     """Validate a worker register body. machineId is required only on a first
     register (the handler enforces that against the bearer mode); here it is an
@@ -1057,6 +1365,11 @@ def _validate_worker_register(payload: Any) -> tuple[Optional[dict], Optional[st
             return None, "capability accountHandle must be a non-empty string or null"
         clean_caps.append([cap_org, cap_platform, clean_handle])
     out["capabilities"] = clean_caps
+    # v23: optional launch-preflight summary. Coerced, never rejected — see
+    # _validate_preflight_summary. Always present in `out` so the handler can pass it
+    # through unconditionally (None = "this box reported none", which
+    # store.register_worker writes as NULL).
+    out["preflight"] = _validate_preflight_summary(payload.get("preflight"))
     return out, None
 
 
@@ -1064,9 +1377,13 @@ def _validate_worker_heartbeat(payload: Any) -> tuple[Optional[dict], Optional[s
     """Validate a worker presence heartbeat body. currentSessions/load is an optional
     non-negative int (the worker's live load); omitted leaves the stored value
     unchanged. The body's workerId/timestamp/chromeHealth are accepted and ignored
-    (the bearer token is the authoritative identity)."""
+    (the bearer token is the authoritative identity). preflight (v23) is optional and
+    omitted-means-unchanged, exactly like currentSessions — the sidecar only re-sends it
+    when the summary CHANGED or every 10th beat, so a heartbeat without it must leave the
+    stored one alone (store.record_worker_heartbeat COALESCEs)."""
     if payload is None:
-        return {"currentSessions": None}, None
+        # Bodyless beat: BOTH keys must exist or the handler KeyErrors below.
+        return {"currentSessions": None, "preflight": None}, None
     if not isinstance(payload, dict):
         return None, "body must be a JSON object"
     current = payload.get("currentSessions")
@@ -1078,7 +1395,8 @@ def _validate_worker_heartbeat(payload: Any) -> tuple[Optional[dict], Optional[s
         if current < 0:
             return None, "currentSessions must be non-negative"
         current = min(current, _WORKER_MAX_SESSIONS_CEIL)
-    return {"currentSessions": current}, None
+    return {"currentSessions": current,
+            "preflight": _validate_preflight_summary(payload.get("preflight"))}, None
 
 
 def _parse_agent_version(v: Any) -> tuple:
@@ -1247,15 +1565,51 @@ def _validate_worker_lease(payload: Any) -> tuple[Optional[dict], Optional[str]]
         return None, "body must be a JSON object"
     poll = payload.get("leasePollTimeoutSec")
     if poll is None:
-        poll = 0
-    elif not isinstance(poll, (int, float)) or isinstance(poll, bool) or poll < 0:
-        return None, "leasePollTimeoutSec must be a non-negative number"
-    return {"leasePollTimeoutSec": min(float(poll), WORKER_LEASE_POLL_MAX_SEC)}, None
+        poll = 0.0
+    else:
+        # NaN would survive a bare `poll < 0` (every NaN comparison is False) and
+        # then poison the long-poll deadline arithmetic; a 400-digit int would
+        # OverflowError out of float(). _finite_number rejects both.
+        poll, err = _finite_number(poll, "leasePollTimeoutSec")
+        if err is not None:
+            return None, err
+        if poll < 0:
+            return None, "leasePollTimeoutSec must be a non-negative number"
+    return {"leasePollTimeoutSec": min(poll, WORKER_LEASE_POLL_MAX_SEC)}, None
+
+
+def _validate_worker_spend(payload: dict) -> tuple[Optional[list], Optional[str]]:
+    """Shared ack/nack validation of the B9 spend rollup: `spend` is an optional array
+    of ``{stage, model, usd, at}`` rows. Tolerant like `leads` — non-object rows are
+    dropped and the batch is capped here (bounded memory before the store) — so one
+    ragged row never fails the whole report. Per-field coercion and the BOLA campaign
+    forcing happen in `store._sync_acked_spend`."""
+    spend = payload.get("spend")
+    if spend is None:
+        return [], None
+    if not isinstance(spend, list):
+        return None, "spend must be an array"
+    return [row for row in spend if isinstance(row, dict)][:MAX_SYNC_SPEND_ROWS], None
+
+
+def _validate_worker_db_id(payload: dict) -> tuple[Optional[str], Optional[str]]:
+    """Shared ack/nack validation of `dbId` — the reporting box's database identity
+    (store.database_id). Purely a same-database sentinel: when it equals the cloud
+    Store's own id the spend rollup is skipped, because the worker's db_path IS this
+    database and the rows are already here (see store._sync_acked_spend)."""
+    db_id = payload.get("dbId")
+    if db_id is None:
+        return None, None
+    if not isinstance(db_id, str):
+        return None, "dbId must be a string or null"
+    return db_id.strip()[:_WORKER_MAX_STR] or None, None
 
 
 def _validate_worker_nack(payload: Any) -> tuple[Optional[dict], Optional[str]]:
     """Validate a nack body: reason (required, capped string), poison (optional bool),
-    retryAfterAt (optional epoch number — e.g. the engine's daytime 'try again at')."""
+    retryAfterAt (optional epoch number — e.g. the engine's daytime 'try again at'),
+    plus the optional B9 `spend` rollup and `dbId` sentinel (a crashed attempt spent
+    real money before it died — see store.nack_job)."""
     if not isinstance(payload, dict):
         return None, "body must be a JSON object"
     reason = payload.get("reason")
@@ -1265,21 +1619,32 @@ def _validate_worker_nack(payload: Any) -> tuple[Optional[dict], Optional[str]]:
     if not isinstance(poison, bool):
         return None, "poison must be a boolean"
     retry_after = payload.get("retryAfterAt")
-    if retry_after is not None and (not isinstance(retry_after, (int, float))
-                                    or isinstance(retry_after, bool)):
-        return None, "retryAfterAt must be a number or null"
+    if retry_after is not None:
+        # An epoch, so finiteness matters twice over: a stored Infinity would come
+        # straight back out of the fleet-jobs JSON as an unparseable bare token.
+        retry_after, err = _finite_number(retry_after, "retryAfterAt")
+        if err is not None:
+            return None, err
+    spend, err = _validate_worker_spend(payload)
+    if err is not None:
+        return None, err
+    db_id, err = _validate_worker_db_id(payload)
+    if err is not None:
+        return None, err
     return {"reason": reason.strip()[:_WORKER_MAX_STR], "poison": poison,
-            "retryAfterAt": float(retry_after) if retry_after is not None else None}, None
+            "retryAfterAt": float(retry_after) if retry_after is not None else None,
+            "spend": spend, "dbId": db_id}, None
 
 
 def _validate_worker_ack(payload: Any) -> tuple[Optional[dict], Optional[str]]:
     """Validate an ack body: `summary` is an optional object (the engine run summary);
-    `leads` is an optional array of captured-lead objects (Phase 3 sync-back). Tolerant
-    on `leads` — non-object rows are dropped and the batch is capped here (bounded
+    `leads` is an optional array of captured-lead objects (Phase 3 sync-back); `spend`
+    is the optional B9 spend rollup and `dbId` its same-database sentinel. Tolerant on
+    `leads`/`spend` — non-object rows are dropped and the batch is capped here (bounded
     memory before the store) — so one ragged row never fails the whole ack. Per-field
     coercion + the BOLA campaign forcing happen in `store.ack_job`."""
     if payload is None:
-        return {"summary": {}, "leads": []}, None
+        return {"summary": {}, "leads": [], "spend": [], "dbId": None}, None
     if not isinstance(payload, dict):
         return None, "body must be a JSON object"
     summary = payload.get("summary", {})
@@ -1293,7 +1658,13 @@ def _validate_worker_ack(payload: Any) -> tuple[Optional[dict], Optional[str]]:
     if not isinstance(leads, list):
         return None, "leads must be an array"
     leads = [row for row in leads if isinstance(row, dict)][:MAX_SYNC_LEADS]
-    return {"summary": summary, "leads": leads}, None
+    spend, err = _validate_worker_spend(payload)
+    if err is not None:
+        return None, err
+    db_id, err = _validate_worker_db_id(payload)
+    if err is not None:
+        return None, err
+    return {"summary": summary, "leads": leads, "spend": spend, "dbId": db_id}, None
 
 
 def _validate_enqueue(payload: Any) -> tuple[Optional[dict], Optional[str]]:
@@ -1364,6 +1735,50 @@ def _validate_telegram_verify(payload: Any) -> tuple[Optional[dict], Optional[st
     return {"token": token.strip(), "code": code.strip(),
             "password": password.strip() if isinstance(password, str) and password.strip()
             else None}, None
+
+
+def _fleet_spend_cap_usd() -> Optional[float]:
+    """The per-campaign $ ceiling this bridge KNOWS the fleet enforces, or None when it
+    knows of none. Used ONLY as an early, informational dispatch skip for a campaign
+    that is already over budget — the box's own `AIZU_SPEND_CAP` is, and stays, the
+    authoritative ceiling (`job_runner._effective_spend_cap` re-bases it against the
+    cloud total that now rides the lease, and `run_one_job` refuses to spawn a run with
+    zero headroom left). `campaign_meta.budget_cap` stays display-only.
+
+    RETURNS None UNLESS `AIZU_SPEND_CAP` IS SET ON THIS PROCESS, and that asymmetry is
+    the whole point. `AIZU_SPEND_CAP` is a WORKER-plane variable (see CLAUDE.md): in the
+    hosted split topology — the only one the distributed backend exists for — it is set
+    on the boxes and NOT on the bridge. A hard-coded fallback here would therefore have
+    the cloud enforce a ceiling no worker actually uses: because `total_spend` is a
+    LIFETIME sum that never resets and B9 now finally feeds fleet dollars into it, any
+    long-lived campaign would eventually cross that guessed number and 409 FOREVER, with
+    no operator control able to lift it. So "the cloud does not know the fleet's cap" now
+    means "do not skip" rather than "skip at $20" — the box, which is the only process
+    that can read its own cap, remains the sole enforcer. When the var IS set here
+    (same-box dev/desktop, or a deployment that deliberately mirrors it) it is an
+    explicit operator statement of the fleet ceiling, so we honour it.
+
+    Why the skip exists at all (B9): before the cloud spend total rode the lease, a fresh
+    box always started at $0, so an over-budget campaign never tripped
+    `router._spend_guard` on call one. Now it can — and `_degrade` does NOT stop a run,
+    it returns an abstain-with-low-confidence stand-in. Skipping at dispatch just fails
+    faster and more legibly than the box-side refusal that backstops it."""
+    raw = os.environ.get("AIZU_SPEND_CAP", "").strip()
+    if not raw:
+        log.debug("no AIZU_SPEND_CAP on the bridge — leaving the spend ceiling to the "
+                  "worker boxes (no dispatch-time spend skip)")
+        return None
+    try:
+        cap = float(raw)
+    except ValueError:
+        log.warning("AIZU_SPEND_CAP=%r is not a number — skipping the dispatch-time "
+                    "spend check and leaving the ceiling to the worker boxes", raw)
+        return None
+    if cap <= 0:
+        log.warning("AIZU_SPEND_CAP=%r is not positive — skipping the dispatch-time "
+                    "spend check and leaving the ceiling to the worker boxes", raw)
+        return None
+    return cap
 
 
 def _split_lead_budget(total: int, n: int) -> list[int]:
@@ -1560,7 +1975,41 @@ def _billing_cap_message(sub: dict[str, Any]) -> str:
             f"Resets {_billing_reset_label(sub)}. Upgrade to keep running.")
 
 
+class _HeadBodySuppressor:
+    """A `wfile` shim that passes headers through and swallows the response BODY.
+
+    `do_HEAD` re-runs the ordinary GET router so a HEAD gets byte-identical status
+    and headers (RFC 9110: a HEAD response SHOULD carry the header fields the GET
+    would have). Only the body must not be written — and every body in this class
+    goes out through `self.wfile.write` AFTER `end_headers()`, so flipping one flag
+    there is the whole mechanism.
+    """
+
+    def __init__(self, real: Any):
+        self.real = real
+        self.suppress = False
+
+    def write(self, data):
+        if self.suppress:
+            return len(data)
+        return self.real.write(data)
+
+    def __getattr__(self, name):   # flush/close/fileno/… → the real socket writer
+        return getattr(self.real, name)
+
+
 class PanelHandler(SimpleHTTPRequestHandler):
+    # Response identity. The stdlib default advertises "SimpleHTTP/0.6
+    # Python/3.12.13" on EVERY response — a free version-fingerprint for anyone
+    # scanning, and a lie about what this service is. sys_version="" drops the
+    # Python half entirely (BaseHTTPRequestHandler joins the two with a space).
+    server_version = "aizu-bridge"
+    sys_version = ""
+
+    def version_string(self) -> str:
+        # The base joins server_version + ' ' + sys_version; with sys_version empty
+        # that leaves a trailing space. Emit the token on its own.
+        return self.server_version
     # set by the factory
     panel_dir: str = "."
     db_path: str = "aizu.db"
@@ -1592,6 +2041,8 @@ class PanelHandler(SimpleHTTPRequestHandler):
 
     def handle_one_request(self):  # stamp a start time for per-request latency
         self._t0 = time.time()
+        self._response_started = False   # per-request; read by _dispatch_guarded
+        self._nosniff_sent = False       # per-request; read by end_headers
         # A client that dies mid-request (common: dev_panel restarting the server
         # mid-long-poll) surfaces as BrokenPipe/ConnectionReset. Swallow ONLY those
         # so the default handle_error stops dumping a stack trace to stderr; every
@@ -1601,19 +2052,50 @@ class PanelHandler(SimpleHTTPRequestHandler):
         except (BrokenPipeError, ConnectionResetError):
             log.debug("client disconnected mid-request")
 
+    def end_headers(self):  # noqa: N802
+        # nosniff on EVERY response, including the static files SimpleHTTPRequest-
+        # Handler sends itself: without it a browser is free to sniff a 404/HTML
+        # body into whatever content type the URL's extension suggests and execute
+        # it. One override is the only place that covers every send path.
+        if not getattr(self, "_nosniff_sent", False):
+            self._nosniff_sent = True
+            self.send_header("X-Content-Type-Options", "nosniff")
+        super().end_headers()
+        # HEAD: headers are on the wire, so everything after this is body.
+        wfile = self.wfile
+        if isinstance(wfile, _HeadBodySuppressor):
+            wfile.suppress = True
+
+    def send_response_only(self, code, message=None):  # noqa: N802
+        # Every response path in this class and its bases funnels through here, so
+        # it is the one honest place to record "the client has been answered".
+        # `_dispatch_guarded` reads the flag: appending a second status line to an
+        # already-started response would corrupt the stream, so it stays silent.
+        self._response_started = True
+        super().send_response_only(code, message)
+
     def log_request(self, code="-", size="-"):  # noqa: N802
         """Structured access log: method, path, status, latency. Replaces the
         default stderr line; query strings are kept (no secrets ride in them —
-        tokens live in the cookie/body) and the redaction filter is the backstop."""
+        tokens live in the cookie/body) and the redaction filter is the backstop.
+
+        The path is TRUNCATED (`_log_path`): it is attacker-controlled and can be
+        ~64 KB, and the console sink renders per character while holding the GIL —
+        so logging it whole let any anonymous client stall the whole server just
+        by requesting a very long URL."""
         code_val = getattr(code, "value", code)
         dt_ms = (time.time() - getattr(self, "_t0", time.time())) * 1000
         method = getattr(self, "command", "?")
-        path = getattr(self, "path", "?")
+        path = _log_path(getattr(self, "path", "?"))
         emit = log.warning if isinstance(code_val, int) and code_val >= 400 else log.info
         emit("%s %s → %s · %.0fms", method, path, code_val, dt_ms)
 
     def log_message(self, *args):  # default warnings/errors → our logger
-        log.debug("http: " + (args[0] if args else ""), *args[1:])
+        # Same bound as log_request: http.server's own messages interpolate the
+        # raw request line / path, so cap each argument before it reaches a sink.
+        fmt = _log_path(args[0]) if args else ""
+        log.debug("http: " + fmt, *(_log_path(a) if isinstance(a, str) else a
+                                    for a in args[1:]))
 
     def _serve_html_file(self, relative_path: str) -> None:
         # Shared read/send for the two top-level HTML shells (landing + SPA). Both
@@ -1666,25 +2148,44 @@ class PanelHandler(SimpleHTTPRequestHandler):
             # never leak the secret (LOCKED #4: never log the plaintext token).
             if urlparse(getattr(self, "path", "")).path == WORKER_REGISTER_PATH:
                 log.debug("← resp %s %s · «register response body suppressed»",
-                          code, getattr(self, "path", "?"))
+                          code, _log_path(getattr(self, "path", "?")))
             else:
-                log.debug("← resp %s %s · %s", code, getattr(self, "path", "?"),
+                log.debug("← resp %s %s · %s", code, _log_path(getattr(self, "path", "?")),
                           body.decode("utf-8", "replace")[:_BODY_LOG_MAX])
 
     def _send_json(self, code: int, ok: bool, data: Any = None,
                    error: Optional[str] = None,
-                   extra_headers: Optional[list[tuple[str, str]]] = None) -> None:
+                   extra_headers: Optional[list[tuple[str, str]]] = None,
+                   error_code: Optional[str] = None) -> None:
         # Surface the *reason* for every failed response — the access log line
         # only carries method/path/status, so without this an error reads as a
         # bare "→ 400" with no explanation.
         if not ok and isinstance(code, int) and code >= 400:
             emit = log.error if code >= 500 else log.warning
             emit("API error · %s %s → %s · %s",
-                 getattr(self, "command", "?"), getattr(self, "path", "?"),
+                 getattr(self, "command", "?"), _log_path(getattr(self, "path", "?")),
                  code, error or "(no message)")
-        body = json.dumps({"ok": ok, "data": data, "error": error},
-                          ensure_ascii=False).encode("utf-8")
+        envelope: dict[str, Any] = {"ok": ok, "data": data, "error": error}
+        # A machine-readable discriminator for the few errors a client must branch
+        # on (currently only `campaign_exists`). Added ONLY when asked for, so every
+        # other response keeps its exact three-key shape.
+        if error_code is not None:
+            envelope["code"] = error_code
+        body = _json_bytes(envelope)
         self._send_json_body(code, body, extra_headers=extra_headers)
+
+    def _send_internal_error(self, what: str) -> None:
+        """Answer a generic 500 and put the real cause in the LOG, never the body.
+
+        An internal message in an API response — a SQLite driver string, an absolute
+        filesystem path — is useless to the panel (which renders it verbatim to an
+        operator) and an information leak to anyone else. The client gets one stable,
+        generic error; the operator keeps the full traceback. Typed, deliberate
+        errors (a 400 for a bad brief, a 503 for unconfigured billing) are unaffected
+        — this is only for the unexpected."""
+        log.error("%s failed · %s %s", what, getattr(self, "command", "?"),
+                  _log_path(getattr(self, "path", "?")), exc_info=True)
+        self._send_json(500, False, error="internal server error")
 
     def _read_raw_body(self, max_bytes: int = MAX_BODY_BYTES) -> Optional[bytes]:
         """Read the raw request body bytes (no JSON parse). Used by the billing
@@ -1709,14 +2210,46 @@ class PanelHandler(SimpleHTTPRequestHandler):
         raw = self.rfile.read(length)
         if log.isEnabledFor(logging.DEBUG):  # firehose: full incoming body
             log.debug("→ body %s %s · %s", getattr(self, "command", "?"),
-                      getattr(self, "path", "?"),
+                      _log_path(getattr(self, "path", "?")),
                       raw.decode("utf-8", "replace")[:_BODY_LOG_MAX])
         try:
             return json.loads(raw), None
         except (json.JSONDecodeError, UnicodeDecodeError):
             return None, "body is not valid JSON"
 
+    def _dispatch_guarded(self, route: Callable[[], None]) -> None:
+        """Last-resort guard around a request router.
+
+        An exception escaping do_GET/do_POST propagates out of
+        `BaseHTTPRequestHandler.handle_one_request`, which dumps a full traceback
+        (with absolute filesystem paths) to stderr and then drops the socket with
+        NO HTTP response at all — the client sees an empty reply, not an error.
+        That was reachable from a plain POST (a 400-digit number OverflowError-ing
+        inside a validator, which runs before the handler's own try-block).
+
+        Every EXPECTED failure is still answered by the typed errors inside the
+        routers; this only catches the unexpected one, answers a generic 500, and
+        keeps the detail in the log where it belongs — never in the response body.
+        """
+        try:
+            route()
+        except (BrokenPipeError, ConnectionResetError):
+            raise            # handle_one_request logs these as a clean client hangup
+        except Exception:    # noqa: BLE001 — the whole point is to catch everything
+            log.error("unhandled error serving %s %s",
+                      getattr(self, "command", "?"),
+                      _log_path(getattr(self, "path", "?")), exc_info=True)
+            if getattr(self, "_response_started", False):
+                return       # a status line is already on the wire; do not append
+            try:
+                self._send_json(500, False, error="internal server error")
+            except Exception:  # noqa: BLE001 — the socket itself is gone
+                pass
+
     def do_POST(self):  # noqa: N802
+        self._dispatch_guarded(self._route_post)
+
+    def _route_post(self) -> None:
         path = urlparse(self.path).path
         # Same-origin fetches from the panel send no Origin or a local one (or,
         # on a hosted deployment, one named in AIZU_ALLOWED_ORIGINS); any other
@@ -2011,21 +2544,49 @@ class PanelHandler(SimpleHTTPRequestHandler):
         The store hashes the token, matches worker_token_hash WHERE revoked_at IS
         NULL AND not expired. Fail closed (None). Memoized per request, SEPARATE
         from _current_user so a worker request never triggers a cookie/session DB
-        lookup (and vice versa)."""
+        lookup (and vice versa).
+
+        A store FAILURE is recorded separately from "no such row" (`_worker_auth_failed`):
+        both fail closed here, but they must not answer the same way on the wire — see
+        _reject_worker_auth (ledger B10)."""
         if getattr(self, "_worker_cached", False):
             return self._worker
         self._worker: Optional[dict[str, Any]] = None
+        self._worker_auth_failed = False
         token = self._request_bearer_token()
         if token:
-            store = Store(self.db_path)
+            try:
+                store = Store(self.db_path)
+            except Exception:  # noqa: BLE001 — DB missing/locked: a SERVER fault
+                log.error("worker auth could not open the store", exc_info=True)
+                self._worker_auth_failed = True
+                self._worker_cached = True
+                return None
             try:
                 self._worker = store.get_worker_by_token(token)
             except Exception:  # noqa: BLE001 — a DB hiccup reads as unauthenticated
+                log.error("worker auth lookup failed", exc_info=True)
                 self._worker = None
+                self._worker_auth_failed = True
             finally:
                 store.close()
         self._worker_cached = True
         return self._worker
+
+    def _reject_worker_auth(self) -> None:
+        """Answer a worker-plane call whose bearer did not resolve.
+
+        A store failure (DB locked, mid-restore, not yet mounted) is a SERVER fault, not a
+        revocation, so it answers 503 — the box then backs off like any other transient
+        error. Only a genuine no-such-row/revoked/expired lookup answers 401, which is the
+        one signal the sidecar may eventually read as "this box is revoked" and act on by
+        destroying its credential (ledger B10). Conflating the two let a blip on the
+        bridge disenrol a whole fleet."""
+        if getattr(self, "_worker_auth_failed", False):
+            self._send_json(503, False,
+                            error="worker authentication is temporarily unavailable")
+            return
+        self._send_json(401, False, error="invalid or revoked worker token")
 
     # ----- v15 superadmin plane: separate auth gate (MFA + IP-allowlist) -----
     def _client_ip(self) -> str:
@@ -2082,17 +2643,17 @@ class PanelHandler(SimpleHTTPRequestHandler):
         self._admin_cached = True
         return self._admin
 
-    @staticmethod
-    def _set_admin_cookie_header(token: str) -> tuple[str, str]:
+    def _set_admin_cookie_header(self, token: str) -> tuple[str, str]:
+        # Same Secure rule as the org session cookie (_cookie_flags) — this one gates
+        # the superadmin plane, so if anything it matters more.
         return ("Set-Cookie",
-                f"{admin_auth.ADMIN_SESSION_COOKIE}={token}; HttpOnly; SameSite=Lax; "
-                f"Path=/; Max-Age={admin_auth.ADMIN_SESSION_TTL_SECONDS}")
+                f"{admin_auth.ADMIN_SESSION_COOKIE}={token}; {self._cookie_flags()}; "
+                f"Max-Age={admin_auth.ADMIN_SESSION_TTL_SECONDS}")
 
-    @staticmethod
-    def _clear_admin_cookie_header() -> tuple[str, str]:
+    def _clear_admin_cookie_header(self) -> tuple[str, str]:
         return ("Set-Cookie",
-                f"{admin_auth.ADMIN_SESSION_COOKIE}=; HttpOnly; SameSite=Lax; "
-                f"Path=/; Max-Age=0")
+                f"{admin_auth.ADMIN_SESSION_COOKIE}=; {self._cookie_flags()}; "
+                f"Max-Age=0")
 
     @staticmethod
     def _shape_user(u: dict[str, Any]) -> dict[str, Any]:
@@ -2114,20 +2675,46 @@ class PanelHandler(SimpleHTTPRequestHandler):
         BOLA rule); `org_id` is the EFFECTIVE org (impersonation passes the foreign org)."""
         return store.campaign_in_org(campaign_id, org_id)
 
-    @staticmethod
-    def _set_cookie_header(token: str) -> tuple[str, str]:
+    def _request_is_https(self) -> bool:
+        """Whether THIS request genuinely arrived over TLS.
+
+        Two ways it can: the socket is itself wrapped in TLS, or a reverse proxy
+        terminated TLS and said so in X-Forwarded-Proto. That header is
+        client-spoofable, so — exactly like `_client_ip` does for the IP allowlist —
+        it is honoured only when the peer is a configured trusted proxy. Unset
+        AIZU_TRUSTED_PROXIES ⇒ the header is ignored outright.
+        """
+        if isinstance(getattr(self, "connection", None), ssl.SSLSocket):
+            return True
+        trusted = os.environ.get(admin_auth.ADMIN_TRUSTED_PROXIES_ENV, "")
+        if not trusted:
+            return False
+        addr = getattr(self, "client_address", None)
+        peer = addr[0] if addr else ""
+        if not admin_auth.ip_allowed(peer, trusted):   # peer is not a trusted proxy
+            return False
+        forwarded = (self.headers.get("X-Forwarded-Proto") or "").split(",")[0]
+        return forwarded.strip().lower() == "https"
+
+    def _cookie_flags(self) -> str:
         # HttpOnly: JS can't read it (XSS can't exfiltrate the session). SameSite=Lax:
-        # not sent on cross-site requests (CSRF defence). No Secure flag — the bridge
-        # is a loopback-only HTTP server and some browsers reject Secure over http
-        # even on localhost; the panel is never exposed off-device.
+        # not sent on cross-site requests (CSRF defence). Secure: added only when the
+        # request really came in over TLS. It cannot be unconditional — browsers drop
+        # a Secure cookie set over plain http, which would break the local-first
+        # loopback deployment entirely — and it cannot be omitted either, since the
+        # documented hosted deployment (AIZU_ALLOWED_ORIGINS=https://aizu.uz behind a
+        # reverse proxy) would otherwise ship a 30-day credential that any downgrade
+        # to http replays in cleartext.
+        return "HttpOnly; SameSite=Lax; Path=/" + ("; Secure" if self._request_is_https()
+                                                   else "")
+
+    def _set_cookie_header(self, token: str) -> tuple[str, str]:
         return ("Set-Cookie",
-                f"{SESSION_COOKIE}={token}; HttpOnly; SameSite=Lax; Path=/; "
+                f"{SESSION_COOKIE}={token}; {self._cookie_flags()}; "
                 f"Max-Age={SESSION_TTL_SECONDS}")
 
-    @staticmethod
-    def _clear_cookie_header() -> tuple[str, str]:
-        return ("Set-Cookie",
-                f"{SESSION_COOKIE}=; HttpOnly; SameSite=Lax; Path=/; Max-Age=0")
+    def _clear_cookie_header(self) -> tuple[str, str]:
+        return ("Set-Cookie", f"{SESSION_COOKIE}=; {self._cookie_flags()}; Max-Age=0")
 
     # ----- auth: handlers -----
     def _handle_signup(self, payload: Any) -> None:
@@ -2273,8 +2860,8 @@ class PanelHandler(SimpleHTTPRequestHandler):
         except ValueError as e:  # invalid status or missing forced reason → client error
             self._send_json(400, False, error=str(e))
             return
-        except Exception as e:  # noqa: BLE001 — surface DB errors as JSON, not a stack dump
-            self._send_json(500, False, error=str(e))
+        except Exception:  # noqa: BLE001 — generic 500; detail to the log only
+            self._send_internal_error("lead status write")
             return
         finally:
             store.close()
@@ -2308,8 +2895,8 @@ class PanelHandler(SimpleHTTPRequestHandler):
         except ValueError as e:  # forced-reason pre-validated; a bad status aborts the batch
             self._send_json(400, False, error=str(e))
             return
-        except Exception as e:  # noqa: BLE001
-            self._send_json(500, False, error=str(e))
+        except Exception:  # noqa: BLE001
+            self._send_internal_error("bulk lead status write")
             return
         finally:
             store.close()
@@ -2340,8 +2927,8 @@ class PanelHandler(SimpleHTTPRequestHandler):
         except ValueError as e:  # empty/oversized body → client error
             self._send_json(400, False, error=str(e))
             return
-        except Exception as e:  # noqa: BLE001
-            self._send_json(500, False, error=str(e))
+        except Exception:  # noqa: BLE001
+            self._send_internal_error("lead note")
             return
         finally:
             store.close()
@@ -2353,6 +2940,56 @@ class PanelHandler(SimpleHTTPRequestHandler):
             return
         self._send_json(200, True, data={"noteId": fields["noteId"], "op": "delete"})
 
+    def _resolve_campaign_target(
+            self, store: Store, org_id: Optional[int], requested: str,
+            op: Optional[str], *,
+            has_brief: bool) -> tuple[Optional[str], int, Optional[str]]:
+        """Which campaign row this write targets → (campaign_id, status, error).
+
+        Returns (None, status, message) when the request must be refused. The rule,
+        in order, and every clause of it is load-bearing:
+
+        * The caller's OWN row is edited in place — that is the edit path, whether or
+          not `op` says so. An explicit ``op="create"`` aimed at it is refused 409
+          instead of silently overwriting its brief (and, because `matches` is keyed
+          on campaign_id, re-pointing its whole lead history at what the operator
+          believes is a brand-new campaign).
+        * An EDIT of anything else — explicit ``op="edit"``, or a legacy payload with
+          no brief, which cannot stand a campaign up on its own — is a 404 when the
+          row belongs to another org (undisclosed) or names the reserved per-org
+          namespace. An UNREGISTERED id stays editable: the file-backed campaign from
+          `config/campaign.md` has no campaign_meta row until its first write, and the
+          legacy path has always let that through (the write stamps it to the caller's
+          org). Refusing it here would have made `op="edit"` reject the very campaign
+          the no-`op` request one line down accepts.
+        * A CREATE — explicit, or a legacy brief-carrying payload — ALWAYS allocates a
+          key in the caller's own namespace (`_org_scoped_campaign_id`), even when the
+          bare id is globally free. Never reusing the bare id is what removes the
+          cross-tenant existence oracle: the key handed back is a pure function of the
+          caller's own org and the requested slug, so it cannot tell the caller whether
+          somebody else already holds that name. It is also what makes two tenants able
+          to hold 'Q4 Outbound' at once, and what makes the 409 below reachable for the
+          legacy client (a second create of the same slug re-derives the same scoped
+          key and collides with the caller's own first campaign).
+        """
+        existing_org = store.org_for_campaign(requested)
+        mine = existing_org is not None and existing_org == org_id
+        if mine:
+            if op == "create":
+                return None, 409, CAMPAIGN_EXISTS_MESSAGE
+            return requested, 200, None
+        # Not the caller's row. Registered to someone else, or sitting in the reserved
+        # `o<org>.` namespace the caller does not own ⇒ never writable through here.
+        unwritable = existing_org is not None or _is_org_scoped_campaign_id(requested)
+        if op == "edit" or (op != "create" and not has_brief):
+            if unwritable:
+                return None, 404, "unknown campaign"
+            return requested, 200, None      # unregistered → stamped to the caller
+        scoped = _org_scoped_campaign_id(org_id, requested)
+        if store.org_for_campaign(scoped) is not None:
+            return None, 409, CAMPAIGN_EXISTS_MESSAGE
+        return scoped, 200, None
+
     def _handle_campaign(self, payload: Any) -> None:
         fields, err = _validate_campaign(payload)
         if err is not None:
@@ -2362,12 +2999,35 @@ class PanelHandler(SimpleHTTPRequestHandler):
         org_id = user["orgId"]
         store = Store(self.db_path)
         try:
-            # A new campaign is stamped to the caller's org; an existing one must
-            # already belong to it (you can't edit another company's campaign).
-            existing_org = store.org_for_campaign(fields["campaignId"])
-            if existing_org is not None and existing_org != org_id:
-                self._send_json(404, False, error="unknown campaign")
+            campaign_id, err_code, err_msg = self._resolve_campaign_target(
+                store, org_id, fields["campaignId"], fields["op"],
+                has_brief=bool(fields["brief"]))
+            if campaign_id is None:
+                self._send_json(err_code, False, error=err_msg,
+                                error_code="campaign_exists" if err_code == 409 else None)
                 return
+            fields = {**fields, "campaignId": campaign_id}
+            # VALIDATE EVERYTHING BEFORE THE FIRST WRITE. upsert_campaign_meta
+            # commits in its own transaction, so building the merged brief after it
+            # meant a brief that failed campaign_from_brief (e.g. an unsupported
+            # platform) still left a committed, brief-less campaign row behind — a
+            # full card in the panel that can never run ("no platforms") and that
+            # the very same request answered 400 for. The merge base is read-only,
+            # so hoisting the whole check above the writes costs nothing.
+            brief = fields["brief"]
+            merged: Optional[dict[str, Any]] = None
+            if brief:
+                # MERGE over the campaign's current brief, never replace: the panel
+                # form only carries the editable fields (defs/seeds/platform/threshold/
+                # prompts), not escalate_band / seed_direction / engagement knobs.
+                # The shallow `{**base, **brief}` is exactly the C3 `channels` merge
+                # sentinel: `channels` absent from `brief` (not emitted by
+                # _brief_to_snake) keeps the stored channels (no-change); `channels: []`
+                # overwrites to empty (clear to single-platform); a list replaces atomically.
+                merged = {**_campaign_merge_base(store, self.config_dir,
+                                                 fields["campaignId"]), **brief}
+                # Buildable? campaign_from_brief raises ValueError on a bad shape.
+                campaign_from_brief(fields["campaignId"], merged)
             # v12: a live<->paused change carries paused_reason semantics — route it
             # through set_campaign_paused so an operator 'user' resume cannot clear a
             # system 'auto' halt. Other status values (draft/ended) and field-only
@@ -2382,27 +3042,16 @@ class PanelHandler(SimpleHTTPRequestHandler):
                 meta = store.set_campaign_paused(
                     fields["campaignId"], paused=(incoming_status == "paused"),
                     reason="user") or meta
-            brief = fields["brief"]
-            if brief:
-                # MERGE over the campaign's current brief, never replace: the panel
-                # form only carries the editable fields (defs/seeds/platform/threshold/
-                # prompts), not escalate_band / seed_direction / engagement knobs.
-                # The shallow `{**base, **brief}` is exactly the C3 `channels` merge
-                # sentinel: `channels` absent from `brief` (not emitted by
-                # _brief_to_snake) keeps the stored channels (no-change); `channels: []`
-                # overwrites to empty (clear to single-platform); a list replaces atomically.
-                merged = {**_campaign_merge_base(store, self.config_dir,
-                                                 fields["campaignId"]), **brief}
-                # Validate the merged brief is buildable (platform/band) before
-                # storing — campaign_from_brief raises ValueError on a bad shape.
-                campaign_from_brief(fields["campaignId"], merged)
+            if merged is not None:
                 store.upsert_campaign_brief(fields["campaignId"], merged, org_id=org_id)
                 meta = {**meta, "hasBrief": True}
         except ValueError as e:  # bad brief shape → client error, not 500
             self._send_json(400, False, error=str(e))
             return
-        except Exception as e:  # noqa: BLE001
-            self._send_json(500, False, error=str(e))
+        except Exception:  # noqa: BLE001 — never echo an internal/driver message
+            log.error("campaign upsert failed · campaign=%s org=%s",
+                      fields["campaignId"], org_id, exc_info=True)
+            self._send_json(500, False, error="internal server error")
             return
         finally:
             store.close()
@@ -2442,8 +3091,8 @@ class PanelHandler(SimpleHTTPRequestHandler):
                 org_id, user["id"],
                 "campaign_archived" if fields["archived"] else "campaign_unarchived",
                 detail=json.dumps({"campaignId": fields["campaignId"]}))
-        except Exception as e:  # noqa: BLE001
-            self._send_json(500, False, error=str(e))
+        except Exception:  # noqa: BLE001
+            self._send_internal_error("campaign archive")
             return
         finally:
             store.close()
@@ -2485,8 +3134,8 @@ class PanelHandler(SimpleHTTPRequestHandler):
         except ValueError as e:  # bad cadence → client error
             self._send_json(400, False, error=str(e))
             return
-        except Exception as e:  # noqa: BLE001
-            self._send_json(500, False, error=str(e))
+        except Exception:  # noqa: BLE001
+            self._send_internal_error("campaign schedule")
             return
         finally:
             store.close()
@@ -2511,12 +3160,30 @@ class PanelHandler(SimpleHTTPRequestHandler):
         store = Store(self.db_path)
         try:
             router = build_router(store=store, spend_cap_usd=GENERATE_SPEND_CAP_USD)
+            # Campaign Lab (Remedy Sheet #1/D): tell the generator what this org's
+            # past runs actually proved about seed terms, so it stops re-inventing
+            # tags that have already been shown to be dead. Best-effort — a draft
+            # must never fail because the ledger could not be read.
+            try:
+                org_id = self._current_user()["orgId"]
+                plat = (fields["platforms"] or [None])[0]
+                # Split by kind: a proven HANDLE and a proven HASHTAG are
+                # different evidence, and merging them invites the model to
+                # propose one where the other belongs.
+                seed_history = {
+                    kind: store.seed_history(org_id, platform=plat, kind=kind)
+                    for kind in ("hashtag", "account")
+                }
+            except Exception:  # noqa: BLE001 — the ledger is advice, not a gate
+                log.debug("seed_history unavailable for generation", exc_info=True)
+                seed_history = None
             draft = campaign_gen.generate_campaign(
                 url=fields["url"], image_b64=fields["imageB64"], text=fields["text"],
                 router=router, config_dir=self.config_dir,
                 campaign_id_hint=fields["campaignIdHint"],
                 product_context=fields["productContext"],
-                interview=fields["interview"], platforms=fields["platforms"])
+                interview=fields["interview"], platforms=fields["platforms"],
+                seed_history=seed_history)
         except campaign_gen.CampaignGenError as e:  # expected, user-facing
             self._send_json(422, False, error=e.public)
             return
@@ -2629,8 +3296,8 @@ class PanelHandler(SimpleHTTPRequestHandler):
                         org_id, actor["id"], "role_changed",
                         target=str(fields["userId"]),
                         detail=json.dumps({"from": target["role"], "to": fields["role"]}))
-        except Exception as e:  # noqa: BLE001
-            self._send_json(500, False, error=str(e))
+        except Exception:  # noqa: BLE001
+            self._send_internal_error("team update")
             return
         finally:
             store.close()
@@ -2672,8 +3339,8 @@ class PanelHandler(SimpleHTTPRequestHandler):
                 throttle.record_create(actor_key)
             store.record_audit(org_id, actor["id"], "invite_created",
                                detail=json.dumps({"role": fields["role"]}))
-        except Exception as e:  # noqa: BLE001
-            self._send_json(500, False, error=str(e))
+        except Exception:  # noqa: BLE001
+            self._send_internal_error("invite")
             return
         finally:
             store.close()
@@ -2696,8 +3363,8 @@ class PanelHandler(SimpleHTTPRequestHandler):
         except ValueError as e:
             self._send_json(400, False, error=str(e))
             return
-        except Exception as e:  # noqa: BLE001
-            self._send_json(500, False, error=str(e))
+        except Exception:  # noqa: BLE001
+            self._send_internal_error("org update")
             return
         finally:
             store.close()
@@ -2718,8 +3385,8 @@ class PanelHandler(SimpleHTTPRequestHandler):
             for key, value in fields["settings"].items():
                 store.set_setting(org_id, key, value)
             effective = store.get_settings(org_id)
-        except Exception as e:  # noqa: BLE001
-            self._send_json(500, False, error=str(e))
+        except Exception:  # noqa: BLE001
+            self._send_internal_error("settings update")
             return
         finally:
             store.close()
@@ -2770,8 +3437,8 @@ class PanelHandler(SimpleHTTPRequestHandler):
         except SecretCipherError as e:        # no/invalid AIZU_SECRET_KEY
             self._send_json(500, False, error=str(e))
             return
-        except Exception as e:  # noqa: BLE001
-            self._send_json(500, False, error=str(e))
+        except Exception:  # noqa: BLE001
+            self._send_internal_error("integration update")
             return
         finally:
             store.close()
@@ -2811,8 +3478,8 @@ class PanelHandler(SimpleHTTPRequestHandler):
         except TelegramLoginError as e:
             self._send_json(400, False, error=str(e))
             return
-        except Exception as e:  # noqa: BLE001
-            self._send_json(500, False, error=str(e))
+        except Exception:  # noqa: BLE001
+            self._send_internal_error("telegram login start")
             return
         self._send_json(200, True, data={"token": token})
 
@@ -2832,8 +3499,8 @@ class PanelHandler(SimpleHTTPRequestHandler):
         except TelegramLoginError as e:
             self._send_json(400, False, error=str(e))
             return
-        except Exception as e:  # noqa: BLE001
-            self._send_json(500, False, error=str(e))
+        except Exception:  # noqa: BLE001
+            self._send_internal_error("telegram login verify")
             return
         if not result.get("connected"):
             self._send_json(200, True, data={"needsPassword": True})
@@ -2851,8 +3518,8 @@ class PanelHandler(SimpleHTTPRequestHandler):
         except SecretCipherError as e:
             self._send_json(500, False, error=str(e))
             return
-        except Exception as e:  # noqa: BLE001
-            self._send_json(500, False, error=str(e))
+        except Exception:  # noqa: BLE001
+            self._send_internal_error("telegram login verify")
             return
         finally:
             store.close()
@@ -2992,14 +3659,22 @@ class PanelHandler(SimpleHTTPRequestHandler):
                  event.event_type, event.org_id, event.tier, event.status, applied)
         self._send_json(200, True, data={"received": True})
 
-    def _readiness_snapshot(self, *, force_refresh: bool = False) -> dict:
+    def _readiness_snapshot(self, *, force_refresh: bool = False,
+                            platforms: Optional[Iterable[str]] = None) -> dict:
         """The agent-readiness contract dict, measured against whichever backend will
         actually execute a live run. in_process => probe THIS box's warmed Chrome;
         distributed => the cloud has no browser at all, so presence in the worker
         fleet is the real gate (readiness.fleet_readiness). The extra `backend` key
         is additive — the panel's Zod schema ignores keys it doesn't declare, and the
         banner uses it to hide the "launch a login browser" action on a cloud host
-        where there is no browser to launch."""
+        where there is no browser to launch.
+
+        `platforms` narrows the DISTRIBUTED answer to the platforms the caller's run
+        actually needs — without it a fleet whose only online box advertises youtube
+        answers ready:true for an instagram campaign, which is the exact "capable box,
+        wrong platform" lie fleet_readiness' filter exists to prevent. It is ignored on
+        the in_process path: there is one warmed Chrome, and check_readiness already
+        reports its per-platform login state itself."""
         store = Store(self.db_path)
         try:
             backend = store.execution_backend()
@@ -3007,7 +3682,7 @@ class PanelHandler(SimpleHTTPRequestHandler):
         finally:
             store.close()
         if backend == EXECUTION_DISTRIBUTED:
-            snapshot = readiness.fleet_readiness(workers)
+            snapshot = readiness.fleet_readiness(workers, platforms=platforms)
         else:
             # A live run owns the ONE CDP connection this architecture allows;
             # check_readiness serves its last-known result instead of attaching a
@@ -3018,22 +3693,56 @@ class PanelHandler(SimpleHTTPRequestHandler):
                              force_refresh=force_refresh, run_active=run_active)
         return {**snapshot, "backend": backend}
 
+    def _campaign_platform_scope(self, campaign_id: str,
+                                 org_id: Optional[int]) -> Optional[set[str]]:
+        """The platforms one campaign discovers on, for narrowing a readiness answer to
+        the run the caller is actually about to start. None = no narrowing at all.
+
+        Degrades to None (never an error) for a blank, unknown, not-ours or malformed
+        campaign id: this backs a banner polled every 60s, so a stale id in a URL must
+        cost the operator the SCOPE, not the whole verdict. The ownership check runs
+        first — a campaign id is org-scoped data, and answering "that one is instagram"
+        for another tenant's id would leak across the boundary."""
+        if not campaign_id:
+            return None
+        store = Store(self.db_path)
+        try:
+            if not self._campaign_in_org(store, campaign_id, org_id):
+                return None
+            campaign = resolve_campaign(store, self.config_dir, campaign_id)
+        except Exception:  # noqa: BLE001 — a malformed brief just means "no narrowing"
+            log.warning("readiness scope: campaign %r could not be resolved", campaign_id)
+            return None
+        finally:
+            store.close()
+        return None if campaign is None else _campaign_platforms(campaign)
+
     def _handle_agent_readiness(self, query: str) -> None:
         """`GET /api/agent/readiness`: can a live run start right now? Raw dict (no
         {ok,data,error} envelope) — the panel's global banner polls it every 60s and
-        `?refresh=1` forces a live probe past the <=60s server-side cache."""
-        if self._current_user() is None:
+        `?refresh=1` forces a live probe past the <=60s server-side cache.
+
+        `?campaign=<id>` scopes the answer to that campaign's platforms. It is the
+        ONLY thing that makes `fleet_readiness`' platform filter live on the wire (B4:
+        the filter shipped with no caller passing it, so the distributed answer was
+        "some box is online", not "a box that can run THIS"). Unscoped stays the
+        default — the global banner has no campaign in hand."""
+        user = self._current_user()
+        if user is None:
             self._send_json(401, False, error="authentication required")
             return
-        refresh = parse_qs(query).get("refresh", ["0"])[0].strip().lower()
+        params = parse_qs(query)
+        refresh = params.get("refresh", ["0"])[0].strip().lower()
         force = refresh not in ("", "0", "false", "no")
+        campaign_id = params.get("campaign", [""])[0].strip()
         try:
-            snapshot = self._readiness_snapshot(force_refresh=force)
+            scope = self._campaign_platform_scope(campaign_id, user["orgId"])
+            snapshot = self._readiness_snapshot(force_refresh=force, platforms=scope)
         except Exception:  # noqa: BLE001 — a probe/DB failure must not 500 the banner
             log.error("agent readiness check failed", exc_info=True)
             self._send_json(500, False, error="internal server error")
             return
-        self._send_json_body(200, json.dumps(snapshot, ensure_ascii=False).encode("utf-8"))
+        self._send_json_body(200, _json_bytes(snapshot))
 
     def _handle_agent_launch_login(self, payload: Any) -> None:
         """`POST /api/agent/launch-login`: open (or focus) a Chrome tab on instagram.com
@@ -3046,11 +3755,11 @@ class PanelHandler(SimpleHTTPRequestHandler):
         # browser this architecture allows — refuse instead, in the {error, detail}
         # shape the panel already parses off a non-200.
         if self.run_manager is not None and self.run_manager.is_active():
-            self._send_json_body(409, json.dumps({
+            self._send_json_body(409, _json_bytes({
                 "error": "run_active",
                 "detail": "a run is active — stop it before opening a login browser "
                           "(only one Chrome connection is allowed at a time)",
-            }).encode("utf-8"))
+            }))
             return
         try:
             before = self._readiness_snapshot(force_refresh=True)
@@ -3058,8 +3767,8 @@ class PanelHandler(SimpleHTTPRequestHandler):
                 # No browser lives on the control plane in distributed mode — the
                 # warmed Chrome is on the worker PC, and its login tab is opened from
                 # that box's own desktop app.
-                self._send_json_body(200, json.dumps({
-                    "launched": False, "readiness": before}).encode("utf-8"))
+                self._send_json_body(200, _json_bytes({
+                    "launched": False, "readiness": before}))
                 return
             launched = readiness.open_login_tab(readiness.default_cdp_url(),
                                                 opener=self.login_opener)
@@ -3068,12 +3777,12 @@ class PanelHandler(SimpleHTTPRequestHandler):
             after = self._readiness_snapshot(force_refresh=True)
         except Exception as e:  # noqa: BLE001 — Chrome itself failed to start
             log.error("agent launch-login failed", exc_info=True)
-            self._send_json_body(500, json.dumps({
+            self._send_json_body(500, _json_bytes({
                 "error": "launch_failed",
-                "detail": f"could not open a login browser: {e}"}).encode("utf-8"))
+                "detail": f"could not open a login browser: {e}"}))
             return
-        self._send_json_body(200, json.dumps(
-            {"launched": launched, "readiness": after}, ensure_ascii=False).encode("utf-8"))
+        self._send_json_body(200, _json_bytes(
+            {"launched": launched, "readiness": after}))
 
     def _handle_run(self, payload: Any) -> None:
         fields, err = _validate_run(payload)
@@ -3101,8 +3810,8 @@ class PanelHandler(SimpleHTTPRequestHandler):
             except ValueError as e:  # malformed brief → client error
                 self._send_json(400, False, error=str(e))
                 return
-            except Exception as e:  # noqa: BLE001 — surface DB errors as JSON
-                self._send_json(500, False, error=str(e))
+            except Exception:  # noqa: BLE001 — surface DB errors as JSON
+                self._send_internal_error("run launch")
                 return
             finally:
                 store.close()
@@ -3174,11 +3883,11 @@ class PanelHandler(SimpleHTTPRequestHandler):
                     or (needs_instagram and snapshot["instagram"] != "logged_in")):
                 log.info("Run blocked by readiness gate · campaign=%s org=%s detail=%s",
                          fields["campaignId"], org_id, snapshot.get("detail"))
-                self._send_json_body(409, json.dumps({
+                self._send_json_body(409, _json_bytes({
                     "error": "agent_not_ready",
                     "detail": snapshot.get("detail") or "the agent is not ready",
                     "readiness": snapshot,
-                }, ensure_ascii=False).encode("utf-8"))
+                }))
                 return
         active, err = self.run_manager.launch(spec)
         if err == "a run is already active":
@@ -3214,6 +3923,7 @@ class PanelHandler(SimpleHTTPRequestHandler):
             # Pass 1: resolve + capability-check to find the dispatchable set, so the
             # billing budget can be split across exactly those jobs (pass 2).
             dispatchable: list[tuple[str, str, Campaign]] = []  # (campaign_id, platform, campaign)
+            spend_cap = _fleet_spend_cap_usd()
             for cid in targets:
                 try:
                     campaign = resolve_campaign(store, self.config_dir, cid)
@@ -3226,6 +3936,23 @@ class PanelHandler(SimpleHTTPRequestHandler):
                                                account_handle=None) == 0:
                     skipped.append({"campaignId": cid, "reason": "no capable worker"})
                     continue
+                # B9: a campaign already at/over its spend cap would trip the box's guard
+                # on its very first LLM call, so skip it here instead of dispatching a
+                # run that can only degrade. Filtered in pass 1, not pass 2, so an
+                # over-budget campaign does not also consume a slice of the billing lead
+                # budget. `spend_cap is None` means the bridge does NOT know the fleet's
+                # ceiling (the normal hosted split, where AIZU_SPEND_CAP lives on the
+                # boxes) — then we must NOT skip, or the cloud would enforce a guessed
+                # number forever; `run_one_job` refuses the run box-side instead. The
+                # reason carries both figures so an operator can see WHY it stopped.
+                if spend_cap is not None:
+                    spent = store.total_spend(cid)
+                    if spent >= spend_cap:
+                        skipped.append({
+                            "campaignId": cid,
+                            "reason": (f"spend cap reached (${spent:.2f} spent of "
+                                       f"${spend_cap:.2f})")})
+                        continue
                 dispatchable.append((cid, campaign.platform, campaign))
             # Pass 2: split the billing-clamped lead budget across the dispatchable jobs so
             # the fleet total can NEVER exceed the period cap (the slices sum to exactly the
@@ -3302,9 +4029,8 @@ class PanelHandler(SimpleHTTPRequestHandler):
                     continue
                 enqueued.append(job["id"])
                 run_ids.append(run_id)
-        except Exception as e:  # noqa: BLE001 — surface as JSON, never crash the handler
-            log.error("fleet dispatch failed", exc_info=True)
-            self._send_json(500, False, error=str(e))
+        except Exception:  # noqa: BLE001 — generic 500; detail to the log only
+            self._send_internal_error("dispatch run to fleet")
             return
         finally:
             store.close()
@@ -3450,6 +4176,31 @@ class PanelHandler(SimpleHTTPRequestHandler):
                     self._send_json(401, False,
                                     error="worker registration requires a valid token")
                     return
+                # Ledger B10: revocation must survive the box. `register_worker` UPSERTs
+                # `revoked_at = NULL`, so without this a revoked box that dropped its
+                # token (which is exactly what the sidecar does when it is revoked) would
+                # resurrect itself on the next process start using the still-configured
+                # SHARED bootstrap secret — silently undoing an operator's revoke. Only an
+                # admin-minted, single-use enrolment token (redeemed above) or an explicit
+                # un-revoke may bring a revoked worker back.
+                revoked_store = Store(self.db_path)
+                try:
+                    already_revoked = revoked_store.is_worker_revoked(worker_id)
+                except Exception:  # noqa: BLE001 — cannot prove it is NOT revoked
+                    log.error("revocation check failed", exc_info=True)
+                    self._send_json(503, False, error="registration is temporarily "
+                                                      "unavailable")
+                    return
+                finally:
+                    revoked_store.close()
+                if already_revoked:
+                    log.warning(
+                        "REFUSED a shared-bootstrap register for REVOKED worker %s — "
+                        "re-enrol it with a per-worker enrolment token", worker_id)
+                    self._send_json(401, False,
+                                    error="worker is revoked; re-enrol it with a "
+                                          "per-worker enrolment token")
+                    return
                 log.warning(
                     "Worker registered via DEPRECATED shared bootstrap token — "
                     "migrate to per-worker enrolment tokens · id=%s host=%s",
@@ -3485,7 +4236,12 @@ class PanelHandler(SimpleHTTPRequestHandler):
                 os=fields["os"], agent_version=fields["agentVersion"],
                 enrolment_scope_kind=fresh_scope_kind,
                 max_sessions=fields["maxSessions"], capabilities=capabilities,
-                token_expires_at=token_expires_at)
+                token_expires_at=token_expires_at,
+                # v23 (F9/F10/F12): the box's own launch self-check, stored verbatim and
+                # surfaced in the fleet console. Diagnostic ONLY — deliberately read
+                # AFTER every auth/clamp decision above so nothing on the trust path can
+                # ever branch on a worker-authored field.
+                preflight=fields["preflight"])
         except Exception:  # noqa: BLE001 — off-cloud caller: detail stays server-side
             log.error("worker register failed", exc_info=True)
             self._send_json(500, False, error="internal server error")
@@ -3508,7 +4264,7 @@ class PanelHandler(SimpleHTTPRequestHandler):
         updateRequired also fires when the worker's agent_version is below the gate."""
         worker = self._current_worker()
         if worker is None:
-            self._send_json(401, False, error="invalid or revoked worker token")
+            self._reject_worker_auth()
             return
         fields, err = _validate_worker_heartbeat(payload)
         if err is not None:
@@ -3517,7 +4273,10 @@ class PanelHandler(SimpleHTTPRequestHandler):
         store = Store(self.db_path)
         try:
             ok = store.record_worker_heartbeat(
-                worker_id=worker["id"], current_sessions=fields["currentSessions"])
+                worker_id=worker["id"], current_sessions=fields["currentSessions"],
+                # v23: omitted ⇒ None ⇒ COALESCE keeps the stored summary. The sidecar
+                # only re-sends on change (or every 10th beat), so most beats are None.
+                preflight=fields["preflight"])
             flags = self._resolve_worker_flags(store, worker) if ok else None
         except Exception:  # noqa: BLE001 — off-cloud caller: detail stays server-side
             log.error("worker heartbeat failed", exc_info=True)
@@ -3872,7 +4631,7 @@ class PanelHandler(SimpleHTTPRequestHandler):
         its own short-lived Store so a held connection never blocks the single writer."""
         worker = self._current_worker()
         if worker is None:
-            self._send_json(401, False, error="invalid or revoked worker token")
+            self._reject_worker_auth()
             return
         fields, err = _validate_worker_lease(payload)
         if err is not None:
@@ -3908,7 +4667,7 @@ class PanelHandler(SimpleHTTPRequestHandler):
         another's job."""
         worker = self._current_worker()
         if worker is None:
-            self._send_json(401, False, error="invalid or revoked worker token")
+            self._reject_worker_auth()
             return
         if action == "heartbeat":
             self._handle_job_heartbeat(worker["id"], job_id, payload)
@@ -3997,7 +4756,9 @@ class PanelHandler(SimpleHTTPRequestHandler):
         store = Store(self.db_path)
         try:
             recorded = store.ack_job(job_id=job_id, worker_id=worker_id,
-                                     summary=fields["summary"], leads=fields.get("leads"))
+                                     summary=fields["summary"], leads=fields.get("leads"),
+                                     spend=fields.get("spend"),
+                                     worker_db_id=fields.get("dbId"))
         except Exception:  # noqa: BLE001
             log.error("job ack failed", exc_info=True)
             self._send_json(500, False, error="internal server error")
@@ -4017,7 +4778,8 @@ class PanelHandler(SimpleHTTPRequestHandler):
         try:
             result = store.nack_job(
                 job_id=job_id, worker_id=worker_id, reason=fields["reason"],
-                poison=fields["poison"], retry_after_at=fields["retryAfterAt"])
+                poison=fields["poison"], retry_after_at=fields["retryAfterAt"],
+                spend=fields.get("spend"), worker_db_id=fields.get("dbId"))
         except Exception:  # noqa: BLE001
             log.error("job nack failed", exc_info=True)
             self._send_json(500, False, error="internal server error")
@@ -4388,6 +5150,28 @@ class PanelHandler(SimpleHTTPRequestHandler):
         self.end_headers()
 
     def do_GET(self):  # noqa: N802
+        self._dispatch_guarded(self._route_get)
+
+    def do_HEAD(self):  # noqa: N802
+        """HEAD routes exactly like GET, minus the body.
+
+        There was no do_HEAD, so HEAD fell through to SimpleHTTPRequestHandler's raw
+        path→filesystem mapping and bypassed EVERY route in `_route_get`:
+        /app/campaigns answered GET 200 / HEAD 404, /api/state GET 401-JSON /
+        HEAD 404-html, /app GET 200 / HEAD 301 — contradicting the two design
+        comments in `_route_get` that explain why those paths never fall through to
+        statics. Re-running the same router behind a body-suppressing writer keeps
+        the two methods honest by construction rather than by a parallel routing
+        table someone has to remember to update.
+        """
+        real = self.wfile
+        self.wfile = _HeadBodySuppressor(real)
+        try:
+            self._dispatch_guarded(self._route_get)
+        finally:
+            self.wfile = real
+
+    def _route_get(self) -> None:
         parsed = urlparse(self.path)
         if parsed.path == AUTH_ME_PATH:
             self._handle_me()
@@ -4485,7 +5269,12 @@ class PanelHandler(SimpleHTTPRequestHandler):
         # Real files (hashed JS/CSS under /assets, landing's own css/js/vendor/fonts/
         # photos under /landing, favicon, etc.) serve directly.
         if self._maps_to_existing_file(self.path):
-            super().do_GET()
+            # HEAD takes the base class's own head path so a big asset is stat'd,
+            # not read off disk only to be discarded by the body suppressor.
+            if self.command == "HEAD":
+                super().do_HEAD()
+            else:
+                super().do_GET()
             return
         # An unknown path under /app/ (e.g. a stale path-based bookmark from before
         # this split, or someone typing a route by hand) still resolves to the SPA
@@ -4494,8 +5283,18 @@ class PanelHandler(SimpleHTTPRequestHandler):
             self._serve_app_index()
             return
         # Any other unknown non-API path → soft-landing fallback on the marketing
-        # page (not the SPA shell — the SPA no longer lives at "/").
-        self._serve_index()
+        # page (not the SPA shell — the SPA no longer lives at "/"), but ONLY for a
+        # bare top-level word like "/matches": the landing is a single page whose
+        # nav is in-page anchors, and its stylesheet/script URLs are RELATIVE. Served
+        # under a nested path such as "/pricing/enterprise", the browser resolves
+        # those against "/pricing/", every one of them 404s back into this same
+        # fallback — HTML, status 200 — and the page renders unstyled while a
+        # sniffing browser is invited to treat markup as CSS/JS. Anything nested, or
+        # carrying a file extension (a genuinely missing asset), is an honest 404.
+        if _is_soft_landing_path(parsed.path):
+            self._serve_index()
+            return
+        self.send_error(404, "Not Found")
 
     def _default_campaign_for_org(self, store: Store, cfg: Path,
                                   org_id: Optional[int]) -> Optional[Campaign]:
@@ -4553,11 +5352,11 @@ class PanelHandler(SimpleHTTPRequestHandler):
                 store.close()
             if attach_run and self.run_manager is not None:
                 raw["RUN"] = self.run_manager.status(org_id)
-            self._send_json_body(200, json.dumps(raw, ensure_ascii=False).encode("utf-8"))
+            self._send_json_body(200, _json_bytes(raw))
         except ValueError as e:  # malformed brief for the org's home campaign
             self._send_json(400, False, error=str(e))
-        except Exception as e:  # noqa: BLE001 — surface as JSON, not a stack dump
-            self._send_json(500, False, error=str(e))
+        except Exception:  # noqa: BLE001 — generic 500; detail to the log only
+            self._send_internal_error("org page build")
 
     def _serve_leads_page(self, query: str) -> None:
         """`/api/leads`: org-wide, server-side filtered/sorted/paginated. Enveloped in
@@ -4586,8 +5385,8 @@ class PanelHandler(SimpleHTTPRequestHandler):
             self._send_json(200, True, data=data)
         except ValueError as e:
             self._send_json(400, False, error=str(e))
-        except Exception as e:  # noqa: BLE001 — surface as JSON, not a stack dump
-            self._send_json(500, False, error=str(e))
+        except Exception:  # noqa: BLE001 — generic 500; detail to the log only
+            self._send_internal_error("leads page build")
 
     def _serve_state(self, query: str) -> None:
         # State is scoped to the caller's org and PRUNED to their role. `?campaign=`
@@ -4622,15 +5421,22 @@ class PanelHandler(SimpleHTTPRequestHandler):
             finally:
                 store.close()
             # Additive control-plane status (in-memory; build_raw stays DB-only).
-            # Scoped to the caller's org so it never discloses another tenant's runs.
-            if self.run_manager is not None:
+            # Scoped to the caller's org so it never discloses another tenant's runs,
+            # AND gated on the same permission the other RUN-carrying surfaces use.
+            # panel.build_raw deliberately prunes a member's state down to CONFIG +
+            # campaign stubs + MATCHES (a member sees leads, nothing else); bolting
+            # RUN back on with only an ORG check handed that member the org's whole
+            # run history and spend — the very thing /api/dashboard and
+            # /api/campaigns (both `attach_run=True` behind view_dashboard /
+            # view_campaigns) and /api/run/activity all 403 them for.
+            if self.run_manager is not None and rbac.can(role, "view_dashboard"):
                 raw["RUN"] = self.run_manager.status(org_id)
-            body = json.dumps(raw, ensure_ascii=False).encode("utf-8")
+            body = _json_bytes(raw)
             self._send_json_body(200, body)
         except ValueError as e:  # malformed brief for the requested campaign
             self._send_json(400, False, error=str(e))
-        except Exception as e:  # noqa: BLE001 — surface as JSON, not a stack dump
-            self._send_json(500, False, error=str(e))
+        except Exception:  # noqa: BLE001 — generic 500; detail to the log only
+            self._send_internal_error("state build")
 
     def _serve_run_activity(self, query: str) -> None:
         """Live activity feed for one run: aggregated counters + the narrative event
@@ -4688,11 +5494,20 @@ class PanelHandler(SimpleHTTPRequestHandler):
                     job, last_event_at = None, None
             finally:
                 store.close()
-        except Exception as e:  # noqa: BLE001 — surface as JSON, not a stack dump
-            self._send_json(500, False, error=str(e))
+        except Exception:  # noqa: BLE001 — generic 500; detail to the log only
+            self._send_internal_error("run activity build")
             return
         # Unknown to this org in-memory AND no org-scoped rows → don't disclose it.
-        if not owned_by_manager and not sessions and not events:
+        #
+        # A fleet JOB row counts as an org-scoped row. `store.get_job_for_run` is
+        # itself org-filtered (BOLA guard), so `job is not None` proves the run is
+        # this org's — while a foreign run still resolves to None and stays a 404,
+        # so this is not an existence oracle. Without this the B6 failure surfacing
+        # below was unreachable in exactly the case it was built for: a dispatched
+        # run whose worker died before opening a session (its Chrome was
+        # unattachable, say) emits ZERO events and ZERO sessions, so the operator
+        # got a bare 404 for a run that really is theirs instead of the reason.
+        if not owned_by_manager and not sessions and not events and job is None:
             self._send_json(404, False, error="unknown run")
             return
         # Finished = not the live run AND no session still open. Derived from the
@@ -4710,6 +5525,14 @@ class PanelHandler(SimpleHTTPRequestHandler):
                 "status": job["status"],
                 "lastEventAt": last_event_at,
                 "leaseExpiresAt": job.get("leaseExpiresAt"),
+                # B6: the failure code the worker nacked with (or the engine summary's
+                # halt_reason on an acked job), so a fleet run that died before it could
+                # do anything — e.g. its Chrome was unattachable — reads as something
+                # other than a blank red "Finished on the fleet". Worker-authored, so
+                # re-cap it here; the panel renders it as text, never markup.
+                "reason": _fleet_job_reason(job.get("result")),
+                "attempts": job.get("attempts"),
+                "maxAttempts": job.get("maxAttempts"),
             }
             finished = _fleet_run_finished(fleet_job, sessions, finished)
         data = {
@@ -4742,6 +5565,45 @@ def serve(db_path: str, panel_dir: str, config_dir: str,
           readiness_probe: Optional[Callable[..., dict]] = None,
           login_opener: Optional[Callable[[], bool]] = None) -> ThreadingHTTPServer:
     configure_logging()  # idempotent: a no-op if the CLI already configured it
+    # BIND FIRST — before touching the DB or starting a single daemon thread.
+    # Binding used to be the LAST statement, so starting on a busy port (the common
+    # case: a stale bridge from an unclean exit) raised a bare OSError(EADDRINUSE)
+    # out of the CLI as a raw traceback — after the run manager had already migrated
+    # a brand-new SQLite file into existence, leaving a stray DB behind for a process
+    # that never served a byte. Failing at the very first side effect leaves nothing.
+    try:
+        httpd = ThreadingHTTPServer((host, port), PanelHandler)
+    except OSError as e:
+        if e.errno in (errno.EADDRINUSE, errno.EACCES):
+            raise PortInUseError(
+                f"{host}:{port} is already in use — another aizu panel is probably "
+                f"running; stop it or pass --port") from None
+        raise
+    try:
+        _configure_and_start(httpd, db_path, panel_dir, config_dir,
+                             run_manager=run_manager, schedule_manager=schedule_manager,
+                             reclaim_manager=reclaim_manager,
+                             session_watchdog=session_watchdog,
+                             billing_providers=billing_providers,
+                             readiness_probe=readiness_probe, login_opener=login_opener)
+    except BaseException:
+        httpd.server_close()   # never leak the listening socket on a failed setup
+        raise
+    return httpd
+
+
+def _configure_and_start(httpd: ThreadingHTTPServer, db_path: str, panel_dir: str,
+                         config_dir: str, *,
+                         run_manager: Optional[RunManager],
+                         schedule_manager: Optional["ScheduleManager"],
+                         reclaim_manager: Optional["ReclaimManager"],
+                         session_watchdog: Optional["SessionWatchdog"],
+                         billing_providers: Optional[dict],
+                         readiness_probe: Optional[Callable[..., dict]],
+                         login_opener: Optional[Callable[[], bool]]) -> None:
+    """Everything `serve()` does AFTER the socket is bound: wire the handler class,
+    reconcile orphan state, and start the background daemons. Split out only so the
+    bind can happen first — see the comment at the call site."""
     PanelHandler.panel_dir = str(Path(panel_dir).resolve())
     PanelHandler.db_path = str(Path(db_path).resolve())
     PanelHandler.config_dir = str(Path(config_dir).resolve())
@@ -4823,4 +5685,3 @@ def serve(db_path: str, panel_dir: str, config_dir: str,
         except billing.BillingConfigError as e:
             log.warning("Billing disabled — Polar not configured: %s", e)
             PanelHandler.billing_providers = {}
-    return ThreadingHTTPServer((host, port), PanelHandler)

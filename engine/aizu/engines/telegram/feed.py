@@ -16,10 +16,35 @@ import os
 from dataclasses import dataclass
 from typing import Iterable, Iterator, Optional, Protocol, Sequence
 
-from ...core.feed import Comment, FeedSource, Reel
+from ...core.feed import SOURCE_ACCOUNT, Comment, FeedSource, Reel, SourceOutcome
 from ...core.logsetup import get_logger
 
 log = get_logger(__name__)
+
+# Failures that are about THE SESSION, not about one channel: re-raised so the run
+# stops and `cli._is_auth_error` can flip the integration to needs-reconnect.
+# Matched on the exception class NAME (and the message as a fallback) so this
+# module keeps working without importing telethon, exactly as `cli._is_auth_error`
+# does. Everything not listed here is treated as "this channel is unavailable",
+# which is the common case: UsernameNotOccupied / UsernameInvalid / ChannelPrivate
+# / ChatAdminRequired, plus Telethon's bare ValueError("Cannot find any entity
+# corresponding to ...") for a channel that no longer exists.
+_SESSION_LEVEL_ERROR_NAMES = (
+    "AuthKey", "SessionRevoked", "SessionExpired", "Unauthorized",
+    "UserDeactivated", "PhoneNumberBanned", "FloodWait", "FloodError",
+)
+_SESSION_LEVEL_MESSAGES = ("auth key", "session revoked", "session expired",
+                           "flood", "not authorized", "unauthorized")
+
+
+def _is_session_level(exc: BaseException) -> bool:
+    """True when `exc` means the Telegram SESSION is unusable, not that one
+    channel is missing."""
+    name = type(exc).__name__
+    if any(k in name for k in _SESSION_LEVEL_ERROR_NAMES):
+        return True
+    msg = str(exc).lower()
+    return any(k in msg for k in _SESSION_LEVEL_MESSAGES)
 
 # Recent messages to read per seeded channel each session (PRD §10 pacing:
 # bounded window, not full history). Conservative default; tune per campaign.
@@ -75,13 +100,54 @@ class TelegramFeed(FeedSource):
         (the Telethon adapter connects in its constructor / from_env)."""
 
     def walk(self) -> Iterator[Reel]:
+        """Walk each seeded channel, surviving a dead one.
+
+        Entity resolution happens inside this generator, so a single dead
+        `@username` used to raise straight out of `walk()` — past the session's
+        `for reel in self.feed.walk()` loop, which has no try/except — and end the
+        whole session through the crash guard. One renamed channel in a list of
+        eight killed the other seven, every run.
+
+        A SESSION-level failure (revoked auth, flood wait) still propagates
+        untouched: it is not this channel's fault, the next channel will fare no
+        better, and `cli._is_auth_error` needs to see it to flip the integration
+        to needs-reconnect."""
+        failed = 0
         for channel in self._channels:
             n = 0
-            for msg in self._client.iter_channel_messages(channel, self._per_channel):
-                n += 1
-                yield Reel(reel_id=_encode_reel_id(channel, msg.id),
-                           caption=msg.text or "", author=channel)
+            try:
+                for msg in self._client.iter_channel_messages(channel, self._per_channel):
+                    n += 1
+                    # `author` was hardcoded to the channel, which threw away the
+                    # actual poster on every group/discussion message and made
+                    # "authors of relevant posts" (the seed-candidate query) return
+                    # nothing but the seeds we already had. The channel remains the
+                    # stable, seed-shaped id; the sender is the display name when
+                    # there is one (a broadcast post genuinely has none).
+                    yield Reel(reel_id=_encode_reel_id(channel, msg.id),
+                               caption=msg.text or "",
+                               author=(msg.sender or channel),
+                               author_id=channel, source=channel)
+            except Exception as e:  # noqa: BLE001 — classified immediately below
+                if _is_session_level(e):
+                    raise
+                failed += 1
+                log.warning("Telegram channel unavailable · %s · %s — skipping",
+                            channel, e)
+                self._record_source(SourceOutcome(source=channel,
+                                                  kind=SOURCE_ACCOUNT, yielded=n,
+                                                  unavailable=True))
+                continue
             log.info("Telegram channel · %s · %d message(s)", channel, n)
+            self._record_source(SourceOutcome(source=channel,
+                                              kind=SOURCE_ACCOUNT, yielded=n))
+        if failed and failed == len(self._channels):
+            # Not a halt (this engine's session has no HaltSession handler), but it
+            # must not read as a quiet run either. `source_stats` has the per-seed
+            # verdicts; the next run's `Store.live_seeds` raises `seeds_all_dead`.
+            log.error("Telegram: ALL %d seeded channel(s) were unavailable — this "
+                      "run harvested nothing because every seed is dead, not "
+                      "because the channels were quiet", failed)
 
     def fetch_comments(self, reel_id: str, since_cursor: Optional[str]
                        ) -> tuple[list[Comment], Optional[str]]:
