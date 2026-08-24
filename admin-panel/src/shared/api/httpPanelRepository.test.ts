@@ -199,6 +199,33 @@ describe('HttpPanelRepository.getAgentReadiness', () => {
     expect(vi.mocked(fetch).mock.calls[0]?.[0]).toBe('/api/agent/readiness?refresh=1');
   });
 
+  // The server grew ?campaign=<id> to narrow the fleet answer to the platforms that
+  // campaign needs, but for one round NO client sent it — so the narrowing was live on
+  // the endpoint and inert in the product (the same "added to the payload, never sent
+  // on the wire" trap that has shipped here before). These tests pin the query string
+  // the server actually parses; they fail if the parameter stops being sent.
+  test('sends campaign=<id> when the caller scopes the question to one campaign', async () => {
+    mockFetchOnce({ jsonValue: READINESS });
+    await new HttpPanelRepository().getAgentReadiness({ campaignId: 'o1.q4-outbound' });
+    expect(vi.mocked(fetch).mock.calls[0]?.[0]).toBe(
+      '/api/agent/readiness?campaign=o1.q4-outbound');
+  });
+
+  test('sends both refresh and campaign together', async () => {
+    mockFetchOnce({ jsonValue: READINESS });
+    await new HttpPanelRepository().getAgentReadiness({
+      refresh: true, campaignId: 'o1.q4-outbound' });
+    expect(vi.mocked(fetch).mock.calls[0]?.[0]).toBe(
+      '/api/agent/readiness?refresh=1&campaign=o1.q4-outbound');
+  });
+
+  test('percent-encodes a campaign id rather than interpolating it', async () => {
+    mockFetchOnce({ jsonValue: READINESS });
+    await new HttpPanelRepository().getAgentReadiness({ campaignId: 'o1.a b&c=d' });
+    expect(vi.mocked(fetch).mock.calls[0]?.[0]).toBe(
+      '/api/agent/readiness?campaign=o1.a+b%26c%3Dd');
+  });
+
   test('returns an http error for non-2xx responses', async () => {
     mockFetchOnce({ ok: false, status: 500, jsonValue: {} });
     const result = await new HttpPanelRepository().getAgentReadiness();

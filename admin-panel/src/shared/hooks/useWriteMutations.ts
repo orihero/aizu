@@ -44,11 +44,25 @@ function useInvalidate() {
   };
 }
 
-/** Pure item transform: flip status for every selected lead across a page of matches. */
-function withBulkStatus(items: readonly Match[], request: BulkStatusRequest): Match[] {
-  const ids = new Set(request.items.map((i) => i.commentId));
+/**
+ * Pure item transform: flip status for every selected lead across a page of matches.
+ * Matched on the full composite key the engine writes with - (campaignId, platform,
+ * commentId) - so the optimistic patch never flips a same-commentId lead on another
+ * platform (or in another campaign) that the write will not touch. An item that omits
+ * `platform` is the legacy shape the server defaults; it matches on commentId alone.
+ * The key is JSON so no separator can be forged by an id that contains it.
+ */
+function bulkKey(commentId: string, platform: string | null): string {
+  return JSON.stringify([commentId, platform]);
+}
+
+/** Exported for direct unit test — the optimistic path is otherwise only reachable
+ *  through a primed leads cache. */
+export function withBulkStatus(items: readonly Match[], request: BulkStatusRequest): Match[] {
+  const keys = new Set(request.items.map((i) => bulkKey(i.commentId, i.platform ?? null)));
   return items.map((m) =>
-    ids.has(m.commentId) && m.campaignId === request.campaignId
+    m.campaignId === request.campaignId &&
+    (keys.has(bulkKey(m.commentId, m.platform)) || keys.has(bulkKey(m.commentId, null)))
       ? { ...m, status: request.status }
       : m,
   );

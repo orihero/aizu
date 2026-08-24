@@ -34,7 +34,8 @@ from pathlib import Path
 from typing import Callable, Iterator, Optional
 
 from .. import cli
-from ..core.config import Campaign, Soul, campaign_from_brief, resolve_campaign
+from ..core.config import (CDP_PLATFORMS, Campaign, Soul, campaign_from_brief,
+                           resolve_campaign)
 from ..core.logsetup import get_logger
 from . import (JOB_RESULT_KIND_CAMPAIGN_MALFORMED, JOB_RESULT_KIND_CAMPAIGN_NOT_FOUND,
                JOB_RESULT_KIND_ERROR, JOB_RESULT_KIND_SOUL_MISSING)
@@ -46,6 +47,12 @@ log = get_logger("aizu.worker.job_runner")
 # Mirror RunManager._pause_path so the engine (consumer) and the worker (producer)
 # derive the SAME sentinel path: run-<run_id>.pause (runner.py:296).
 _PAUSE_SUFFIX = ".pause"
+# B9: the per-run spend-cursor sentinel the sidecar parks next to the pause file
+# (run-<run_id>.spend-cursor), so an attempt that dies WITHOUT an ack/nack — reclaimed by
+# lease expiry and requeued pinned to this same box — resumes from its original mark
+# instead of silently dropping the dollars it already spent. Lives here, next to the
+# other state-dir file conventions, because `sweep_orphan_job_files` reaps it.
+SPEND_CURSOR_SUFFIX = ".spend-cursor"
 # A baked soul carries no source file; use a sentinel path (Soul.path is required but
 # only informational at run time).
 _BAKED_SOUL_PATH = Path("<baked:job-spec>")
@@ -90,6 +97,11 @@ CDP_PROBE_TIMEOUT_SEC = 8.0
 # (sidecar._POISON_HALTS) → the sidecar requeues it with backoff exactly like any other
 # transient failure, via the existing summary halt_reason mapping (no new terminal path).
 CDP_UNREACHABLE_REASON = "cdp_unreachable"
+# The nack reason surfaced when this campaign has no headroom left under this box's
+# spend cap (B9). IS a poison token (sidecar._POISON_HALTS) — unlike a CDP blip this
+# cannot fix itself on retry: spend only ever grows, so every further attempt would
+# reach the same verdict and burn a lease doing it.
+SPEND_CAP_REASON = "spend_cap"
 
 
 def _default_cdp_probe(cdp_url: str) -> bool:
@@ -177,18 +189,42 @@ def run_one_job(store, job: JobSpec, *, cfg: WorkerConfig, halt: threading.Event
     its duration cap + grace is self-terminated with ``halt_reason='worker_timeout'``.
 
     FAIL-FAST CDP (Fix B): before spawning the child we probe that the warmed Chrome is
-    attachable. If it is NOT, we return a fast summary carrying
+    attachable — but ONLY for a browser-driven platform (``CDP_PLATFORMS``). An API-only
+    job (youtube/telegram/reddit) needs no browser at all, so gating it on a CDP attach
+    would nack it `cdp_unreachable` on every attempt until it dead-letters on a
+    Chrome-less box (`cfg.cdp_url` always has a default). If the probe FAILS for a
+    browser platform, we return a fast summary carrying
     ``halt_reason='cdp_unreachable'`` WITHOUT spawning — the sidecar's existing
     halt_reason branch then nacks with that (non-poison) reason so dispatch requeues with
     backoff, exactly as for any other transient failure. This avoids the ~180s
     connect_over_cdp hang + crash-retry that otherwise prolongs the campaign block.
+
+    FAIL-FAST SPEND CAP (B9): the effective cap is computed here too, BEFORE the spawn,
+    and a job with ZERO headroom left is refused with ``halt_reason='spend_cap'`` instead
+    of being run. This is the authoritative enforcement point — the only process that can
+    read its own ``AIZU_SPEND_CAP`` — and it has to live here rather than only at cloud
+    dispatch, because a REQUEUE never traverses dispatch: `nack_job` puts the row
+    straight back to `queued`, so a job that went over cap on attempt 1 gets re-leased
+    with `priorSpendUsd >= cap`. Without this branch that attempt would spawn a run whose
+    very first LLM call fails `router._spend_guard`, and `_degrade` does NOT stop a run —
+    it returns an abstain stand-in — so the box would hold a warmed account for the whole
+    duration cap producing nothing but degraded verdicts, once per remaining attempt.
 
     ``popen``/``sleep``/``monotonic``/``cdp_probe`` are injected (mirroring ``Sidecar``'s
     ``sleep`` seam) so the whole supervisor is unit-testable with a fake process — no real
     spawn and no real browser.
     """
     run_id = job.run_id or uuid.uuid4().hex[:12]
-    if not cdp_probe(cfg.cdp_url):
+    local_spend = _local_spend(store, job.campaign_id)
+    effective_cap = _effective_spend_cap(local_spend, job.prior_spend_usd, cfg.spend_cap)
+    if effective_cap is not None and effective_cap <= local_spend:
+        # No headroom: the run could only produce degraded stand-ins (see the docstring).
+        log.warning("Job %s has no spend headroom for campaign %s (cap=$%.2f, local=$%.2f,"
+                    " prior=%s) — refusing to spawn, nacking %s",
+                    job.id, job.campaign_id, cfg.spend_cap or 0.0, local_spend,
+                    job.prior_spend_usd, SPEND_CAP_REASON)
+        return {"run_id": run_id, "job_id": job.id, "halt_reason": SPEND_CAP_REASON}
+    if job.platform in CDP_PLATFORMS and not cdp_probe(cfg.cdp_url):
         # The warmed Chrome is unreachable/logged-out/bad. Do NOT spawn the child (it
         # would hang ~180s then crash). Return a fast, requeue-with-backoff nack via the
         # existing halt_reason mapping — no new terminal path.
@@ -218,7 +254,9 @@ def run_one_job(store, job: JobSpec, *, cfg: WorkerConfig, halt: threading.Event
         )
         _write_pidfile(pid_path, proc.pid)
         outcome = _supervise(proc, job=job, cfg=cfg, run_id=run_id, halt=halt,
-                             job_log=job_log, sleep=sleep, monotonic=monotonic)
+                             job_log=job_log,
+                             progress_logs=_progress_logs(job_log, run_id),
+                             sleep=sleep, monotonic=monotonic)
         if outcome is not None:
             return outcome  # halt/timeout — child already terminated
         return _read_and_map_result(result_path, job=job, run_id=run_id,
@@ -239,6 +277,7 @@ def run_one_job(store, job: JobSpec, *, cfg: WorkerConfig, halt: threading.Event
 
 def _supervise(proc, *, job: JobSpec, cfg: WorkerConfig, run_id: str,
                halt: threading.Event, job_log: Path,
+               progress_logs: tuple[Path, ...] = (),
                sleep: Callable[[float], None],
                monotonic: Callable[[], float]) -> Optional[dict]:
     """Poll the child until it exits, a halt fires, the duration cap passes, or it STALLS
@@ -252,10 +291,23 @@ def _supervise(proc, *, job: JobSpec, cfg: WorkerConfig, run_id: str,
     deadline can't be: a blocked synchronous Playwright/CDP call never returns control to
     the loop that checks that deadline, so only killing the child from OUT here (the parent)
     can break a wedge. Log growth is the liveness signal — a healthy run appends relevance/
-    CDP/heartbeat lines continuously; a wedged one goes silent. A value <= 0 disables it."""
+    CDP/heartbeat lines continuously; a wedged one goes silent. A value <= 0 disables it.
+
+    WHICH log is load-bearing, and it was wrong (fleet runs 2026-08-20). The child's
+    stdout/stderr go to ``job_log``, but the engine logs through ``core.logsetup``, which
+    writes to ``aizu.log`` and the per-run ``run-<run_id>.log`` — NOT to stdout. So
+    ``job_log`` received a one-time Playwright/Node preamble and then never grew again:
+    1491 bytes, byte-identical across two different jobs. Every job therefore looked
+    wedged after exactly ``stall_timeout_sec`` no matter how healthy, giving fleet jobs a
+    hard 5-minute ceiling. job-2099fb29e88b and job-19eaf089da2e both dead-lettered at
+    5/5 attempts that way — the second one while actively producing leads. Liveness is now
+    the max size across EVERY log the child may append to, so the signal watches the file
+    the child actually writes. Same class as ledger A13: a check whose subject was a path
+    nothing in the tree ever wrote to still reads green/red with total confidence."""
     deadline = monotonic() + _effective_minutes(job, cfg) * 60 + TIMEOUT_GRACE_MIN * 60
     stall_sec = cfg.stall_timeout_sec
-    last_size = _log_size(job_log)
+    watched = (job_log,) + tuple(progress_logs)
+    last_size = _log_sizes(watched)
     last_progress_at = monotonic()
     while True:
         if proc.poll() is not None:
@@ -272,7 +324,7 @@ def _supervise(proc, *, job: JobSpec, cfg: WorkerConfig, run_id: str,
                         job.id)
             return {"run_id": run_id, "job_id": job.id, "halt_reason": "worker_timeout"}
         if stall_sec > 0:
-            size = _log_size(job_log)
+            size = _log_sizes(watched)
             now = monotonic()
             if size != last_size:
                 last_size = size
@@ -283,6 +335,28 @@ def _supervise(proc, *, job: JobSpec, cfg: WorkerConfig, run_id: str,
                             job.id, stall_sec)
                 return {"run_id": run_id, "job_id": job.id, "halt_reason": "worker_stall"}
         sleep(SUPERVISOR_POLL_SEC)
+
+
+def _progress_logs(job_log: Path, run_id: str) -> tuple[Path, ...]:
+    """Every file the child may append to, besides its stdout capture. `run_log_path` is
+    the single source of truth for the per-run file (the sidecar already resolves it the
+    same way), and the shared `aizu.log` in the same directory is the fallback for lines
+    written before the per-run handler attaches."""
+    try:
+        from ..core.logsetup import run_log_path
+        resolved = run_log_path(run_id, log_file=str(job_log.parent / "aizu.log"))
+    except Exception:  # noqa: BLE001 — liveness must never be the thing that crashes a job
+        resolved = None
+    paths = [job_log.parent / "aizu.log"]
+    if resolved is not None:
+        paths.append(Path(resolved))
+    return tuple(paths)
+
+
+def _log_sizes(paths: tuple[Path, ...]) -> int:
+    """Total bytes across every watched log. A sum (not a max) so growth in ANY of them
+    counts as progress, and so a file appearing late cannot look like a shrink."""
+    return sum(_log_size(p) for p in paths)
 
 
 def _log_size(job_log: Path) -> int:
@@ -408,6 +482,54 @@ def _cleanup(log_fh, spec_path: Path, result_path: Path, pid_path: Path) -> None
 
 # --- the in-process body (runs inside the child, and directly in tests) -----------
 
+def _effective_spend_cap(local_at_start: float, prior_spend_usd: Optional[float],
+                         cap: Optional[float]) -> Optional[float]:
+    """The cap to hand this run so the campaign's TOTAL spend across every box honours
+    one ceiling (B9), expressed in the units the router actually compares against —
+    this box's LOCAL running total.
+
+    `router._spend_guard` asks `store.total_spend(campaign_id) >= spend_cap_usd`, and
+    that total is box-local. So the cap must be re-based: start from what this box has
+    already logged for the campaign, then add whatever headroom is left under the
+    ceiling.
+
+        effective = local + max(0, cap - max(prior, local))
+
+    The `max(prior, local)` floor is what makes it safe both ways. A box holding spend
+    the cloud never learned about (an attempt that died before its ack/nack, later
+    re-pinned to this same box by reclaim) still counts that money, because `local`
+    wins. A box whose spend HAS been rolled up counts it once, not twice, because
+    `prior` already contains it and the two are the same number rather than a sum.
+
+    `cap=None` (uncapped) stays None. An already-over-budget campaign yields exactly
+    `local` — and since the guard is `>=`, that correctly blocks call one, including
+    the degenerate `local == 0` case (`router._spend_guard` only short-circuits on
+    `spend_cap_usd is None`, never on 0.0).
+
+    ``effective <= local_at_start`` is therefore exactly "no headroom left"; `run_one_job`
+    tests for it and refuses to spawn rather than letting the run degrade its way through
+    a full duration cap."""
+    if cap is None:
+        return None
+    local = max(0.0, float(local_at_start or 0.0))
+    already = max(float(prior_spend_usd or 0.0), local)
+    return local + max(0.0, float(cap) - already)
+
+
+def _local_spend(store, campaign_id: str) -> float:
+    """This box's own logged spend for a campaign, or 0.0 if it can't be read (B9).
+
+    A local read hiccup degrades to the historical behaviour — start from $0 — rather
+    than failing a runnable job: the cap is an accounting guard, not a correctness one,
+    and the cloud-side `priorSpendUsd` still floors it in `_effective_spend_cap`."""
+    try:
+        return float(store.total_spend(campaign_id))
+    except Exception:  # noqa: BLE001 — accounting hint only, never block the run
+        log.warning("could not read local spend for campaign %s", campaign_id,
+                    exc_info=True)
+        return 0.0
+
+
 def _execute_job(store, job: JobSpec, *, cfg: WorkerConfig) -> dict:
     """Resolve and run one leased job IN THIS PROCESS. Returns the engine summary dict
     augmented with ``run_id``/``job_id``. Raises :class:`CampaignNotFound`/
@@ -427,7 +549,13 @@ def _execute_job(store, job: JobSpec, *, cfg: WorkerConfig) -> dict:
     # sync all key on the SAME id); fall back to a local id for a legacy job.
     run_id = job.run_id or uuid.uuid4().hex[:12]
     pause_path = cfg.state_dir / f"run-{run_id}{_PAUSE_SUFFIX}"
-    args = cfg.run_args(job)
+    # B9: re-base this box's spend cap against what the campaign already spent on OTHER
+    # boxes (shipped with the lease as priorSpendUsd). Re-read here rather than passed
+    # down from run_one_job because this body also runs in the CHILD process, which has
+    # its own Store; the zero-headroom refusal lives in the parent (see run_one_job).
+    local_spend_at_start = _local_spend(store, job.campaign_id)
+    args = cfg.run_args(job, spend_cap_override=_effective_spend_cap(
+        local_spend_at_start, job.prior_spend_usd, cfg.spend_cap))
 
     log.info("Running job %s · campaign=%s platform=%s run_id=%s target=%s",
              job.id, job.campaign_id, job.platform, run_id, job.target_leads)
@@ -573,11 +701,16 @@ def sweep_orphan_pause_files(state_dir: Path, *, max_age_sec: float) -> int:
 
 def sweep_orphan_job_files(state_dir: Path, *, max_age_sec: float) -> int:
     """Delete stale supervisor rendezvous files a crashed SIDECAR (not just a crashed
-    child) could leave: job-specs/*.json, job-results/*.json, and logs/job-*.log*. A
-    leaked spec/result blocks nothing (the supervisor rewrites per job) but grows disk
-    over a long-lived box's life; job logs are kept longer for operator postmortem, so
-    the caller passes a longer age for those via a separate sweep if desired. Returns the
-    total swept. Never raises (each unlink guarded)."""
+    child) could leave: job-specs/*.json, job-results/*.json, logs/job-*.log*, and the
+    B9 run-*.spend-cursor marks. A leaked spec/result blocks nothing (the supervisor
+    rewrites per job) but grows disk over a long-lived box's life; job logs are kept
+    longer for operator postmortem, so the caller passes a longer age for those via a
+    separate sweep if desired. Returns the total swept. Never raises (each unlink
+    guarded).
+
+    The spend-cursor mark is swept on the SAME long retention deliberately: it exists to
+    survive a reclaim→requeue round trip (minutes of backoff, and a pinned box may be
+    down for a while), so sweeping it on the short pause-file clock would defeat it."""
     if not state_dir.exists():
         return 0
     now = time.time()
@@ -586,6 +719,7 @@ def sweep_orphan_job_files(state_dir: Path, *, max_age_sec: float) -> int:
     # leave behind (which a bare '*.json' would miss and leak forever) and rotated logs.
     patterns = (f"{_SPEC_DIRNAME}/*.json*", f"{_RESULT_DIRNAME}/*.json*",
                 f"{_SPEC_DIRNAME}/*.pid",
+                f"run-*{SPEND_CURSOR_SUFFIX}",
                 f"{_JOB_LOG_DIRNAME}/{_JOB_LOG_PREFIX}*{_JOB_LOG_SUFFIX}*")
     for pattern in patterns:
         for path in state_dir.glob(pattern):

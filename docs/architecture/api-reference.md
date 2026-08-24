@@ -22,7 +22,7 @@ Two shapes, verified per endpoint:
 | Plane | Credential | Resolver | Notes |
 |---|---|---|---|
 | **Org session** | `rr_session` HttpOnly cookie (`SESSION_COOKIE`, `server.py:129`) | `_current_user` (`server.py:1789`) | TTL 30 days (`auth.py:36`). |
-| **Worker** | `Authorization: Bearer <token>` | `_current_worker` (`server.py:1871`) | Token TTL ~1 year; revocation, not expiry, is the off-switch (`store.py:849`). |
+| **Worker** | `Authorization: Bearer <token>` | `_current_worker` (`server.py:1871`) | Token TTL ~1 year; revocation, not expiry, is the off-switch (`store.py:849`). A rejected bearer is always `401`, and the sidecar answers it by clearing its token and halting for re-enrolment — see §9's 401 contract. |
 | **Superadmin** | `rr_admin_session` cookie + IP-allowlist + TOTP MFA | `_current_admin` (`server.py:1920`) | Fails closed on the IP-allowlist first. |
 
 ### Org-route RBAC gate (`do_POST`, `server.py:1745`)
@@ -167,8 +167,9 @@ All require `edit_campaigns` (owner/admin).
 
 ### POST `/api/campaign`
 Upsert campaign meta + brief (create or edit). The brief is **merged** over the stored/file brief, not replaced.
-- **Body**: `{campaignId}` required; optional `status` (campaign-status set), `budgetCap` (≥0), `goalTarget` (≥0 int), `displayName`, `brief` (object; camelCase keys mapped to snake per `_BRIEF_KEYS`, `server.py:562`). `live`/`paused` route through pause semantics (`set_campaign_paused`). `_validate_campaign` (`server.py:457`).
-- **Response**: `200 {ok, data:<meta>}` (meta gains `hasBrief:true` when a brief was stored); `404` cross-org campaign; `400` bad brief shape. Handler `server.py:2218`.
+- **Body**: `{campaignId}` required; optional `op` ∈ `create|edit`, `status` (campaign-status set), `budgetCap` (≥0), `goalTarget` (≥0 int), `displayName`, `brief` (object; camelCase keys mapped to snake per `_BRIEF_KEYS`, `server.py:562`). `live`/`paused` route through pause semantics (`set_campaign_paused`). `_validate_campaign` (`server.py:457`).
+- **Which row it targets** (`_resolve_campaign_target`): a campaign the caller's org already owns is edited in place. An **edit** of anything else — explicit `op:"edit"`, or a legacy payload carrying no brief — 404s for another org's campaign but is allowed for an *unregistered* id (the file-backed `config/campaign.md` campaign has no DB row until its first write; the write stamps it to the caller's org). A **create** — explicit `op:"create"`, or a legacy brief-carrying payload — always allocates a key in the caller's own namespace, `o<orgId>.<requestedId>`, *even when the bare id is free*: two tenants can each hold `q4-outbound`, and since the allocated key is a pure function of the caller's own org it can never reveal whether another tenant holds that name. Clients must therefore read the real id back off the response, not assume the id they asked for. Ids in that reserved `o<digits>.` shape may only be named by the org that owns them (otherwise the namespace would be squattable, since `campaign_meta.campaign_id` is still one global PK).
+- **Response**: `200 {ok, data:<meta>}` (meta gains `hasBrief:true` when a brief was stored); `409 {code:"campaign_exists"}` when a create would land on a campaign the caller already has (refused, never overwritten — `matches` is keyed on `campaign_id`, so a clobber would also inherit the first campaign's leads); `404` cross-org campaign; `400` bad brief shape. Handler `server.py:2218`.
 
 ### POST `/api/campaign/generate`
 AI-draft a campaign from product url / screenshot / description (+ optional interview transcript). Persists nothing — returns a draft to pre-fill the form. Body cap 8 MB.
@@ -225,6 +226,7 @@ Start a run for one campaign or all live campaigns. In-process by default; distr
 Live activity feed for one run (counters + narrative event stream + open flags), paged on a monotonic cursor. Ownership proven in-memory or via org-stamped DB rows.
 - **Query**: `runId` required; `after` cursor (default 0).
 - **Response**: `200 {ok, data:{runId, finished, fleetJob, counters:{reelsSeen,relevancePasses,commentsScored,matches,spendUsd,likes,follows}, events:[...], flags:[{kind,severity,detail}], cursor}}`; `400` missing runId; `404` unknown/foreign run. Counters aggregated by `_aggregate_run_counters` (`server.py:246`); handler `server.py:4109`.
+- `fleetJob` is `null` for an in-process run, else `{jobId, status, lastEventAt, leaseExpiresAt, reason, attempts, maxAttempts}`. `reason` is the worker's nack code (`cdp_unreachable`, `worker_timeout`, `worker_stall`, `credential_fetch_failed`, `campaign_not_found`, `soul_missing`, `campaign_malformed`, `error`, …) or the acked summary's `halt_reason`, capped at 200 chars, `null` when unknown — key the failed/succeeded wording off `status`, never off `reason` being present.
 
 ---
 
@@ -234,7 +236,7 @@ Live activity feed for one run (counters + narrative event stream + open flags),
 
 | Method | Path | Role gate |
 |---|---|---|
-| GET | `/api/agent/readiness[?refresh=1]` | any org session |
+| GET | `/api/agent/readiness[?refresh=1][&campaign=<id>]` | any org session |
 | POST | `/api/agent/launch-login` | `fix_agent` (owner/admin) |
 
 What "ready" measures follows the superadmin execution-backend switch:
@@ -245,7 +247,7 @@ What "ready" measures follows the superadmin execution-backend switch:
 | `distributed` | the worker fleet (`readiness.fleet_readiness`) | ≥1 non-revoked worker is `online` — the cloud has no browser of its own, so probing local CDP would say nothing true |
 
 ### GET `/api/agent/readiness`
-- **Query**: `refresh=1` forces a live probe past the ≤60s server-side cache.
+- **Query**: `refresh=1` forces a live probe past the ≤60s server-side cache. `campaign=<id>` narrows the `distributed` answer to the platforms that campaign actually needs, so a tenant whose only online box advertises `youtube` gets `ready:false` for an Instagram run instead of a green banner and a job nothing can lease; `detail` then names the scope (`"… for instagram"`). An unknown, blank or other-org campaign id is ignored — the endpoint degrades to the unscoped answer and never errors, because this backs a 60s banner poll where a stale id must cost the scope, not the verdict. Ignored in `in_process` mode, which probes the one local browser.
 - **Response**: `200 {ready, cdp:"ok"|"unreachable", instagram:"logged_in"|"logged_out"|"unknown", checkedAt, cdpUrl, detail, backend}`; `401` anonymous. In `distributed` mode `instagram` stays `"unknown"` — a box's login state never rides the presence heartbeat — so clients should render `detail`, not the enums.
 - A live run holds the one CDP connection this architecture allows, so an in-process check never attaches a second Playwright client mid-run: it serves the last-known snapshot instead.
 
@@ -342,37 +344,79 @@ Wizard step 2 — submit code (+ optional 2FA password). On success stores the s
 
 ## 9. Worker plane (bearer token)
 
-Bearer-gated, not cookie/RBAC. Handled before the org gate. First-register uses the shared `AIZU_WORKER_BOOTSTRAP_TOKEN` env; re-register presents the current token. Body cap 1 MB.
+Bearer-gated, not cookie/RBAC. Handled before the org gate. Body cap 1 MB.
+
+**Enrolment (v22 — supersedes the shared bootstrap token).** A box's FIRST register presents, in the same bearer slot, a per-worker, single-use, admin-minted **enrolment token** (`worker_enrolment_tokens`, minted from the panel's Fleet page). It is tried first and always wins; its server-assigned scope (`org` or `pool`) is stamped on the worker row as `workers.enrolment_scope_kind` and CLAMPS the `orgId`/`capabilities` written on that call **and on every later re-register**. Only if redemption fails does the server fall back to the shared `AIZU_WORKER_BOOTSTRAP_TOKEN` — a DEPRECATED path gated by `AIZU_WORKER_LEGACY_BOOTSTRAP_ENABLED` (default ON so upgrade day is a no-op; an EMPTY value parses as OFF). A legacy-enrolled box stores `enrolment_scope_kind = NULL` and stays fully self-declaring forever, so `SELECT id, host FROM workers WHERE revoked_at IS NULL AND enrolment_scope_kind IS NULL` must be empty before that flag is flipped off (ledger B8). A **re-register** presents the box's current worker token, not an enrolment token.
 
 | Method | Path | Purpose |
 |---|---|---|
 | POST | `/api/worker/register` | Register / re-register a worker box |
 | POST | `/api/worker/heartbeat` | Worker-level presence beat |
 | POST | `/api/worker/lease` | Lease one job |
-| POST | `/api/worker/jobs/{jobId}/{heartbeat\|ack\|nack}` | Job-scoped lifecycle |
+| POST | `/api/worker/jobs/{jobId}/{heartbeat\|ack\|nack\|credential}` | Job-scoped lifecycle |
+
+**401 contract — what a rejected bearer means and what the box does (ledger B10).** Every route here answers `401` — and ONLY `401` — when the presented token is invalid, revoked (`workers.revoked_at`), or past its ~1-year `token_expires_at`; everything else stays inside the `{ok, data, error}` envelope. A store FAILURE behind that gate (DB locked, mid-restore, not yet mounted) answers `503 worker authentication is temporarily unavailable`, NOT `401`: the auth lookup fails closed either way, but a server fault must not be indistinguishable from a revocation, or one bad bridge restart would tell an entire fleet of valid tokens that they were revoked.
+
+That single status is the sidecar's revocation signal, keyed on the code and never on the message text (which differs per route) — but a 401 alone is **not** acted on. `worker/sidecar.py::_note_unauthorized` requires three things before anything irreversible happens: (1) the 401 must carry the dispatch's own `{ok:false, …}` envelope, so a reverse proxy's HTML/empty-bodied 401 (nginx basic-auth, an SSO rule mid-rollout, a captive portal) stays transient; (2) the refused bearer must still be the one in the box's token store, so a 401 for a credential another process already rotated adopts that credential instead of deleting it; (3) it must repeat `_UNAUTHORIZED_CONFIRM_LIMIT` (3) times CONSECUTIVELY across any of register / presence heartbeat / lease / job heartbeat / ack / nack / credential, with any non-401 outcome resetting the count.
+
+On a CONFIRMED revocation `_on_auth_revoked` does exactly five things, once: CLEARS the persisted token through `TokenStore` (file or keyring backend), logs at CRITICAL naming the operator action, stops the pull loop, stops the presence beat (a parked box must be inert, not authenticate forever), and parks the process with its local control surface still serving (status `controls.reenrolmentRequired: true`, so the desktop app shows "re-enrolment required" instead of an idle-looking box). The parked process re-probes register once per 5-minute reminder tick and resumes leasing if the dispatch accepts it again — the recovery path for a 401 that was really a server-side fault. It never re-registers faster than that, and it cannot resurrect itself: **a legacy shared-bootstrap register is refused outright for a worker whose row is revoked** (`401 worker is revoked; re-enrol it with a per-worker enrolment token`), so `register_worker`'s `revoked_at = NULL` can no longer undo an operator's Revoke on the next reboot / watchdog relaunch / desktop "Restart worker". Revocation is durable regardless of what the box does, without waiting for the `AIZU_WORKER_LEGACY_BOOTSTRAP_ENABLED=0` cutover. Recovery is an operator action: mint a fresh single-use enrolment token, put it on the box, restart — redeeming it clears `revoked_at`. A non-401 failure (transport, timeout, 5xx, a 4xx about the body) is transient and keeps its existing retry/backoff: a flaky network must never brick a box.
 
 ### POST `/api/worker/register`
 Register / re-register a worker box; mints a fresh plaintext token (hash stored), returned exactly once. Response body is suppressed from DEBUG logs (`server.py:1546`).
-- **Auth**: existing bearer token (re-register) OR bootstrap secret (first register).
-- **Body**: optional capped strings `machineId` (required on first register), `displayName, host, os, agentVersion`; `orgId:int|null`; `maxSessions:int` (default 1, ≤50); `capabilities:[[orgId|null, platform, accountHandle|null]]` (≤100). `_validate_worker_register` (`server.py:963`).
-- **Response**: `200 {ok, data:{workerId, token, heartbeatIntervalSec}}`; `401` invalid/absent token + bootstrap; `400` missing machineId on first register. Handler `server.py:3086`.
+- **Auth**: existing bearer token (re-register) OR a single-use enrolment token, falling back to the deprecated shared bootstrap secret (first register) — see the enrolment note above.
+- **Body**: optional capped strings `machineId` (required on first register), `displayName, host, os, agentVersion`; `orgId:int|null`; `maxSessions:int` (default 1, ≤50); `capabilities:[[orgId|null, platform, accountHandle|null]]` (≤100); optional `preflight` (v23, see below). `_validate_worker_register` (`server.py:963`).
+- **Response**: `200 {ok, data:{workerId, token, heartbeatIntervalSec}}`; `401` when the bearer is neither a live worker token, nor a redeemable enrolment token, nor (if still enabled) the bootstrap secret — three consecutive such rejections halt the box (see the 401 contract above); `401 worker is revoked; re-enrol it with a per-worker enrolment token` when the shared bootstrap secret is presented for an ALREADY-REVOKED `machineId` (ledger B10 — the row stays revoked); `503` when the revocation check itself could not run; `400` missing machineId on first register. Handler `server.py:3086`.
 
 ### POST `/api/worker/heartbeat`
 Worker-level presence beat; returns resolved OR-merged control flags.
 - **Auth**: bearer token (identity; body workerId ignored).
-- **Body**: optional `{currentSessions|load:int}`. `_validate_worker_heartbeat` (`server.py:1021`).
-- **Response**: `200 {ok, data:{drain, halt, updateRequired}}`; `401` invalid/revoked token; `404` worker vanished mid-flight. Handler `server.py:3142`.
+- **Body**: optional `{currentSessions|load:int}`, optional `preflight` (v23, see below). `_validate_worker_heartbeat` (`server.py:1021`).
+- **Response**: `200 {ok, data:{drain, halt, updateRequired}}`; `401` invalid/revoked token; `503` auth store unavailable; `404` worker vanished mid-flight. Handler `server.py:3142`.
+
+### The `preflight` field (v23 — worker launch self-check, ledger F9/F10/F12)
+Every failure this carries produces a box that reads **perfectly healthy** in the fleet console and cannot work: no `AIZU_SECRET_KEY` so the minted token cannot be persisted (F9.1), no `AIZU_WORKER_PLATFORMS` so it registers with `capabilities: []` and can never be leased to (F9.2), no `OPENROUTER_API_KEY` so every live job dead-letters at attempt 5 (F9.3), Chrome on 9333 while the sidecar probes 9222 (F10), or a Chrome that answers `/json/version` while refusing a DevTools attach (B6/D3). Nobody can SSH into these PCs (F12), so the box's own self-check is the only channel that gets the cause to an admin.
+
+- **Shape** — exactly `PreflightReport.to_upstream_wire()` (`worker/preflight.py`):
+  ```json
+  {"ok": false, "blocking": true, "enforced": true, "ranAt": 1786800000.12,
+   "failed": [{"id": "token_persistence", "severity": "fatal", "status": "fail", "detail": "…"},
+              {"id": "login.instagram", "severity": "warn", "status": "unknown", "detail": "skipped — CDP endpoint is unreachable"}]}
+  ```
+  `failed[]` carries every check whose status is not `pass`/`skip`. `title` and `remedy` deliberately never ride the wire — they are UI copy the fleet console resolves client-side from the `id`, which halves the body and keeps operator-facing text under our control rather than a worker's.
+
+  `status` DOES ride along, because `failed[]` mixes `fail` ("we checked, it is broken") with `unknown` ("we could not check at all"), and those need different operator copy. This is not a corner case: the commonest red state of all is Chrome being down, which marks every `login.*` row `unknown` — and remedy-by-`id` alone would render that as "not signed in", sending an admin to fix a login that was never the problem. A row from an older sidecar that omits `status` degrades to `fail`, the reading that never under-reports a problem.
+- **Cadence**: always on `register` (including the re-register a box does when its preflight heals); on `heartbeat` only when the summary CHANGED or every 10th beat (~3.3 min). An omitted field means "unchanged" — `store.record_worker_heartbeat` COALESCEs it.
+- **Validation** — `_validate_preflight_summary` (`server.py`) is tolerant, TOTAL, and **never** an error return. Non-dict ⇒ dropped. Rows are kept only for a known check id (or `login.<platform>` for a `CDP_PLATFORMS` platform) with severity ∈ `{fatal, warn}`; a bad row is dropped individually, not the whole report. Caps: 16 rows, 200-char `detail`, 8192 bytes total; over budget ⇒ the field is dropped. (The byte budget is sized so a *maximally* verbose report — 16 rows at the full detail length — still fits, since going over drops the report WHOLE and the box with the most to say would otherwise be the one that said nothing. It is still under 1% of the 1 MiB `WORKER_MAX_BODY_BYTES` the endpoint accepts.) **A malformed or oversized blob is never a `400`** (B9 rule: a diagnostic hint must never be the reason a workable box cannot register), and nothing on the auth or lease path may ever branch on it.
+- **Enforcement lives on the BOX, not here.** A blocking preflight parks the sidecar's lease loop and makes it register with `capabilities: []`; the server stores what it is told. That means `capabilities: []` now means both "misconfigured" and "parked by preflight" — the `preflight` block is the only thing that distinguishes them.
+- `detail` is **worker-authored text rendered in the superadmin console**. Render as text, never markup (E1/E2/F18).
 
 ### POST `/api/worker/lease`
 Lease one job (capabilities come from the registered row, not the body). Optional bounded long-poll (≤30 s).
-- **Body**: optional `{leasePollTimeoutSec:number}` (clamped to 30). `_validate_worker_lease` (`server.py:1151`).
-- **Response**: `200 {ok, data:{job, leaseExpiresAt}}` when a job leased, or `200 {ok, data:null}` on an empty queue (never 204); `401`. Handler `server.py:3507`.
+- **Body**: optional `{leasePollTimeoutSec:number}` (clamped to 30). `_validate_worker_lease` (`server.py:1262`).
+- **Response**: `200 {ok, data:{job, leaseExpiresAt}}` when a job leased, or `200 {ok, data:null}` on an empty queue (never 204); `401`. Handler `server.py:3966`.
+- `job` is the whitelist in `store._job_row_to_lease`: `{id, orgId, campaignId, platform, requiredAccountHandle, targetLeads, durationMinutes, engineMode, soulText, campaignBrief, runId, priorSpendUsd, leaseExpiresAt}`. `platformCredentials` is deliberately absent — a worker pulls its own job's credential from the lease-holder-gated `credential` action below. Anything baked into `jobs.spec` but missing from this dict never reaches a genuinely remote worker (B4).
+- `priorSpendUsd` (B9) is the campaign's CLOUD-side `SUM(spend_log.usd)`, resolved LIVE at lease time on the same transaction as the claim — never baked at enqueue, since a queued job may sit while other boxes spend against the same campaign. `0.0` when the campaign has no recorded spend. The box subtracts it from its own `AIZU_SPEND_CAP` (`job_runner._effective_spend_cap`) so one ceiling holds across the whole fleet instead of silently resetting per machine. An older worker binary ignores the key (`JobSpec.from_payload` drops unknown keys) and simply behaves as before.
 
 ### POST `/api/worker/jobs/{jobId}/{action}` — action ∈ `heartbeat|ack|nack`
-Job-scoped lifecycle. URL job_id + bearer token are authoritative (one worker can't touch another's job). Route parsed by `_match_worker_job_route` (`server.py:1116`); dispatcher `server.py:3543`. All actions `401` on an invalid worker token.
-- **`heartbeat`**: body optional `{runEvents:[...], runId?}`. Extends the lease; returns `200 {ok, data:{halt, drain, updateRequired, leaseExpiresAt}}` (a lost lease returns `halt:true`). `server.py:3559`.
-- **`ack`**: body `{summary?:object, leads?:[...]}` (leads capped at 500, `MAX_SYNC_LEADS`). Returns `200 {ok, data:{recorded:bool}}`. `_validate_worker_ack` (`server.py:1186`); handler `server.py:3629`.
-- **`nack`**: body `{reason (required), poison?:bool, retryAfterAt?:number}`. Returns `200 {ok, data:{recorded, outcome, retryAfterAt}}`. `_validate_worker_nack` (`server.py:1167`); handler `server.py:3648`.
+Job-scoped lifecycle. URL job_id + bearer token are authoritative (one worker can't touch another's job). Route parsed by `_match_worker_job_route` (`server.py:1227`); dispatcher `server.py:4002`. All actions `401` on an invalid worker token.
+- **`heartbeat`**: body optional `{runEvents:[...], runId?}`. Extends the lease; returns `200 {ok, data:{halt, drain, updateRequired, leaseExpiresAt}}` (a lost lease returns `halt:true`). `server.py:4021`.
+- **`ack`**: body `{summary?:object, leads?:[...], spend?:[...], dbId?:string}` (leads capped at 500, `MAX_SYNC_LEADS`; spend capped at 50, `MAX_SYNC_SPEND_ROWS`). Returns `200 {ok, data:{recorded:bool}}`. `_validate_worker_ack` (`server.py:1333`); handler `server.py:4091`.
+- **`nack`**: body `{reason (required), poison?:bool, retryAfterAt?:number, spend?:[...], dbId?:string}`. Returns `200 {ok, data:{recorded, outcome, retryAfterAt}}`. `_validate_worker_nack` (`server.py:1305`); handler `server.py:4112`.
+
+**`spend` / `dbId` on `ack` + `nack` (B9 fleet spend roll-up).** The only writer of spend is `router._record` on the BOX, into whichever DB that process opened — so before this the cloud `spend_log` never saw a single fleet dollar, the panel showed `spent` $0 / `cpl` `null` for fleet-run campaigns, and every box's cap restarted at $0.
+
+- `spend` is this ATTEMPT's delta, rolled up per `(stage, model)`: `[{stage:string, model:string|null, usd:number, at:number}]`. The worker takes a per-campaign `spend_log.id` high-water mark immediately before the run (`store.max_spend_id(campaignId)`) and ships `store.spend_since(campaignId, cursor, runId)` — an id cursor, not a `run_id` join, because a requeued attempt reuses its `run_id`. `at` is the group's EARLIEST `created_at`, clamped server-side to `min(at, now)`, so a run that spanned midnight is not all bucketed on the ack day by `spend_by_day`. Do NOT confuse this with `summary.spend_usd`, which is the campaign's LIFETIME local total summed once per session.
+- The cursor is PARKED on disk per `run_id` (`<state_dir>/run-<runId>.spend-cursor`) and only deleted once dispatch ACCEPTS the ack/nack. An attempt can end with neither — the sidecar dies and `reclaim_offline_jobs` requeues the job pinned to the same box — and a freshly-taken mark would already sit past that attempt's rows, losing those dollars from the cloud permanently and handing the phantom headroom to another box later.
+- `spend_since`'s `runId` argument EXCLUDES rows that provably belong to a different run. `JobSpec.lock_key()` is `org-platform-account`, i.e. per PLATFORM, not per campaign, so two jobs for one campaign on different platforms are NOT serialised by the box's single-flight lock; their id windows would otherwise each contain the other's rows, and since the cloud `spend_log` has no unique key both reports get inserted. Rows with no `session_id`, and rows from a PRIOR ATTEMPT of this same run, are always kept.
+- Server side each row is FORCED under the job's own campaign/org (the same BOLA guard as `leads`); non-finite / zero / negative / malformed rows are dropped, never raised on; a missing `stage` defaults to `'fleet'`. Written inside the SAME transaction as the ack/nack, so exactly-once rides the existing `leased_by` ownership check — a replayed ack writes nothing. `store._sync_acked_spend`.
+- **`nack` carries spend too, and must**: every failure route (child crash, CDP probe failure, halt, operator stop, timeout, stall) funnels through it, and a nack REQUEUE is unpinned — attempt 2 can land on a box with no record of the money attempt 1 spent.
+- `dbId` is the reporting box's database identity (`store.database_id`, a `uuid4().hex` persisted in `platform_settings.db_id`). It exists solely so the server can SKIP the roll-up when the worker's `db_path` IS this database — the default same-box topology, since `AIZU_DB` defaults to the same `aizu.db` filename the bridge uses. `spend_log` has an AUTOINCREMENT PK and no unique key, so unlike the idempotent lead sync a second insert would DOUBLE the campaign's spend and trip its cap at half the budget. A worker that cannot read its own `dbId` ships no `spend` at all.
+
+**Enqueue-time skip (best-effort only).** `_dispatch_run_to_fleet` skips a campaign whose `store.total_spend` already meets the ceiling, with `skipped: [{campaignId, reason: "spend cap reached ($25.00 spent of $20.00)"}]`; a single-campaign run turns that into a `409 run not dispatched: <reason>`.
+
+The ceiling comes from `_fleet_spend_cap_usd()`, which reads `AIZU_SPEND_CAP` **from the bridge process** and returns `null` when it is unset/non-numeric/non-positive — in which case NO campaign is skipped. That asymmetry is deliberate: `AIZU_SPEND_CAP` is a WORKER-plane variable, so on a hosted split deployment the bridge does not have it. A hard-coded fallback would make the cloud enforce a ceiling no box uses, and because `total_spend` is a lifetime sum that never resets, any long-lived campaign would eventually `409` forever with no operator control able to lift it.
+
+Enforcement is therefore box-side and authoritative: `job_runner._effective_spend_cap` re-bases the box's own cap against `priorSpendUsd`, and `job_runner.run_one_job` refuses to spawn at all when there is zero headroom, returning `halt_reason: "spend_cap"` — a POISON reason (spend only grows, so retrying cannot help), so the job dead-letters instead of burning its remaining attempts. This is also the only enforcement a REQUEUE sees, since `nack_job` returns a job straight to `queued` without going through dispatch. `campaign_meta.budget_cap` remains display-only and is NOT wired into the run path.
 
 ---
 
@@ -436,7 +480,9 @@ Cross-org read of one org's campaigns or leads (reuses the org builders). Route 
 - `404` unknown org. Handler `server.py:3452`.
 
 ### GET `/api/admin/fleet`
-- **Response**: `200 {ok, data:{workers:[...]}}`. Handler `server.py:3490`.
+- **Response**: `200 {ok, data:{workers:[...]}}` — straight pass-through of `store.list_workers()`, no re-serialization. Handler `server.py:3490`.
+- Each worker: `{id, orgId, displayName, host, os, agentVersion, maxSessions, currentSessions, capabilities, registeredAt, lastHeartbeatAt, lastSeenAgeSec, status, revokedAt, currentJob, preflight}`.
+- `preflight` (v23) is the box's last reported launch self-check, in the shape above, or `null` when it has never reported one (a pre-v23 sidecar — render that as "unknown", never as healthy). `readiness.fleet_readiness` reads the same field: an online worker whose report is `blocking` does not count towards the tenant's readiness banner.
 
 ### GET/POST `/api/admin/control-flags`
 - **GET**: `200 {ok, data:{flags:[...]}}` (`server.py:3736`).

@@ -194,6 +194,102 @@ def test_lease_surfaces_campaign_brief_but_never_platform_credentials(srv):
     assert "platform_credentials" not in resp["data"]["job"]
 
 
+def _seed_spend_job(srv, slug, *, campaign_id, spend_rows=()):
+    """A worker + a queued job on their own account handle and their OWN campaign, with
+    optional pre-existing cloud spend. Returns (token, job_id)."""
+    token, account = _isolated(srv, slug)
+    job_id = f"job-{slug}"
+    store = Store(srv["db"])
+    try:
+        store.upsert_campaign_meta(campaign_id, org_id=1)
+        for stage, usd in spend_rows:
+            store.log_spend(campaign_id, stage, usd, model="m1")
+        store.enqueue_job(job_id=job_id, campaign_id=campaign_id, platform="instagram",
+                          org_id=1, required_account_handle=account,
+                          spec={"target_leads": 1, "engine_mode": "harvest"})
+    finally:
+        store.close()
+    return token, job_id
+
+
+def test_lease_surfaces_the_campaigns_prior_cloud_spend(srv):
+    """B9 regression, over the SERVED endpoint (the B4 trap): `priorSpendUsd` is what
+    lets a box subtract spend the campaign already burned on OTHER machines from its own
+    AIZU_SPEND_CAP, instead of restarting the ceiling at $0 per box. Store-layer coverage
+    alone would not catch it being dropped from the wire — `_handle_worker_lease`
+    re-wraps `store.lease_one_job`'s dict into the response body, and B4 shipped
+    completely inert precisely because only the store layer was tested."""
+    token, _ = _seed_spend_job(srv, "priorspend", campaign_id="c-prior-spend",
+                               spend_rows=[("match", 3.0), ("vision", 1.5)])
+
+    code, resp, _ = _post(srv["base"], "/api/worker/lease", {}, bearer=token)
+
+    assert code == 200, resp
+    assert resp["data"]["job"]["priorSpendUsd"] == pytest.approx(4.5)
+
+
+def test_lease_prior_spend_is_zero_for_an_unspent_campaign(srv):
+    token, _ = _seed_spend_job(srv, "nospend", campaign_id="c-no-spend")
+    code, resp, _ = _post(srv["base"], "/api/worker/lease", {}, bearer=token)
+    assert code == 200, resp
+    assert resp["data"]["job"]["priorSpendUsd"] == 0.0
+
+
+def test_ack_rolls_fleet_spend_into_the_cloud_spend_log(srv):
+    token, job_id = _seed_spend_job(srv, "ackspend", campaign_id="c-ack-spend")
+    _post(srv["base"], "/api/worker/lease", {}, bearer=token)
+
+    code, ack, _ = _post(
+        srv["base"], f"/api/worker/jobs/{job_id}/ack",
+        {"summary": {"session_id": "s-ack-spend"}, "dbId": "a-remote-box",
+         "spend": [{"stage": "match", "model": "m1", "usd": 0.6, "at": 900.0},
+                   {"stage": "vision", "model": "m2", "usd": 0.4, "at": 950.0}]},
+        bearer=token)
+
+    assert code == 200 and ack["data"]["recorded"] is True
+    store = Store(srv["db"])
+    try:
+        # Before B9 the cloud spend_log never saw a single fleet dollar — the panel
+        # showed $0 spent / cpl None, and every box's cap restarted at $0.
+        assert store.total_spend("c-ack-spend") == pytest.approx(1.0)
+    finally:
+        store.close()
+
+
+def test_nack_rolls_fleet_spend_into_the_cloud_spend_log(srv):
+    token, job_id = _seed_spend_job(srv, "nackspend", campaign_id="c-nack-spend")
+    _post(srv["base"], "/api/worker/lease", {}, bearer=token)
+
+    code, resp, _ = _post(
+        srv["base"], f"/api/worker/jobs/{job_id}/nack",
+        {"reason": "error", "dbId": "a-remote-box",
+         "spend": [{"stage": "match", "usd": 2.25}]}, bearer=token)
+
+    assert code == 200, resp
+    assert resp["data"]["outcome"] == "requeued"   # NOT a 500 with the job left leased
+    store = Store(srv["db"])
+    try:
+        assert store.total_spend("c-nack-spend") == pytest.approx(2.25)
+    finally:
+        store.close()
+
+
+def test_ack_rejects_a_non_array_spend_field(srv):
+    token, job_id = _seed_spend_job(srv, "badspend", campaign_id="c-bad-spend")
+    _post(srv["base"], "/api/worker/lease", {}, bearer=token)
+    code, resp, _ = _post(srv["base"], f"/api/worker/jobs/{job_id}/ack",
+                          {"summary": {}, "spend": "nope"}, bearer=token)
+    assert code == 400, resp
+
+
+def test_nack_rejects_a_non_string_db_id(srv):
+    token, job_id = _seed_spend_job(srv, "baddbid", campaign_id="c-bad-dbid")
+    _post(srv["base"], "/api/worker/lease", {}, bearer=token)
+    code, resp, _ = _post(srv["base"], f"/api/worker/jobs/{job_id}/nack",
+                          {"reason": "x", "dbId": 17}, bearer=token)
+    assert code == 400, resp
+
+
 # ----- job credential (SECURITY REVIEW CRITICAL/HIGH) ----------------------------
 
 def test_credential_endpoint_returns_the_orgs_secret_to_the_lease_holder(srv):
@@ -468,3 +564,41 @@ def test_execution_backend_set_requires_admin(srv):
     code, resp, _ = _post(srv["base"], "/api/admin/execution-backend",
                           {"backend": "distributed"}, cookie=srv["normal_cookie"])
     assert code == 401, resp
+
+
+# ----- worker report validators (unit) -------------------------------------------
+
+def test_validate_worker_ack_none_payload_has_every_key():
+    """The `payload is None` short-circuit must carry `spend` too, so `_handle_job_ack`
+    can index `fields["spend"]` unconditionally instead of leaning on `.get`."""
+    from aizu.server import _validate_worker_ack
+    fields, err = _validate_worker_ack(None)
+    assert err is None
+    assert fields == {"summary": {}, "leads": [], "spend": [], "dbId": None}
+
+
+def test_validate_worker_ack_drops_ragged_spend_rows_and_caps():
+    from aizu.server import _validate_worker_ack
+    from aizu.core.store import MAX_SYNC_SPEND_ROWS
+    rows = ["nope", None, 7] + [{"stage": "s", "usd": 1.0}] * (MAX_SYNC_SPEND_ROWS + 5)
+    fields, err = _validate_worker_ack({"spend": rows, "dbId": "  box-7  "})
+    assert err is None
+    assert len(fields["spend"]) == MAX_SYNC_SPEND_ROWS
+    assert all(isinstance(r, dict) for r in fields["spend"])
+    assert fields["dbId"] == "box-7"          # trimmed
+
+
+def test_validate_worker_nack_carries_spend_and_db_id():
+    from aizu.server import _validate_worker_nack
+    fields, err = _validate_worker_nack(
+        {"reason": "error", "spend": [{"stage": "match", "usd": 1.0}], "dbId": "box-9"})
+    assert err is None
+    assert fields["spend"] == [{"stage": "match", "usd": 1.0}]
+    assert fields["dbId"] == "box-9"
+    # Absent → an empty batch and no sentinel (an older worker binary).
+    bare, err = _validate_worker_nack({"reason": "error"})
+    assert err is None and bare["spend"] == [] and bare["dbId"] is None
+    # Empty-string dbId is not an identity — normalized to None, so nothing is skipped
+    # by an accidental "" == "" comparison.
+    blank, err = _validate_worker_nack({"reason": "error", "dbId": "   "})
+    assert err is None and blank["dbId"] is None

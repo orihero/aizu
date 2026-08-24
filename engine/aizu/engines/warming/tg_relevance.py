@@ -28,8 +28,24 @@ from ..telegram.warming_writes import TgChannel
 
 log = get_logger(__name__)
 
-# A cheap text model for the metadata-only yes/no gate (pennies per session).
-DEFAULT_GATE_MODEL = "openrouter/owl-alpha"
+def _default_gate_model() -> str:
+    """The text model for the metadata-only yes/no gate (pennies per session).
+
+    Resolved through the SAME chain the router uses
+    (`AIZU_TEXT_MODEL` -> `OPENROUTER_TEXT_MODEL` -> the router's own default)
+    rather than carried as a fourth hardcoded copy of a model id. This module
+    held `"openrouter/owl-alpha"`, which was absent from OpenRouter's live model
+    listing when last checked — see memory/known-issues.md C0. A model id is a
+    third-party fact with a shelf life, and duplicating one across four files is
+    how three of those copies go stale unnoticed.
+
+    Read at CALL time, not at import time, so a `.env` loaded after this module
+    is imported is still honoured.
+    """
+    from ...core.router import OpenRouterRouter
+    return (os.environ.get("AIZU_TEXT_MODEL")
+            or os.environ.get("OPENROUTER_TEXT_MODEL")
+            or OpenRouterRouter._DEFAULT_TEXT_MODEL)
 
 _SYSTEM = (
     "You judge whether a Telegram channel is relevant to a marketing campaign's "
@@ -55,7 +71,7 @@ def _coerce_relevant(payload: dict[str, Any]) -> bool:
 
 
 def build_relevance_gate(
-    *, api_key: Optional[str] = None, model: str = DEFAULT_GATE_MODEL,
+    *, api_key: Optional[str] = None, model: Optional[str] = None,
     post: Optional[Callable[[dict[str, Any]], dict[str, Any]]] = None,
 ) -> Optional[Callable[[TgChannel, Campaign], bool]]:
     """A ``(TgChannel, Campaign) -> bool`` gate, or ``None`` to degrade.
@@ -64,6 +80,7 @@ def build_relevance_gate(
     explicit ``post`` transport is injected. ``post`` is injectable so tests drive
     the parse + fail-closed boundary without a network call.
     """
+    model = model or _default_gate_model()
     key = api_key if api_key is not None else os.environ.get("OPENROUTER_API_KEY", "")
     if not key and post is None:
         log.info("Telegram warming: no OPENROUTER_API_KEY — degrading to "

@@ -22,6 +22,14 @@ export const queryKeys = {
   runActivity: (runId: string) => ['run-activity', runId] as const,
   /** GET /api/agent/readiness — polled globally for the "agent not ready" banner. */
   agentReadiness: ['agent-readiness'] as const,
+  /**
+   * GET /api/agent/readiness?campaign=<id> — the SAME endpoint narrowed to one
+   * campaign's platforms. A distinct key on purpose: the scoped answer can be
+   * `ready:false` while the unscoped one is `ready:true` (a youtube-only fleet facing
+   * an instagram campaign), so caching them together would let whichever polled last
+   * win. `useWriteMutations` seeds only the unscoped key, which stays correct.
+   */
+  agentReadinessFor: (campaignId: string) => ['agent-readiness', campaignId] as const,
 
   // ---- superadmin plane (separate /api/admin/* branch) ----
   /** GET /api/admin/whoami — the admin session + impersonation state. */

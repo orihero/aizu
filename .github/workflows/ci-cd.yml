@@ -16,6 +16,12 @@ jobs:
   engine:
     name: Engine tests
     runs-on: ubuntu-latest
+    # HARD BOUND, deliberately tight (the suite runs in ~1 minute). A test that
+    # HANGS is worse than one that fails: without this the job burns to GitHub's
+    # 6-hour default and, because `deploy` needs: [engine, panel], deploys are
+    # blocked for six hours with no useful signal. See ledger D6 — that is
+    # exactly what a wedged `_call_bounded` fake page did.
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
 
@@ -42,6 +48,7 @@ jobs:
   panel:
     name: Panel checks + build
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
 

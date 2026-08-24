@@ -87,7 +87,9 @@ run-at-login. It feeds the child env vars only.
   `connect_over_cdp` probe** (an HTTP 200 on `/json/version` is NOT sufficient — a degraded
   Chrome answers HTTP but rejects CDP), and **never launch a second Chrome / never kill a
   Chrome on sidecar restart** (the warmed login must survive). **Default CDP port is 9333**
-  (the live-proven port), NOT 9222.
+  (the live-proven port), NOT 9222. All three also derive the `--user-data-dir` the same way
+  (§3.1): the configured path is a **base**, and the directory actually opened is
+  `<base>/<brand>` — so two browser brands can never open one profile.
 - **The job channel is outbound HTTPS only** (sidecar → cloud dispatch). It must NEVER
   depend on Tailscale. Tailscale is for ops SSH/RDP only (see §4).
 
@@ -116,7 +118,10 @@ run the engine server on `127.0.0.1:8765`).
 
 3. **Write `config.toml`** into the app config dir (see §3 for the schema). NO secrets go in
    it. Point `dispatch_base_url` at the real dispatch on `http://127.0.0.1:8765` for a local
-   loop, set `cdp_port = 9333`, and a dedicated `chrome_profile_dir`.
+   loop, set `cdp_port = 9333`, and a `chrome_profile_dir` — the profile **base**; the app
+   opens `<base>/<brand>` under it, so the base does not need to be new (§3.1). If it already
+   holds a `Default/` of its own that is a pre-derivation profile: leave it, the app will
+   describe it and warm a fresh brand dir beside it.
 
 4. **`cargo tauri dev` against the real dispatch** — do NOT freeze the sidecar yet. For dev,
    set `sidecar_binary_path` to the `aizu-worker` console script from the editable
@@ -168,7 +173,7 @@ Lives at the OS app-config dir (`app_config_dir()`); parsed by `src-tauri/src/co
 # AIZU Worker desktop config — NON-SECRET wiring only.
 dispatch_base_url  = "https://cloud.aizu.example"   # outbound HTTPS job channel (NOT loopback)
 cdp_port           = 9333                            # live-proven port (NOT 9222)
-chrome_profile_dir = "/Users/you/.aizu-cft-profile"  # DEDICATED, non-default profile
+chrome_profile_dir = "/Users/you/.aizu-cft-profile"  # profile BASE; opens <base>/<brand> (§3.1)
 sidecar_binary_path = ""                             # empty → resolve from app resources
 state_dir          = "/Users/you/.aizu-worker-state" # AIZU_WORKER_STATE
 db_path            = "/Users/you/.aizu-worker.db"    # AIZU_DB
@@ -178,6 +183,83 @@ control_port       = 8799                            # loopback control surface 
 **Secrets are NOT here.** The control-surface token is generated per spawn and injected as
 `AIZU_CONTROL_TOKEN`; `AIZU_WORKER_BOOTSTRAP_TOKEN` and provider keys come from
 env/keychain at spawn time.
+
+> ⚠ **A Chrome profile belongs to exactly one browser BRAND — crossing them wipes the
+> operator's logins.** The app launches Playwright's **Chrome for Testing**, which on macOS
+> reads the Keychain item `Chromium Safe Storage`; system Google Chrome writes
+> `Chrome Safe Storage`. Point one brand at a profile the other warmed and cookie decryption
+> fails — and Chrome **deletes** the undecryptable rows instead of quarantining them. Measured
+> on a clone of a warmed profile: 18 cookies → 0, live Instagram `sessionid` included,
+> unrecoverable afterwards by any browser (ledger A9; the version gap is NOT the cause — the
+> same build with `--use-mock-keychain` loses everything too, and the downgrade move-aside
+> machinery is Windows-only).
+>
+> `chrome_profile_dir` is therefore a **base**, not the profile: every launch site opens
+> `<base>/<brand>` (§3.1). The trap it removes is the default — `~/.aizu-cft-profile` is a
+> *name*, not a guarantee, and on a box where the operator warmed that dir by hand with system
+> Chrome the wizard's "Download browser" → "Launch warmed Chrome" sequence used to point
+> Chrome for Testing straight at it.
+
+### 3.1 The profile directory is derived from the brand — one contract, three launch sites
+
+A profile is owned by one brand, so the **directory is a function of the brand**:
+
+```
+profile_dir_for(base, brand) = <base>/<brand>
+
+  ~/.aizu-cft-profile/chrome-for-testing    ← Playwright's Chrome for Testing opens this
+  ~/.aizu-cft-profile/chrome                ← system Google Chrome opens this
+```
+
+The path **is** the ownership record. There is nothing to mark, nothing to police, no refusal
+to survive and no question anybody can answer wrong — the cross-brand open is not prevented,
+it is unreachable. That replaces the `.aizu-browser-brand` marker, its decision table, its
+refusal and the wizard's brand declaration, all of which are **deleted** (ledger A12: three
+rounds of guard, each fixing the last round's hole and opening a new one).
+
+Brand detection is by binary **path** — symlinks resolved first, then lowercased with `\`
+normalised to `/` — and it takes three rules where an obvious implementation takes one:
+
+1. path contains `chrome for testing` (case-insensitive) → `chrome-for-testing`;
+2. any path **segment** matching `^chromium(_headless_shell)?-[0-9]+$` → `chrome-for-testing`
+   (Playwright's browsers-cache dir);
+3. otherwise → `chrome`.
+
+Rule 2 is not redundant: rule 1 only ever fires on macOS, where Playwright's build is a
+`Google Chrome for Testing.app`. The same build installs as `chrome-linux64/chrome`,
+`chrome-linux/chrome` and `chrome-win64\chrome.exe` (the driver's own `EXECUTABLE_PATHS`
+table), so on Linux/Windows a substring check alone would label CfT `chrome` and send it into
+the system-Chrome directory. Symlinks are resolved *before* rule 1 because a wrapper or a
+`/usr/local/bin/google-chrome` symlink into the Playwright cache is exactly how a CfT binary
+reaches a launch site wearing another name.
+
+The three launch sites implement the identical derivation and must not drift, or the shell
+warms one directory while the worker opens another and the operator is asked to sign in again
+on a box that was already warmed: `desktop/src-tauri/src/chrome_manager.rs`,
+`engine/aizu/worker/chrome_manager.py`, `engine/scripts/warm_chrome.sh`. The bash half is
+exercised without a browser — `AIZU_WARM_CHROME_LIB=1 source engine/scripts/warm_chrome.sh`
+defines its functions and returns before `main` — and `engine/tests/test_warm_chrome_sh.py`
+asserts bash and Python agree path-for-path.
+
+**One variable name, one default, repo-wide.** Two spellings of the same setting is how a
+check ends up watching a directory nothing warms (A12):
+
+| setting | canonical | default | the other spelling |
+|---|---|---|---|
+| profile **base** | `AIZU_CHROME_PROFILE` | `~/.aizu-cft-profile` | `AIZU_CHROME_PROFILE_DIR` is **gone**. It was read only by the worker, and only it defaulted to `~/.aizu-chrome-profile` — a directory nothing in this repo ever warms, which is how the preflight's profile row came to watch an empty dir on every box. |
+| Chrome binary override | `AIZU_CHROME_BINARY` | unset → Playwright CfT → system Chrome | `CHROME_BIN` is still read, after the canonical name. It is what every runbook and the desktop shell have said for months, and it is one `elif`; dropping it would silently move an operator's pinned browser — and with it their profile directory. |
+
+The desktop app's `chrome_profile_dir` in `config.toml` is the same base by another route.
+
+**The legacy profile.** A base that itself holds a `Default/` is a profile from *before* this
+change, warmed by an unknown brand. It is never opened, never moved, never renamed, never
+copied, never backed up and never deleted. Every launch site surfaces it **once,
+informationally, never blocking**: it says the directory is there, that it was left untouched,
+that whichever browser warmed it still owns it, and that an operator who *knows* which browser
+that was can move it into the matching subdirectory themselves — printing **both** candidate
+destinations so the move is a copy-paste. No component guesses which brand warmed it. Guessing
+is the whole reason the earlier design failed, and a wrong guess costs every saved login in
+that directory, unrecoverably.
 
 ---
 
@@ -221,6 +303,19 @@ Tailscale dependency and must not gain one):
   does not yet expose a `setCapacity` control-surface action; it is presentational until
   that lands. One-live-job-per-(org,platform,account) is still enforced by single-flight.
 - **Keychain secret delivery** (see blocker #6) — dev relies on env vars.
+- **Chrome-for-Testing is downloaded at setup, not bundled** (ledger A6). The `.app` ships no
+  browser (that would add ~356 MB to every build and every update). Instead `run_sidecar.py` pins
+  `PLAYWRIGHT_BROWSERS_PATH` to the standard per-user cache — macOS `~/Library/Caches/ms-playwright`,
+  Linux `~/.cache/ms-playwright`, Windows `%USERPROFILE%\AppData\Local\ms-playwright` — because a
+  FROZEN Playwright otherwise forces `PLAYWRIGHT_BROWSERS_PATH=0` and looks inside the bundle, where
+  no browser exists. The wizard's Chrome step downloads it with the bundled Node driver
+  (`-m aizu.worker.chrome_path --install`), so the box needs no Python and no pip.
+  - The pin is a `setdefault`: ops can still point a box at a pre-seeded cache, which is the
+    airgapped path (copy a populated `ms-playwright` dir and set the variable).
+  - Because the cache is per-user and OUTSIDE the bundle, the browser survives app updates.
+  - **Verify a packaged build with:** `cd / && <app>/Contents/Resources/sidecar/aizu-worker/aizu-worker
+    -m aizu.worker.chrome_path` — it must print a path and exit 0. Run it from OUTSIDE the repo;
+    inside, the dev venv is reachable and masks the very failure you are testing for.
 - **ffmpeg is not bundled for the packaged sidecar.** The engine's optional gated Uzbek-STT
   tier (Instagram only — see `docs/architecture/engines.md` §1) shells out to `ffmpeg` on
   `PATH` (`core/transcribe.py::extract_audio_wav`) to extract a WAV from a reel's video

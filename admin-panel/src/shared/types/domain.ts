@@ -154,9 +154,18 @@ export type AgentReadiness = z.infer<typeof agentReadinessSchema>;
 /** POST /api/agent/launch-login result: whether a browser was (re)launched, plus the
  * freshly re-checked readiness (no separate refetch needed after a launch attempt). */
 export type LaunchAgentLoginResult = z.infer<typeof launchAgentLoginResponseSchema>;
-/** Options for getAgentReadiness: `refresh` forces a live probe past the ≤60s cache. */
+/**
+ * Options for getAgentReadiness: `refresh` forces a live probe past the ≤60s cache;
+ * `campaignId` narrows the fleet answer to the platforms THAT campaign actually needs.
+ *
+ * Without `campaignId` the server answers "is any worker online", which reads `ready`
+ * for an Instagram run whose fleet only advertises youtube — the false-green this
+ * option exists to close. Only ask scoped where a campaign is genuinely in scope; the
+ * global banner has none and correctly stays unscoped.
+ */
 export interface AgentReadinessOptions {
   readonly refresh?: boolean;
+  readonly campaignId?: string;
 }
 
 /** Server-side leads query: filters/sort live on the server (org-wide + paginated). */
@@ -263,6 +272,12 @@ export interface BulkStatusRequest {
 
 export interface CampaignInput {
   readonly campaignId: string;
+  // Which operation POST /api/campaign (one endpoint, two operations) is being asked
+  // for. Without it the bridge has to infer intent from existence, and a create whose
+  // name slugs onto an existing campaign silently overwrites that campaign's brief and
+  // re-points its lead history. Sent by the campaign form; omitted by field-only
+  // writes (the card's status toggle), which the bridge still treats as edits.
+  readonly op?: 'create' | 'edit';
   readonly displayName?: string;
   readonly status?: string;
   readonly budgetCap?: number;

@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { roleSchema } from './auth';
+import { leadUidOf } from '@/shared/lib/leadId';
 
 /**
  * Boundary schemas for the bridge server's /api/state payload.
@@ -327,6 +328,14 @@ export const leadNoteSchema = z.object({
   createdAtTs: z.number().catch(0),
 });
 
+/**
+ * A lead. `id` is the composite identity `(campaignId, platform, commentId)` — the
+ * engine's own `matches` primary key — and is RECOMPUTED at this boundary rather than
+ * trusted from the wire, so a single client-side definition guarantees the invariant
+ * the whole app leans on: one id ⇔ one lead record. `commentId` stays on the record as
+ * the raw platform comment id (display, export, and the write payload); it is NOT
+ * unique on its own, so never key a lookup, a React key, or a selection on it.
+ */
 export const matchSchema = z.object({
   id: z.string(),
   commentId: z.string(),
@@ -352,7 +361,7 @@ export const matchSchema = z.object({
   // payloads (and the current tests' fixtures) stay valid.
   statusHistory: z.array(statusChangeSchema).catch([]),
   notes: z.array(leadNoteSchema).catch([]),
-});
+}).transform((m) => ({ ...m, id: leadUidOf(m) }));
 
 export const platformSummarySchema = z.object({
   platform: z.string(),
@@ -678,12 +687,18 @@ export const runFlagSchema = z.object({
  * unknown status never throws the page out; the banner handles the known ones.
  * `lastEventAt` is epoch SECONDS (MAX(run_events.created_at) for the run) or null
  * when the run has emitted nothing yet — used to detect a stalled fleet run.
+ * `reason` is the worker's failure code (e.g. `cdp_unreachable`) or null — free text
+ * from the server, so render it as text and read the failed/succeeded wording off
+ * `status`, never off `reason` being present (a done job can carry one too).
  */
 export const fleetJobSchema = z.object({
   jobId: z.string(),
   status: z.string(),
   lastEventAt: z.number().nullable(),
   leaseExpiresAt: z.number().nullable(),
+  reason: z.string().nullable().catch(null),
+  attempts: z.number().nullable().catch(null),
+  maxAttempts: z.number().nullable().catch(null),
 });
 
 /**

@@ -19,6 +19,20 @@ version of this got it wrong): Python has no safe way to kill a thread
 mid-syscall, so on a genuine timeout the wrapped call is still running somewhere
 in the background — it just no longer holds up the caller.
 
+That tradeoff has a corollary this module CANNOT fix, and callers must (F-7): an
+abandoned thread never reaches its own ``finally``, so anything the callable was
+holding — a Playwright node driver, a socket, a lock — stays held. A deadline is
+not a kill switch, and a generic bounder has no idea what its callable owns.
+Repeating a bounded call that keeps timing out therefore leaks once per attempt:
+``readiness.read_browser_state`` (re-run every 30s by a parked worker) was
+leaking a node process per tick until it grew its OWN hard stop — a wall-clock
+timer, armed before the driver is spawned, that kills the driver process even
+after the caller has walked away. If you are about to wrap something expensive in
+``call_bounded`` and call it on a loop, copy that pattern; do not try to make
+this function clean up for you. The abandoned threads are named ``bounded-call``
+so a stack dump of a suspect process names the culprit instead of a bare
+``Thread-47``.
+
 This is deliberately a raw ``threading.Thread(daemon=True)``, NOT a
 ``concurrent.futures.ThreadPoolExecutor``. That is not a style choice: CPython
 registers a single process-wide ``atexit`` hook
@@ -69,8 +83,11 @@ def call_bounded(fn: Callable[[], T], timeout_s: float, *,
 
     # daemon=True is load-bearing (see module docstring): if fn() never returns,
     # this thread is abandoned forever, but that can NEVER block interpreter
-    # shutdown the way a ThreadPoolExecutor worker would.
-    threading.Thread(target=_runner, daemon=True).start()
+    # shutdown the way a ThreadPoolExecutor worker would. The NAME is load-bearing
+    # for a different reason: an abandoned thread is diagnosed from a stack dump
+    # of a process nobody can attach a debugger to, and "Thread-47" says nothing
+    # about which subsystem is stuck (F-7 was found this way).
+    threading.Thread(target=_runner, daemon=True, name="bounded-call").start()
     if not done.wait(timeout_s):
         raise timeout_exc(f"call exceeded {timeout_s:.3f}s hard deadline")
     if box.error is not None:

@@ -91,6 +91,23 @@ def _screen_name(node: dict) -> str:
     return sn if isinstance(sn, str) else ""
 
 
+def _author_rest_id(node: dict) -> str:
+    """The posting account's STABLE `rest_id`, from the user subtree.
+
+    `_screen_name` returns the @handle, which changes on a rename; `rest_id` does
+    not, and X's own `UserByScreenName` keys on it. Taken from `core` only — the
+    tweet's OWN rest_id lives at the top level and must never be mistaken for the
+    author's (Campaign Lab, Remedy Sheet #2)."""
+    core = node.get("core")
+    if not isinstance(core, dict):
+        return ""
+    for d in _walk(core):
+        rid = d.get("rest_id") or d.get("rest_id_str")
+        if isinstance(rid, (str, int)) and str(rid).strip():
+            return str(rid)
+    return ""
+
+
 def _looks_like_tweet(d: dict) -> bool:
     """A tweet node: has a rest_id and a non-empty full_text."""
     return _rest_id(d) is not None and bool(_full_text(d))
@@ -120,7 +137,8 @@ def parse_posts(body: Any) -> list[Reel]:
         if rid is None or rid in seen:
             continue
         seen.add(rid)
-        out.append(Reel(reel_id=rid, caption=_full_text(d), author=_screen_name(d)))
+        out.append(Reel(reel_id=rid, caption=_full_text(d), author=_screen_name(d),
+                        author_id=_author_rest_id(d)))
     return out
 
 

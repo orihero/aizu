@@ -1,4 +1,4 @@
-//! Per-run log tail (Phase 6 SCAFFOLD, UNCOMPILED).
+//! Per-run log tail (BUILD-PLAN Phase 6).
 //!
 //! Follows the EXACT per-run log file the current job's killable child writes —
 //! `currentJob.logFilePath` from `GET /status` (e.g. `<state>/logs/run-<run_id>.log`). It

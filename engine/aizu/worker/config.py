@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import os
 import uuid
 from dataclasses import dataclass, field
@@ -21,6 +22,16 @@ from typing import Any, Optional
 
 from ..core.config import MAX_CAMPAIGN_BRIEF_BYTES, SUPPORTED_PLATFORMS
 from . import DEFAULT_CONTROL_SURFACE_PORT, DEFAULT_HEARTBEAT_INTERVAL_SEC
+
+# 9333 is the canonical warmed-Chrome port repo-wide (ledger F10). The literal is
+# duplicated from readiness.DEFAULT_CDP_URL on purpose, exactly as core/cdp.py does it:
+# `readiness` imports Playwright AT IMPORT TIME, and every sidecar process imports this
+# module, so `from ..readiness import DEFAULT_CDP_URL` dragged the whole Playwright
+# package into an API-only box that never opens a browser — and silently defeated the
+# lazy `from .. import readiness` imports inside `worker/preflight.py`, which exist for
+# precisely that reason. One string is not worth the dependency; the drift risk is
+# pinned by a test asserting the two constants stay equal.
+DEFAULT_CDP_URL = "http://127.0.0.1:9333"
 
 # A job whose duration is unbounded by the spec still gets a worst-case wall-clock
 # brake so a stuck session can't hold a lease forever (BUILD-PLAN risk #9). The
@@ -148,6 +159,14 @@ class JobSpec:
     # the worker emits/streams run_events under the SAME id the cloud already knows.
     # Absent for a hand-rolled/legacy job → the worker generates one locally.
     run_id: Optional[str] = None
+    # B9: the campaign's CLOUD-side spend total, resolved at LEASE time (not baked at
+    # enqueue — a queued job may sit while other boxes spend against the same campaign)
+    # and subtracted from this box's AIZU_SPEND_CAP in job_runner._effective_spend_cap.
+    # Without it the cap is checked against whichever DB this process opened, so a
+    # campaign that already burned its budget elsewhere reads $0 here and the ceiling
+    # silently resets per machine. None on a legacy/hand-rolled job or an older server
+    # → the box falls back to its local total alone (today's behaviour).
+    prior_spend_usd: Optional[float] = None
 
     @classmethod
     def from_payload(cls, payload: Any) -> "JobSpec":
@@ -205,6 +224,8 @@ class JobSpec:
             platform_credentials=_coerce_optional_dict(
                 pick("platformCredentials", "platform_credentials"), "platformCredentials"),
             run_id=_coerce_optional_str(pick("runId", "run_id")),
+            prior_spend_usd=_coerce_optional_nonneg_float(
+                pick("priorSpendUsd", "prior_spend_usd")),
         )
 
     def lock_key(self) -> str:
@@ -242,6 +263,8 @@ class JobSpec:
             payload["platformCredentials"] = self.platform_credentials
         if self.run_id is not None:
             payload["runId"] = self.run_id
+        if self.prior_spend_usd is not None:
+            payload["priorSpendUsd"] = self.prior_spend_usd
         return payload
 
 
@@ -253,7 +276,25 @@ class WorkerConfig:
     cfg_dir: Path
     db_path: str
     state_dir: Path
-    cdp_url: str = "http://127.0.0.1:9222"
+    # Ledger F10 — THE canonical CDP port is 9333, shared with readiness.DEFAULT_CDP_URL
+    # so the bridge, the CLI, the warm script and this box can never disagree again. It
+    # used to be 9222 here while `scripts/warm_chrome.sh`, `engines.md` and the desktop
+    # ChromeManager all launched Chrome on 9333, so a box provisioned per the warming
+    # runbook probed a dead port and told its operator to "start Chrome" on a machine
+    # where Chrome was already running.
+    cdp_url: str = DEFAULT_CDP_URL
+    # True iff AIZU_CDP_URL was PRESENT in the environment (presence, not truthiness — an
+    # empty-string pin is still an explicit operator act). `preflight.resolve_cdp_url`
+    # reads it to decide between two behaviours that must never be confused: an unpinned
+    # box whose Chrome is on the other well-known port is silently ADOPTED with a logged
+    # warning (it keeps working unattended), while an explicitly pinned box gets a named
+    # fatal instead — silently overriding an operator's explicit setting is how you lose
+    # an afternoon.
+    cdp_url_explicit: bool = False
+    # Adoption receipt stamped by `preflight.resolve_cdp_url` when it moved `cdp_url` off
+    # the configured port onto the live sibling. Surfaces as the `cdp_port_drift` check's
+    # detail so the override is never invisible. None = no adoption happened.
+    cdp_url_drift_note: Optional[str] = None
     spend_cap: float = 20.0
     text_model: str = "openrouter/owl-alpha"
     vision_model: str = "nex-agi/nex-n2-pro:free"
@@ -312,7 +353,10 @@ class WorkerConfig:
             cfg_dir=cfg_dir,
             db_path=db_path,
             state_dir=state_dir,
-            cdp_url=os.environ.get("AIZU_CDP_URL", "http://127.0.0.1:9222"),
+            cdp_url=os.environ.get("AIZU_CDP_URL") or DEFAULT_CDP_URL,
+            # Presence, not value: `AIZU_CDP_URL=` (blank) still means "an operator
+            # touched this", so resolve_cdp_url must report drift rather than adopt.
+            cdp_url_explicit="AIZU_CDP_URL" in os.environ,
             spend_cap=float(os.environ.get("AIZU_SPEND_CAP", "20.0")),
             text_model=os.environ.get("OPENROUTER_TEXT_MODEL", "openrouter/owl-alpha"),
             vision_model=os.environ.get(
@@ -361,7 +405,13 @@ class WorkerConfig:
                 cfg_dir=Path(data["cfg_dir"]),
                 db_path=str(data["db_path"]),
                 state_dir=Path(data["state_dir"]),
-                cdp_url=str(data.get("cdp_url", "http://127.0.0.1:9222")),
+                # The child NEVER resolves ports — it uses exactly the URL the parent
+                # settled on (which is why cdp_url_explicit/cdp_url_drift_note are
+                # deliberately NOT projected into the child dict). The default here only
+                # covers a legacy/hand-rolled spec file with no cdp_url at all, and it is
+                # the highest-consequence literal in the F10 list: this is the port the
+                # actual job child attaches to.
+                cdp_url=str(data.get("cdp_url", DEFAULT_CDP_URL)),
                 spend_cap=float(data.get("spend_cap", 20.0)),
                 text_model=str(data.get("text_model", "openrouter/owl-alpha")),
                 vision_model=str(data.get("vision_model", "nex-agi/nex-n2-pro:free")),
@@ -384,16 +434,24 @@ class WorkerConfig:
         path.write_text(fresh, encoding="utf-8")
         return fresh
 
-    def run_args(self, job: JobSpec) -> argparse.Namespace:
+    def run_args(self, job: JobSpec, *,
+                 spend_cap_override: Optional[float] = None) -> argparse.Namespace:
         """A fresh argparse.Namespace for one job — the surface ``_run_session_loop``
-        and ``_build_run_io`` read. Built per call; never mutated or shared."""
+        and ``_build_run_io`` read. Built per call; never mutated or shared.
+
+        ``spend_cap_override`` is the B9 effective cap (this box's AIZU_SPEND_CAP minus
+        what the campaign already spent elsewhere — see
+        ``job_runner._effective_spend_cap``). Passed IN rather than patched onto the
+        returned Namespace so the object stays build-once/never-mutated. None keeps the
+        raw box cap."""
         return argparse.Namespace(
             dry_run=False,
             target_leads=job.target_leads,
             duration_minutes=job.duration_minutes or self.max_job_minutes,
             engine_mode=job.engine_mode,
             cdp_url=self.cdp_url,
-            spend_cap=self.spend_cap,
+            spend_cap=(self.spend_cap if spend_cap_override is None
+                       else spend_cap_override),
             text_model=self.text_model,
             vision_model=self.vision_model,
             config=str(self.cfg_dir),
@@ -409,6 +467,27 @@ class WorkerConfig:
 def _env_flag(name: str) -> bool:
     """A truthy env flag (1/true/yes/on, case-insensitive). Absent/empty → False."""
     return os.environ.get(name, "").strip().lower() in ("1", "true", "yes", "on")
+
+
+def _coerce_optional_nonneg_float(value: Any) -> Optional[float]:
+    """Coerce an untrusted optional non-negative float (B9 priorSpendUsd) or None.
+
+    Deliberately TOLERANT, unlike the required fields above: a garbage/negative/bool/
+    non-finite value degrades to None (fall back to the box-local total alone) rather
+    than hard-nacking a job — an accounting hint must never make a runnable job
+    unrunnable. bool is rejected explicitly since `isinstance(True, int)` is True, and
+    OverflowError is caught alongside TypeError/ValueError because JSON integers are
+    unbounded — `float(10**400)` raises it, and a lease body that crashes JobSpec parsing
+    would nack the job `invalid_spec` over a field that is only a hint."""
+    if value is None or isinstance(value, bool):
+        return None
+    try:
+        out = float(value)
+    except (TypeError, ValueError, OverflowError):
+        return None
+    if not math.isfinite(out) or out < 0:
+        return None
+    return out
 
 
 def _coerce_optional_int(value: Any, label: str) -> Optional[int]:

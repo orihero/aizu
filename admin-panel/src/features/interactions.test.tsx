@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'vitest';
-import { screen, waitFor } from '@testing-library/react';
+import { screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import {
   buildActiveRun,
@@ -14,6 +14,7 @@ import {
 } from '@/test/fixtures';
 import { FakePanelRepository } from '@/test/fakePanelRepository';
 import { renderWithProviders } from '@/test/renderWithProviders';
+import { leadRoute } from '@/shared/lib/leadId';
 import type { CampaignBriefForm } from '@/shared/types/domain';
 import { LeadsPage } from './leads/LeadsPage';
 import { SettingsPage } from './settings/SettingsPage';
@@ -121,16 +122,97 @@ describe('Leads filters', () => {
   });
 });
 
+describe('Lead identity is the composite (campaign, platform, comment) key', () => {
+  // Two campaigns really can hold the same commenter, and one comment id can repeat
+  // across platforms. The panel used to key leads on the bare commentId, so all three
+  // rows collapsed into one: clicking a row opened — and wrote status to — whichever
+  // copy happened to be first in the list.
+  const IG_A = buildMatch({
+    commentId: 'dup-1', campaignId: 'cmp-a', platform: 'instagram',
+    username: 'alice_a', text: 'A-side lead', status: 'new',
+  });
+  const IG_B = buildMatch({
+    commentId: 'dup-1', campaignId: 'cmp-b', platform: 'instagram',
+    username: 'bob_b', text: 'B-side lead', status: 'new',
+  });
+  const X_A = buildMatch({
+    commentId: 'dup-1', campaignId: 'cmp-a', platform: 'x',
+    username: 'carol_x', text: 'X-side lead', status: 'new',
+  });
+
+  test('all three leads render as distinct rows', async () => {
+    const repo = new FakePanelRepository(buildPanelState({ MATCHES: [IG_A, IG_B, X_A] }));
+    renderWithProviders(<LeadsPage />, { repository: repo, route: '/leads', path: '/leads' });
+
+    expect(await screen.findByText('alice_a')).toBeInTheDocument();
+    expect(screen.getByText('bob_b')).toBeInTheDocument();
+    expect(screen.getByText('carol_x')).toBeInTheDocument();
+    // ...on three distinct identities (also the React key for each row).
+    expect(new Set([IG_A.id, IG_B.id, X_A.id]).size).toBe(3);
+  });
+
+  test("clicking a row opens THAT row's lead, not a same-commentId sibling", async () => {
+    const user = userEvent.setup();
+    const repo = new FakePanelRepository(buildPanelState({ MATCHES: [IG_A, IG_B, X_A] }));
+    // Optional param so the row click's own navigation stays inside this route.
+    renderWithProviders(<LeadsPage />, {
+      repository: repo, route: '/leads', path: '/leads/:leadId?',
+    });
+
+    await user.click(await screen.findByText('bob_b'));
+
+    // The drawer's Source block names the campaign the open lead really belongs to.
+    const drawer = within(await screen.findByRole('dialog'));
+    expect(drawer.getByText('cmp-b')).toBeInTheDocument();
+    expect(drawer.getByText('B-side lead')).toBeInTheDocument();
+    expect(drawer.queryByText('A-side lead')).not.toBeInTheDocument();
+  });
+
+  test("a status write from the drawer targets the opened campaign's record", async () => {
+    const user = userEvent.setup();
+    const repo = new FakePanelRepository(buildPanelState({ MATCHES: [IG_A, IG_B, X_A] }));
+    renderWithProviders(<LeadsPage />, {
+      repository: repo, route: leadRoute(IG_B.id), path: '/leads/:leadId',
+    });
+
+    await user.selectOptions(await screen.findByLabelText('Set lead status'), 'interested');
+
+    await waitFor(() => { expect(repo.statusWrites).toHaveLength(1); });
+    expect(repo.statusWrites[0]).toMatchObject({
+      campaignId: 'cmp-b', platform: 'instagram', commentId: 'dup-1', status: 'interested',
+    });
+    // ...and only that record moved: the two siblings stay 'new'. The fake applies
+    // the write with the same composite key the engine uses, so a write that named
+    // only the commentId would visibly flip all three.
+    const reread = await repo.fetchLeads({ page: 1, pageSize: 50 });
+    const after = new Map(
+      (reread.ok ? reread.value.items : []).map((m) => [m.id, m.status]),
+    );
+    expect(after.get(IG_B.id)).toBe('interested');
+    expect(after.get(IG_A.id)).toBe('new');
+    expect(after.get(X_A.id)).toBe('new');
+  });
+
+  test("a deep link to the second platform's copy opens that copy", async () => {
+    const repo = new FakePanelRepository(buildPanelState({ MATCHES: [IG_A, IG_B, X_A] }));
+    renderWithProviders(<LeadsPage />, {
+      repository: repo, route: leadRoute(X_A.id), path: '/leads/:leadId',
+    });
+
+    const drawer = within(await screen.findByRole('dialog'));
+    expect(drawer.getByText('X-side lead')).toBeInTheDocument();
+    expect(drawer.getByText('cmp-a')).toBeInTheDocument();
+    expect(drawer.queryByText('A-side lead')).not.toBeInTheDocument();
+  });
+});
+
 describe('Lead drawer reel link', () => {
   test('links out to the source reel on its platform', async () => {
-    const repo = new FakePanelRepository(
-      buildPanelState({
-        MATCHES: [buildMatch({ commentId: 'c1', platform: 'instagram', reelId: 'DXOML7vjQhn' })],
-      }),
-    );
+    const lead = buildMatch({ commentId: 'c1', platform: 'instagram', reelId: 'DXOML7vjQhn' });
+    const repo = new FakePanelRepository(buildPanelState({ MATCHES: [lead] }));
     renderWithProviders(<LeadsPage />, {
       repository: repo,
-      route: '/leads/c1',
+      route: leadRoute(lead.id),
       path: '/leads/:leadId',
     });
 
@@ -140,14 +222,11 @@ describe('Lead drawer reel link', () => {
   });
 
   test('shows the plain reel id when the platform has no derivable URL', async () => {
-    const repo = new FakePanelRepository(
-      buildPanelState({
-        MATCHES: [buildMatch({ commentId: 'c1', platform: 'telegram', reelId: 'tg-42' })],
-      }),
-    );
+    const lead = buildMatch({ commentId: 'c1', platform: 'telegram', reelId: 'tg-42' });
+    const repo = new FakePanelRepository(buildPanelState({ MATCHES: [lead] }));
     renderWithProviders(<LeadsPage />, {
       repository: repo,
-      route: '/leads/c1',
+      route: leadRoute(lead.id),
       path: '/leads/:leadId',
     });
 
@@ -776,10 +855,9 @@ import { buildLeadNote } from '@/test/fixtures';
 describe('Lead drawer notes', () => {
   test('adding a note records a note write for the lead', async () => {
     const user = userEvent.setup();
-    const repo = new FakePanelRepository(
-      buildPanelState({ MATCHES: [buildMatch({ commentId: 'c1' })] }),
-    );
-    renderWithProviders(<LeadsPage />, { repository: repo, route: '/leads/c1', path: '/leads/:leadId' });
+    const lead = buildMatch({ commentId: 'c1' });
+    const repo = new FakePanelRepository(buildPanelState({ MATCHES: [lead] }));
+    renderWithProviders(<LeadsPage />, { repository: repo, route: leadRoute(lead.id), path: '/leads/:leadId' });
 
     const textarea = await screen.findByPlaceholderText('Add a note…');
     await user.type(textarea, 'Left a voicemail');
@@ -791,20 +869,15 @@ describe('Lead drawer notes', () => {
   });
 
   test('only the author sees a delete control on a note', async () => {
-    const repo = new FakePanelRepository(
-      buildPanelState({
-        MATCHES: [
-          buildMatch({
-            commentId: 'c1',
-            notes: [
-              buildLeadNote({ id: '10', authorId: 1, createdAt: 'Jun 11' }), // current user
-              buildLeadNote({ id: '11', authorId: 99, createdAt: 'Jun 12' }), // someone else
-            ],
-          }),
-        ],
-      }),
-    );
-    renderWithProviders(<LeadsPage />, { repository: repo, route: '/leads/c1', path: '/leads/:leadId' });
+    const lead = buildMatch({
+      commentId: 'c1',
+      notes: [
+        buildLeadNote({ id: '10', authorId: 1, createdAt: 'Jun 11' }), // current user
+        buildLeadNote({ id: '11', authorId: 99, createdAt: 'Jun 12' }), // someone else
+      ],
+    });
+    const repo = new FakePanelRepository(buildPanelState({ MATCHES: [lead] }));
+    renderWithProviders(<LeadsPage />, { repository: repo, route: leadRoute(lead.id), path: '/leads/:leadId' });
 
     expect(await screen.findByRole('button', { name: 'Delete note from Jun 11' })).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Delete note from Jun 12' })).toBeNull();

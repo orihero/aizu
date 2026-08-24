@@ -77,6 +77,11 @@ SYSTEM_CAMPAIGN_GEN = (
     '- "extractDef": a newline list of the fields to pull from each lead, one '
     "markdown bullet per line as `- key — short gloss` (e.g. `- phone — contact "
     "number`). Pick fields a salesperson would need.\n"
+    '- "seedNouns": array of 3-6 BARE NOUNS naming the thing itself, in the '
+    "audience's own language — the words a local would actually say out loud "
+    '(e.g. ["remont", "dizayn"], NOT ["homeRenovationServices"]). No hashtags, '
+    "no modifiers: the engine expands these into real, verified search terms "
+    "itself. Get this vocabulary right and leave the discovery to the engine.\n"
     '- "seedHashtags": array of 3-8 discovery hashtags/search terms (no leading #).\n'
     '- "seedAccounts": array of 0-6 relevant public account handles, or [].\n'
     '- "languageMix": array of ISO language codes the audience likely uses '

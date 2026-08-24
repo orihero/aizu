@@ -58,3 +58,21 @@ def test_call_bounded_does_not_block_on_the_abandoned_worker_thread():
     with pytest.raises(_Boom):
         call_bounded(lambda: threading.Event().wait(), timeout_s=0.1, timeout_exc=_Boom)
     assert time.monotonic() - t0 < 1.0
+
+
+def test_the_abandoned_worker_thread_names_itself():
+    """F-7 was diagnosed from a process listing on a box nobody can attach a debugger
+    to: an abandoned bounded call outlives its caller, and the only trace it leaves is a
+    thread. A bare "Thread-47" says nothing about which subsystem is stuck."""
+    running = threading.Event()
+
+    def _hang():
+        running.set()
+        threading.Event().wait()
+
+    with pytest.raises(_Boom):
+        call_bounded(_hang, timeout_s=0.2, timeout_exc=_Boom)
+    assert running.wait(1.0)
+    assert any(t.name == "bounded-call" and t.is_alive()
+               for t in threading.enumerate()), \
+        "the abandoned thread must be identifiable by name in a stack dump"

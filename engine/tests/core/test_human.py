@@ -189,6 +189,9 @@ def test_mouse_move_disabled_is_noop():
     assert page.mouse.moves == []
 
 
+# Was SKIPPED while `_call_bounded`/`_bounded` enforced no deadline (ledger D6) —
+# with nothing bounding the call this HUNG FOREVER instead of failing. The deadline
+# is back, on Playwright's owning thread (`core/pw_owner.py`), so it is live again.
 def test_mouse_move_call_timeout_s_bounds_a_page_that_hangs_forever():
     """Hang-prevention fix #1: neither page.evaluate (once the CDP pipe itself
     goes quiet) nor page.mouse.move (no timeout= argument, ever) is reliably

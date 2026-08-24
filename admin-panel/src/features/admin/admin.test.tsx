@@ -120,6 +120,118 @@ describe('fleet actions', () => {
     expect(screen.getByText('idle')).toBeInTheDocument();
   });
 
+  test('a box parked by its own preflight reads PARKED, never healthy', async () => {
+    // F9.1/F9.2's whole point: this worker is `online` with a fresh heartbeat and looks
+    // perfect in every other column. The Health cell is the only thing that says it can
+    // take no work, and which check to go fix.
+    const user = userEvent.setup();
+    const repo = makeRepo();
+    repo.adminSession = buildAdminSession();
+    repo.fleet = [buildWorker({
+      id: 'wrk-parked', displayName: 'ops-pc-3', capabilities: [],
+      preflight: {
+        ok: false, blocking: true, enforced: true, ranAt: 1_786_800_000,
+        failed: [{
+          id: 'capabilities', severity: 'fatal', status: 'fail',
+          detail: 'neither AIZU_WORKER_PLATFORMS nor AIZU_WORKER_CAPABILITIES is set',
+        }],
+      },
+    })];
+
+    renderAdmin(repo, '/admin');
+
+    await screen.findByText('ops-pc-3');
+    await user.click(await screen.findByText('parked · capabilities'));
+
+    expect(screen.getByText(/neither AIZU_WORKER_PLATFORMS/)).toBeInTheDocument();
+    // The remedy is resolved client-side from the id — it never rides the wire.
+    expect(screen.getByText(/Set AIZU_WORKER_PLATFORMS=all/)).toBeInTheDocument();
+  });
+
+  test('an unknown row says "could not check" and offers no misleading remedy', async () => {
+    // Chrome being down is the commonest red state, and it marks every login.* row
+    // `unknown`. Telling an admin to go finish a login would send them to fix something
+    // that was never broken, on a PC nobody can SSH into.
+    const user = userEvent.setup();
+    const repo = makeRepo();
+    repo.adminSession = buildAdminSession();
+    repo.fleet = [buildWorker({
+      id: 'wrk-nochrome', displayName: 'ops-pc-4',
+      preflight: {
+        ok: false, blocking: true, enforced: true, ranAt: 1_786_800_000,
+        failed: [
+          { id: 'cdp_reachable', severity: 'fatal', status: 'fail', detail: 'nothing answers' },
+          {
+            id: 'login.instagram', severity: 'warn', status: 'unknown',
+            detail: 'skipped — CDP endpoint is unreachable',
+          },
+        ],
+      },
+    })];
+
+    renderAdmin(repo, '/admin');
+
+    await screen.findByText('ops-pc-4');
+    await user.click(await screen.findByText('parked · cdp_reachable'));
+
+    expect(screen.getByText('could not check')).toBeInTheDocument();
+    expect(screen.queryByText(/finish the login and any 2FA/)).not.toBeInTheDocument();
+    // ...while the check that IS red still carries its instruction.
+    expect(screen.getByText(/repoint AIZU_CDP_URL/)).toBeInTheDocument();
+  });
+
+  test('a worker with no preflight reported reads as unknown, not as ready', async () => {
+    const repo = makeRepo();
+    repo.adminSession = buildAdminSession();
+    repo.fleet = [buildWorker({ displayName: 'ops-pc-5', preflight: null })];
+
+    renderAdmin(repo, '/admin');
+
+    await screen.findByText('ops-pc-5');
+    expect(screen.getByText('—')).toBeInTheDocument();
+    expect(screen.queryByText('ready')).not.toBeInTheDocument();
+  });
+
+  test('a healthy box reads ready', async () => {
+    const repo = makeRepo();
+    repo.adminSession = buildAdminSession();
+    repo.fleet = [buildWorker({
+      displayName: 'ops-pc-6',
+      preflight: {
+        ok: true, blocking: false, enforced: true, ranAt: 1_786_800_000, failed: [],
+      },
+    })];
+
+    renderAdmin(repo, '/admin');
+
+    await screen.findByText('ops-pc-6');
+    expect(screen.getByText('ready')).toBeInTheDocument();
+  });
+
+  test('worker-authored detail is rendered as text, never as markup', async () => {
+    // `detail` is a string an off-cloud box chose, landing on the superadmin surface
+    // (E1/E2/F18). React escapes it; this asserts nobody swapped in dangerouslySetInnerHTML.
+    const user = userEvent.setup();
+    const repo = makeRepo();
+    repo.adminSession = buildAdminSession();
+    const payload = '<img src=x onerror=alert(1)>';
+    repo.fleet = [buildWorker({
+      displayName: 'ops-pc-7',
+      preflight: {
+        ok: false, blocking: true, enforced: true, ranAt: 1,
+        failed: [{ id: 'cdp_reachable', severity: 'fatal', status: 'fail', detail: payload }],
+      },
+    })];
+
+    renderAdmin(repo, '/admin');
+
+    await screen.findByText('ops-pc-7');
+    await user.click(await screen.findByText('parked · cdp_reachable'));
+
+    expect(screen.getByText(payload)).toBeInTheDocument();
+    expect(document.querySelector('img')).toBeNull();
+  });
+
   test('sets a global halt control flag', async () => {
     const user = userEvent.setup();
     const repo = makeRepo();

@@ -81,6 +81,11 @@ export function buildWorker(overrides: Partial<FleetWorker> = {}): FleetWorker {
     status: 'online',
     revokedAt: null,
     currentJob: null,
+    // Default null = "this box has never reported a preflight", which the Health cell
+    // renders as "—". Deliberately NOT a green summary: a worker the server has no report
+    // for has not been cleared of anything, and a fixture that defaulted to healthy would
+    // let a regression in that distinction pass every test.
+    preflight: null,
     ...overrides,
   };
 }

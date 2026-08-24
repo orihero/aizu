@@ -28,6 +28,7 @@ from typing import Optional
 from urllib.parse import unquote_plus
 
 from ...core.cdp import CDPBaseConfig, CDPFeedBase, PlaywrightTimeout
+from ..base import HaltSession
 from ...core.feed import Reel
 from ...core.logsetup import get_logger
 from ...core.media import (MediaWorkdir, download_media, extract_frames,
@@ -66,7 +67,19 @@ MIN_MEDIA_BYTES = 20_000
 REELS_URL = "https://www.instagram.com/reels/"
 TAG_URL = "https://www.instagram.com/explore/tags/{tag}/"
 ACCOUNT_REELS_URL = "https://www.instagram.com/{account}/reels/"
-REEL_PERMALINK = "https://www.instagram.com/reel/{code}/"
+# The POST permalink, not /reel/<code>/. Measured live 2026-08-21 against four real
+# codes: /reel/<code>/ landed on a DIFFERENT reel 3 times out of 4 (Instagram serves
+# the singular form into its swipeable /reels/ surface, which restores its own
+# position and drops the requested code), while /p/<code>/ landed on the requested
+# code 4 out of 4. That bounce was the single biggest loss in the funnel — 22 of 65
+# relevant reels were skipped by `_open_reel_landing_check` before a comment could
+# ever be fetched, plus 24 more as "unavailable", i.e. ~70% of everything the
+# campaign correctly identified as on-campaign never reached the classifier.
+# Verified the /p/ page still serves comments to the interception path (a graphql
+# payload carrying comment content arrives, and the Comment control is present), so
+# this changes WHERE we land, not what we can read. `_CODE_IN_PAGE_URL` already
+# matched /p/ before this change.
+REEL_PERMALINK = "https://www.instagram.com/p/{code}/"
 
 # Attribution: the comment endpoint names its media by numeric pk in the REST
 # path or the GraphQL `media_id` variable; the opened permalink names it by
@@ -143,10 +156,16 @@ class CDPFeed(CDPFeedBase):
                 return  # cannot positively identify the media — drop, never guess
             comments, cursor = parse_comments(body)
             if comments:
-                bucket = self._comments_by_reel.setdefault(rid, [])
-                known = {c.comment_id for c in bucket}
-                bucket.extend(c for c in comments if c.comment_id not in known)
-                self._comment_cursor_by_reel[rid] = cursor
+                # Locked: this runs on the Playwright OWNER thread while
+                # fetch_comments reads on the caller's (core/cdp.py's
+                # _queue_lock). No nesting — the reel branch above already
+                # returned, so _enqueue_reel's own acquisition is unreachable
+                # from here.
+                with self._queue_lock:
+                    bucket = self._comments_by_reel.setdefault(rid, [])
+                    known = {c.comment_id for c in bucket}
+                    bucket.extend(c for c in comments if c.comment_id not in known)
+                    self._comment_cursor_by_reel[rid] = cursor
 
     def _attribute_reel(self, response) -> Optional[str]:
         """The shortcode of the reel a comment response belongs to, from the
@@ -390,11 +409,42 @@ class CDPFeed(CDPFeedBase):
         # BEFORE the blocking _page_unavailable evaluate: if the landed URL no longer names
         # this reel, skip it. Conservative — it only fires when the code is absent, so a
         # valid single-reel view (which keeps the code) is never falsely skipped.
-        if reel.reel_id not in str(page.url):
-            log.warning("CDP open_reel bounced off the permalink (swipeable surface?) · "
-                        "reel=%s landed=%s", reel.reel_id, page.url)
+        if not self._open_reel_landing_check(reel, page):
             return False
         return not self._page_unavailable(page)
+
+    def _open_reel_landing_check(self, reel, page) -> bool:
+        """Did we actually land on THIS reel? False = bounced (skip); raises
+        HaltSession on a login/challenge wall.
+
+        Two distinct failures share one landed URL, and the wall must be tested
+        FIRST because it defeats the bounce test. Instagram redirects an expired
+        session to `/accounts/login/?next=/reel/<code>/`, which CONTAINS the code —
+        so `reel.reel_id in landed` is True and the wall read as a successful open.
+        `_login_wall_reason` was only ever consulted from walk() after SOURCE
+        navigation, never here, so a session that expired mid-run kept "opening"
+        reels and scoring whatever the wall rendered. A wall halts rather than
+        skips: there is no reel behind it and no later reel will fare better,
+        which is the same tier-3 treatment walk() already gives it.
+
+        The bounce case stays a plain skip. A reel discovered on a swipeable
+        /reels/ surface can bounce back INTO the feed, whose URL drops the code;
+        reading comments there attributes an ADJACENT reel's comments to this one.
+        `page.url` is a cached property (no protocol call), so this is a safe
+        short-circuit before the blocking `_page_unavailable` evaluate.
+        """
+        landed = str(page.url)
+        wall = self._login_wall_reason(landed)
+        if wall is not None:
+            reason, kind = wall
+            log.error("CDP open_reel landed on a login/challenge wall · url=%s · %s",
+                      landed, reason)
+            raise HaltSession(reason, kind=kind)
+        if reel.reel_id not in landed:
+            log.warning("CDP open_reel bounced off the permalink (swipeable surface?) · "
+                        "reel=%s landed=%s", reel.reel_id, landed)
+            return False
+        return True
 
     @staticmethod
     def _page_unavailable(page) -> bool:
@@ -417,13 +467,21 @@ class CDPFeed(CDPFeedBase):
         self._saw_data = False
         self._open_comments_and_paginate()
 
-        all_comments = self._comments_by_reel.get(reel_id, [])
+        # SNAPSHOT under the lock, then slice the copy. The returned comments and
+        # the persisted watermark MUST describe the same list: interception now
+        # runs on the Playwright owner thread, so reading the live list would let
+        # it grow between `all_comments[start:]` and `len(all_comments)` and
+        # persist a cursor past comments this call never returned — those are
+        # never scored and never re-read on a later poll (silent lead loss).
+        with self._queue_lock:
+            all_comments = list(self._comments_by_reel.get(reel_id, []))
+        total = len(all_comments)
         # Count watermark = robust "new since last poll" that survives re-scrapes.
         start = int(since_cursor) if (since_cursor and since_cursor.isdigit()) else 0
         new = all_comments[start:]
         log.debug("CDP fetched comments · reel=%s new=%d total=%d",
-                  reel_id, len(new), len(all_comments))
-        return new, str(len(all_comments))
+                  reel_id, len(new), total)
+        return new, str(total)
 
     def _open_comments_and_paginate(self) -> None:
         """Open the comment view of the centered reel (a read action) and scroll
@@ -439,15 +497,66 @@ class CDPFeed(CDPFeedBase):
         page = self._ipage
         if page is None:
             return  # no reel opened (open_reel not called / failed) → nothing to read
+        # OWN wall-clock ceiling, separate from the feed scroll's (2026-08-20 fleet
+        # stall). `max_comment_scrolls` bounds the ROUNDS, not the seconds, and each
+        # round can fall through to a full `_scroll(page)` — so before core/cdp.py
+        # capped the notch batch this loop was worth 3 x ~210s, and it runs inside
+        # `_process_comments`, which bumps `sessions.last_activity_at` only once the
+        # whole reel is done. A round count is not a time bound; this is.
+        # Armed BEFORE the dialog-open click: that click is three proxied owner
+        # calls (mouse, click, invoke) and is inside the same unheartbeated block,
+        # so a ceiling that started after it would not be a ceiling on this method.
+        deadline = self._clock() + self.cfg.max_comment_pagination_seconds
         self._open_comment_dialog(page)
-        for _ in range(self.cfg.max_comment_scrolls):
+        for done in range(self.cfg.max_comment_scrolls):
+            if self._clock() >= deadline:
+                log.warning("CDP comment pagination out of time after %d round(s) "
+                            "— scoring what already arrived", done)
+                break
+            # BOUNDED RETRY, N = 0 further rounds: stop at the first round that
+            # STARTS with a wedged owner. Every remaining round would be
+            # `_scroll_comment_dialog` fast-failing and then a dead `_scroll`
+            # batch. The live log's dozens of "comment-dialog scroll timed out —
+            # falling back" lines are exactly that: the loop retrying a scroll it
+            # had already been told cannot work.
+            if self._owner.is_wedged():
+                log.warning("CDP comment pagination stopped after %d round(s) — the "
+                            "Playwright owner is still inside a hung call, so no "
+                            "dialog scroll can run", done)
+                break
             if not self._scroll_comment_dialog(page):
                 self._scroll(page)  # fallback: inline comments, scroll the page
             time.sleep(self.cfg.settle_seconds)
+            # One round done. The whole method runs inside `fetch_comments`, which
+            # `_process_comments` calls BEFORE its first heartbeat, so without this
+            # the dialog-open click plus every round is one silent block: the
+            # fallback `_scroll(page)` alone is worth ~91s, and the deadline above
+            # only stops the NEXT round from starting, never shortens the one in
+            # flight. Progress, not a timer — a round actually completed.
+            self._progress()
+        # Escalate a genuinely dead owner to the named halt (`cdp_call_wedged`,
+        # SOFT/canary) instead of limping. `walk()` already does this, but the
+        # comment path is reached from `_process_comments`, NOT from walk() — so a
+        # session that wedged after its last scroll used to keep polling comments
+        # forever with no halt and no heartbeat. HaltSession propagates cleanly:
+        # `instagram/session.py` catches it around the per-reel loop.
+        self._halt_if_owner_wedged()
 
     def _open_comment_dialog(self, page) -> None:
-        """Click the clickable ancestor of the comment icon by its centre point."""
+        """Click the clickable ancestor of the comment icon by its centre point.
+
+        Focus FIRST, then measure, then click — all three in that order. The click is
+        mouse input, so the tab must hold input focus or Chrome never ACKs it and the
+        owner thread is poisoned for the rest of the run. But raising a tab can change
+        layout/scroll, so focusing BETWEEN the measurement and the click leaves stale
+        coordinates and the click misses the comment button entirely: the dialog never
+        opens, no comment XHR fires, and every reel reports `new=0 total=0` — a silent
+        zero-comment run that looks exactly like reels that genuinely have no comments.
+        Observed live on 2026-08-20: reels that had returned `total=3` an hour earlier
+        returned `total=0` on every fetch with the focus call in the wrong place.
+        """
         try:
+            self._focus(page)
             box = page.evaluate(
                 """() => {
                   const svg = document.querySelector(
@@ -461,6 +570,7 @@ class CDPFeed(CDPFeedBase):
                   return {x: r.x + r.width / 2, y: r.y + r.height / 2};
                 }""")
             if box:
+                # Already focused above, and measured in that same state.
                 page.mouse.click(box["x"], box["y"])
                 time.sleep(self.cfg.settle_seconds)
         except PlaywrightTimeout:
@@ -471,15 +581,35 @@ class CDPFeed(CDPFeedBase):
             pass  # comments may already be inline; interception still fires
 
     def _scroll_comment_dialog(self, page) -> bool:
-        """Scroll the tallest scrollable container inside the open dialog.
+        """Scroll the tallest comment scroller — inside the dialog when there is one,
+        else on the page itself.
 
-        Returns True if a dialog scroll container was found and scrolled."""
+        Scoping this to ``div[role=dialog]`` was correct for the modal that
+        ``/reel/<code>/`` used to open, and wrong the moment the permalink moved to
+        ``/p/<code>/`` (see REEL_PERMALINK): the post page renders its comments
+        INLINE, with no dialog anywhere. Measured on a post with 12 comments:
+        ``hasDialog: false``, yet a page-level scroller of scrollHeight 2172 vs
+        clientHeight 382 holding the real comment list (Reply / View all N replies
+        controls present). The dialog-only lookup returned False on every such reel,
+        so pagination never ran and every fetch reported ``new=0 total=0`` — 23 of
+        23 on the run that found this.
+
+        Returning False is doubly expensive, which is why this matters more than a
+        missed page of comments: False is also the branch that routes
+        ``_open_comments_and_paginate`` into the humanised mouse-scroll fallback,
+        and that is the path the owner-thread wedge lives on. Finding the scroller
+        keeps the whole reel on pure ``page.evaluate`` and never dispatches mouse
+        input at all.
+
+        Returns True if a scroll container was found and scrolled."""
         try:
             return bool(page.evaluate(
                 """() => {
-                  const dlg = document.querySelector("div[role=dialog]");
-                  if (!dlg) return false;
-                  const scrollers = [...dlg.querySelectorAll('*')].filter(e =>
+                  // Prefer the dialog when one is open (older /reel/ modal, and the
+                  // "view all comments" overlay); fall back to the page for /p/.
+                  const root = document.querySelector("div[role=dialog]") || document.body;
+                  if (!root) return false;
+                  const scrollers = [...root.querySelectorAll('*')].filter(e =>
                     e.scrollHeight > e.clientHeight + 40 &&
                     /auto|scroll/.test(getComputedStyle(e).overflowY));
                   const t = scrollers.sort(

@@ -9,6 +9,7 @@ import tempfile
 import pytest
 
 import aizu.cli as cli
+from aizu.core.feed import FeedSource
 from aizu.core.store import Store
 
 
@@ -29,7 +30,10 @@ def _args():
 @pytest.fixture(autouse=True)
 def _stub_feed_and_creds(monkeypatch):
     monkeypatch.setattr(cli, "_resolve_platform_credentials", lambda *_a, **_k: None)
-    monkeypatch.setattr("aizu.dispatch.build_feed", lambda *_a, **_k: object())
+    # A real FeedSource, not a bare object(): _build_run_io attaches the
+    # per-source accounting sink to the feed it just built, so the stub has to
+    # honour the interface it is standing in for.
+    monkeypatch.setattr("aizu.dispatch.build_feed", lambda *_a, **_k: FeedSource())
     monkeypatch.setenv("OPENROUTER_API_KEY", "x")
 
 
@@ -75,3 +79,40 @@ def test_no_store_falls_back_to_env_only(monkeypatch):
     router, _, _ = cli._build_run_io(_Campaign(), None, dry_run=False, args=_args())
     assert router.enable_comparison is True
     assert router.compare_models == ["candidate-a"]
+
+
+# ----- model resolution: the CLI must not shadow the router's chain -----
+# (memory/known-issues.md C0 — both CLI literals were dead ids on OpenRouter,
+# and the explicit pass made AIZU_TEXT_MODEL unreachable on the CLI path.)
+
+def test_the_cli_supplies_no_model_default_of_its_own():
+    from aizu.cli import build_parser
+    args = build_parser().parse_args(["run", "--campaign", "c"])
+    assert args.text_model is None
+    assert args.vision_model is None
+
+
+def test_an_explicit_cli_flag_still_wins(monkeypatch):
+    from aizu.cli import build_parser
+    args = build_parser().parse_args(
+        ["run", "--campaign", "c", "--text-model", "pinned/model"])
+    assert args.text_model == "pinned/model"
+
+
+def test_the_local_ollama_knob_is_reachable_on_the_cli_path(monkeypatch):
+    """`AIZU_TEXT_MODEL` sits ABOVE `OPENROUTER_TEXT_MODEL` in the router's chain
+    (core/router.py:364-370) precisely so a run can point at a local VL model
+    without disturbing the cloud defaults. The CLI's literal default made it
+    unreachable, because an explicit argument outranks the entire chain."""
+    from aizu.core.router import OpenRouterRouter
+    monkeypatch.setenv("AIZU_TEXT_MODEL", "local/qwen3-vl")
+    monkeypatch.setenv("OPENROUTER_TEXT_MODEL", "cloud/other")
+    assert OpenRouterRouter(api_key="x", text_model=None).text_model == "local/qwen3-vl"
+
+
+def test_no_dead_model_literal_survives_in_the_cli(monkeypatch):
+    import pathlib
+    src = pathlib.Path(__file__).parents[1] / "aizu" / "cli.py"
+    body = src.read_text()
+    for dead in ("openrouter/owl-alpha", "nex-agi/nex-n2-pro:free"):
+        assert dead not in body, f"cli.py still hardcodes the dead id {dead}"

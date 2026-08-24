@@ -337,13 +337,21 @@ read-budget soft-cap · loops toward target (algorithmic feed).
 The three managed-CDP engines attach to **one** warmed, logged-in Chrome over the DevTools
 Protocol (`AIZU_CDP_URL`, default `127.0.0.1:9333`). The engine never launches its own
 browser; `engine/scripts/warm_chrome.sh` brings up the Chrome-for-Testing build it can attach
-to (see that script's header for the two Chrome 149 / default-profile gotchas). **All three
-accounts live in this same profile** — log into each site once and the session persists.
+to (see that script's header for the three gotchas: the default profile, the profile↔browser-brand
+binding, and the Chrome 149 CDP regression — which is history, not current behaviour: on 2026-08-18
+both system Chrome 151.0.7922.138 and Chrome for Testing 151.0.7922.34 attached cleanly. CfT stays
+the default because it is protocol-matched to the installed Playwright and cannot auto-update out
+from under it). **All three accounts live in this same profile** — log into each site once and the
+session persists.
 
 **Setup (once):**
 
 1. `engine/scripts/warm_chrome.sh` — launches Chrome-for-Testing on the CDP port with a
-   dedicated `--user-data-dir`.
+   dedicated `--user-data-dir`. Whichever browser **brand** warms that dir owns it forever:
+   on macOS, opening a Chrome-for-Testing profile with system Google Chrome (or the reverse)
+   DELETES every cookie in it, sessions included — different Keychain item, failed decryption,
+   dropped rows (ledger A9). The script refuses to kill whatever holds the CDP port for the
+   same reason: that process is your warmed browser (ledger A10).
 2. In that window, log into **all** the managed platforms you'll run:
    `instagram.com`, `linkedin.com`, and `x.com`. The cookies persist in the profile dir.
 3. Re-running the engine reuses the same window; you only re-log-in if a session expires or a

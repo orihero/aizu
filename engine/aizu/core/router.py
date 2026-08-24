@@ -9,7 +9,9 @@ Per the operator's choice this build is **OpenRouter cloud-only**: there is no
 resident local model yet. The interface keeps a `tier` field and an
 `escalate`-shaped return so a local tier can be slotted in front later with no
 caller changes. Every cloud call:
-  - retries with backoff,
+  - retries with backoff, inside ONE wall-clock budget per logical classification
+    (`_CLASSIFY_BUDGET_SEC`) so nested retries can never outlast the session
+    watchdog,
   - degrades to a low-confidence local-style verdict + raises a soft flag on
     repeated failure (PRD §9: cloud degraded → degrade-to-local + flag),
   - logs spend per campaign/stage (PRD §6).
@@ -61,6 +63,120 @@ def chat_completions_url() -> str:
 _PRICE = {
     "default":        (0.15, 0.60),   # (prompt, completion) per 1M tokens
 }
+
+# Provider statuses that will NOT fix themselves between one reel and the next.
+# Retrying these is pure wall-clock: max_retries x exponential backoff on EVERY
+# classification call, for a request that cannot succeed until a human edits a
+# key, tops up an account, or corrects a model id. Measured on a live run with a
+# dead key: ~7s burnt per call, ~40s per reel, forever.
+#
+# Deliberately EXCLUDED:
+#   429 — rate limiting is exactly the transient case backoff exists for.
+#   400 — usually the `response_format` rejection that classify_text recovers
+#         from by latching JSON mode off (see _looks_like_param_rejection);
+#         treating it as terminal would disable the cloud leg for a model that
+#         works fine without JSON mode.
+_FATAL_STATUS_HINT = {
+    401: "the API key was rejected — check OPENROUTER_API_KEY",
+    402: "out of credit — top up the OpenRouter account or lower the run's scope",
+    403: "the account is not allowed to use this model",
+    404: ("no such model — OpenRouter retires ids regularly (ledger D2); check "
+          "OPENROUTER_TEXT_MODEL / OPENROUTER_VISION_MODEL against /api/v1/models"),
+}
+_FATAL_STATUS = frozenset(_FATAL_STATUS_HINT)
+
+_DEGRADED_MARKER = "cloud leg disabled"
+
+# ---- wall clock: one classification, one budget (fleet run 2026-08-20) -------
+# job-2099fb29e88b dead-lettered after 5 attempts, every one halted by the bridge
+# session watchdog ("stalled: no activity for over 180s"). ONE classification could
+# legitimately run for minutes: `_post_verdict` loops `_PARSE_RETRY_LIMIT` (2) and
+# each pass runs `_post`'s full `max_retries` (3) ladder, and the request timeout
+# was a bare `timeout=60.0` — which httpx applies to EVERY phase separately
+# (connect/read/write/pool), so a single request could burn far more than 60s. It
+# did: 142s separated "OpenRouter retry 1/3" (10:33:24) from "retry 2/3" (10:35:46)
+# on the failing run. Replayed against the pre-change code in tests/test_router.py:
+# 127s for an always-malformed 200, 187s for a hanging provider (one classification
+# outlasting the watchdog on its own), 254s and 6 requests when the parse-retry or
+# the JSON-mode stripped retry buys a SECOND full ladder on top.
+#
+# Two bounds, both needed:
+#   1. per-phase request caps (below) instead of one 60s scalar, and
+#   2. `_CLASSIFY_BUDGET_SEC` — a single wall clock for ONE logical classification,
+#      shared by the parse-retries, the transport retries AND the JSON-mode
+#      stripped retry. Spent means stop: take the degrade path (tier="degraded",
+#      which escalates the cascade and raises `cloud_degraded`) instead of buying
+#      one more ladder we cannot afford.
+#
+# Sizing, against `session_watchdog.STALL_TIMEOUT_SEC` = 180:
+#   read=60s    deliberately the SAME number the scalar had, so no request that
+#               succeeds today can be cut short by this change — text was measured
+#               p90 ~42s live and a non-streaming completion sends no bytes until
+#               the whole answer exists, so the read phase must cover generation.
+#               What changes is that connect/write/pool no longer get 60s EACH.
+#   budget=80s  one full read timeout plus a clamped second attempt. Only the READ
+#               phase is clamped to the budget's remaining time (see
+#               `_request_timeout`), so the provable ceiling for one classification
+#               is budget + connect + write + pool = 80 + 20 = 100s — 56% of the
+#               watchdog, 80s of margin, against the 187-254s the same scenarios
+#               cost before.
+_CONNECT_TIMEOUT_SEC = 8.0
+_READ_TIMEOUT_SEC = 60.0
+_WRITE_TIMEOUT_SEC = 8.0
+_POOL_TIMEOUT_SEC = 4.0
+_CLASSIFY_BUDGET_SEC = 80.0
+# Below this much budget left, opening another socket is pointless: the reply could
+# not arrive before the deadline anyway, so spend the time degrading instead.
+_MIN_ATTEMPT_SLICE_SEC = 5.0
+# Marker on every "out of wall clock" error, read by `_looks_like_param_rejection`
+# the same way `_DEGRADED_MARKER` is: running out of time is not a `response_format`
+# problem, and a stripped retry would cost another ladder we by definition have no
+# budget for.
+_BUDGET_MARKER = "classification budget spent"
+
+
+class _TerminalProviderError(RuntimeError):
+    """A provider error that must never be retried and never be mistaken for a
+    recoverable param rejection. Raised by _post, caught by the normal degrade
+    paths in the classify_* callers."""
+
+
+@dataclass
+class _CallBudget:
+    """The wall clock allowed to ONE logical classification, start to degrade.
+
+    Passed down `_post_verdict` -> `_post` so the parse-retries and the transport
+    retries draw on the SAME allowance instead of multiplying (2 x 3 requests was
+    the direct cause of the 2026-08-20 worker_stall dead-letter).
+
+    `clock` is injectable for the same reason the router's `sleep` is: a test must
+    be able to drive a whole retry ladder — timeouts, backoffs and all — through
+    simulated time, with nothing actually sleeping.
+    """
+
+    limit: float
+    clock: Callable[[], float]
+    started: float = 0.0
+
+    def __post_init__(self) -> None:
+        self.started = self.clock()
+
+    def spent(self) -> float:
+        return max(0.0, self.clock() - self.started)
+
+    def remaining(self) -> float:
+        return self.limit - self.spent()
+
+    def exhausted(self) -> bool:
+        return self.remaining() < _MIN_ATTEMPT_SLICE_SEC
+
+    def error(self, detail: str = "") -> RuntimeError:
+        """The exception that ends a classification that ran out of clock. Carries
+        `_BUDGET_MARKER` so no downstream heuristic mistakes it for something
+        retryable, and the last transport error so the `cloud_degraded` flag still
+        tells the operator WHY the time went."""
+        msg = f"{_BUDGET_MARKER}: {self.spent():.1f}s of {self.limit:.0f}s"
+        return RuntimeError(f"{msg} · last error: {detail}" if detail else msg)
 
 
 @dataclass
@@ -126,6 +242,46 @@ def _content_or_none(body: dict[str, Any]) -> Optional[str]:
         return None
 
 
+def _raw_prefix(text: str, limit: int = 120) -> str:
+    """First few characters of a model reply, whitespace-collapsed, for a log line
+    or a health-flag detail — enough to tell an empty body from prose from a
+    truncated JSON object without dumping a whole caption into the flag."""
+    flat = " ".join((text or "").split())
+    return (flat[:limit] + "\u2026") if len(flat) > limit else flat
+
+
+def _has_usable_verdict(p: dict[str, Any]) -> bool:
+    """True when a parsed reply actually decides something.
+
+    `_decision_from_payload` defaults a missing label to "unknown" and a missing
+    score to 0.00 — downstream that is indistinguishable from a CONFIDENT "no",
+    so the absence of both has to be caught before it ever becomes a Decision
+    (live IG shakedown 2026-08-19: 3 of 12 reels came back this way and were
+    silently rejected). A bare label="unknown" is no verdict for the same reason;
+    a numeric score alone is one, even unlabelled.
+
+    A STATED label is authoritative: an explicit ``{"label":"unknown","score":0.0}``
+    decides nothing no matter what score rides along with it. Reading the two keys
+    as an OR instead let exactly that payload through — which is byte-for-byte the
+    shape the shakedown logged — so the score branch is reachable only when the
+    reply omitted ``label`` entirely.
+    """
+    if not isinstance(p, dict) or not p:
+        return False
+    label = p.get("label")
+    if isinstance(label, str):
+        stripped = label.strip().lower()
+        return bool(stripped) and stripped != "unknown"
+    score = p.get("score")
+    if isinstance(score, bool):      # True/False is a coercible non-answer
+        return False
+    try:
+        float(score)                 # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return False
+    return True
+
+
 def _decision_from_payload(p: dict[str, Any], tier: str, usd: float,
                            raw: str, model: str = "") -> Decision:
     def _f(key: str, default: float) -> float:
@@ -187,6 +343,7 @@ class OpenRouterRouter:
                  spend_cap_usd: Optional[float] = None,
                  json_mode: bool = True,
                  sleep: Callable[[float], None] = time.sleep,
+                 clock: Callable[[], float] = time.monotonic,
                  compare_models: Optional[list[str]] = None,
                  enable_comparison: bool = False,
                  base_url: Optional[str] = None,
@@ -219,7 +376,15 @@ class OpenRouterRouter:
         # that can't do JSON mode pays the double-retry once, not on every call.
         self._json_mode = json_mode
         self._sleep = sleep
+        # Monotonic by design (wall-clock jumps must not hand a call more or less
+        # budget), and injectable so tests drive `_CallBudget` deterministically.
+        self._clock = clock
+        # Latched ON by the first TERMINAL provider error (see _FATAL_STATUS). Once
+        # set, _post fails immediately with no socket and no backoff, so the rest of
+        # the run degrades to the local stand-in at once instead of re-paying
+        # max_retries x exponential backoff on every single classification call.
         self._degraded = False
+        self._degraded_reason = ""
         # Model-comparison fan-out (superadmin-switchable — see store.py
         # model_comparison_enabled). `enable_comparison` is resolved by the CALLER
         # (never read from the DB here); explicit `compare_models` > env
@@ -283,16 +448,59 @@ class OpenRouterRouter:
         ct = float(usage.get("completion_tokens", 0) or 0)
         return pt / 1e6 * pin + ct / 1e6 * pout
 
-    def _post(self, payload: dict[str, Any]) -> dict[str, Any]:
+    def _new_budget(self, limit: float = _CLASSIFY_BUDGET_SEC) -> _CallBudget:
+        """A fresh allowance for one logical classification (see _CallBudget)."""
+        return _CallBudget(limit=limit, clock=self._clock)
+
+    def _request_timeout(self, budget: Optional[_CallBudget]) -> Any:
+        """Timeout for ONE request — split per phase, not the old `timeout=60.0`.
+
+        httpx applies a scalar timeout to each phase separately, so 60.0 never meant
+        "this request takes at most a minute": the 142s gap between two retry lines
+        on the 2026-08-20 run is what that actually bought. Connect/write/pool get
+        small fixed caps because none of them has any business running long for a
+        few-KB POST; only READ can legitimately take ~a minute (a non-streaming
+        completion sends nothing until the answer is generated), so READ is the one
+        phase clamped to the budget's remaining time. That asymmetry is what makes
+        the ceiling for a whole classification `budget + connect + write + pool`
+        (100s) rather than `budget x 4`.
+        """
+        read = _READ_TIMEOUT_SEC
+        if budget is not None:
+            read = max(_MIN_ATTEMPT_SLICE_SEC, min(read, budget.remaining()))
+        return httpx.Timeout(read, connect=_CONNECT_TIMEOUT_SEC,
+                             write=_WRITE_TIMEOUT_SEC, pool=_POOL_TIMEOUT_SEC)
+
+    def _post(self, payload: dict[str, Any], *,
+              budget: Optional[_CallBudget] = None) -> dict[str, Any]:
+        """One request with the retry ladder. `budget`, when given, is the wall
+        clock this call shares with everything else in the same logical
+        classification; `None` (campaign generation) keeps the pre-budget behaviour,
+        since that path is operator-initiated, is not under the session watchdog,
+        and legitimately produces much longer replies than a verdict."""
         if httpx is None:
             raise RuntimeError("httpx not available")
+        # Already latched off by a terminal provider error: fail instantly. Callers
+        # catch this and degrade, so the run keeps making progress on the local
+        # stand-in rather than sleeping through a doomed retry ladder per call.
+        if self._degraded:
+            raise _TerminalProviderError(
+                f"{_DEGRADED_MARKER}: {self._degraded_reason}")
         last_err: Optional[Exception] = None
         for attempt in range(self.max_retries):
+            # Checked BEFORE the socket, so the budget is a ceiling on requests
+            # issued, not a thing noticed after the fact.
+            if budget is not None and budget.exhausted():
+                raise budget.error(str(last_err) if last_err else "")
             try:
                 r = httpx.post(self._endpoint(), headers=self._headers(),
-                               json=payload, timeout=60.0)
+                               json=payload, timeout=self._request_timeout(budget))
                 if r.status_code == 429 or r.status_code >= 500:
                     raise RuntimeError(f"retryable status {r.status_code}")
+                if r.status_code in _FATAL_STATUS:
+                    self._latch_degraded(r.status_code)
+                    raise _TerminalProviderError(
+                        f"{_DEGRADED_MARKER}: {self._degraded_reason}")
                 r.raise_for_status()
                 body = r.json()
                 # A 200 with no usable choices is the flaky/free-model failure
@@ -302,13 +510,87 @@ class OpenRouterRouter:
                 if _content_or_none(body) is None:
                     raise RuntimeError("malformed 200: no usable choices")
                 return body
+            except _TerminalProviderError:
+                # Never retried and never swallowed: the provider has told us this
+                # request can't succeed until an operator changes something.
+                raise
             except Exception as e:  # noqa: BLE001
                 last_err = e
                 backoff = self.base_delay * (2 ** attempt)
+                if budget is not None:
+                    # Never sleep past the deadline: backoff that outlives the
+                    # budget is pure watchdog risk for a request we will not make.
+                    backoff = max(0.0, min(backoff, budget.remaining()))
                 log.debug("OpenRouter retry %d/%d · backoff=%.1fs · %s",
                           attempt + 1, self.max_retries, backoff, e)
                 self._sleep(backoff)
         raise RuntimeError(f"OpenRouter failed after {self.max_retries} retries: {last_err}")
+
+    # A 200 whose content is not a verdict is re-asked at most ONCE, never on the
+    # full ladder: text calls measured p90 ~42s on the live run and temperature is
+    # 0, so re-asking the identical prompt three times mostly buys ~90s of wall
+    # clock per reel for the identical garbage. The one extra attempt still catches
+    # the only version of this a retry CAN fix (a truncated / half-streamed reply).
+    _PARSE_RETRY_LIMIT = 2          # the first attempt plus exactly one more
+
+    def _post_verdict(self, payload: dict[str, Any], *,
+                      budget: Optional[_CallBudget] = None) -> dict[str, Any]:
+        """`_post` for the classify_* call sites, whose reply is worthless unless it
+        parses into a label/score.
+
+        Live IG shakedown 2026-08-19: 3 of 12 reels came back HTTP 200 with choices
+        present but content that was prose, not JSON. `_extract_json` returns {} for
+        that and `_decision_from_payload` then manufactures label=unknown score=0.00
+        confidence=0.00 with tier="cloud" — a CONFIDENT reject that
+        `cascade._unsure` cannot detect (not degraded, confidence below the escalate
+        band, score nowhere near the threshold), logged as `Cloud relevance ✓`, with
+        no re-ask and no health flag, made permanent by the TTL-free seen_reels
+        watermark. Raising instead puts the call on the degrade path, where
+        tier=="degraded" makes the cascade escalate and `cloud_degraded` fires.
+
+        The raised message MUST keep the words "malformed 200":
+        `_looks_like_param_rejection` keys off them, so a reply whose raw text
+        happens to contain "400"/"unsupported" is never mistaken for a
+        `response_format` rejection that latches JSON mode off.
+
+        The re-ask draws on the caller's `budget` rather than a fresh one. Adding
+        this wrapper is what turned `max_retries` requests per classification into
+        `_PARSE_RETRY_LIMIT x max_retries` (2 x 3), which is how one gate call could
+        outlast the 180s session watchdog; the shared budget keeps the fix (a
+        verdictless 200 is never read as a confident reject) without the wall clock.
+
+        A wrapper rather than a `_post` flag on purpose: `generate_json` returns
+        arbitrary objects (campaign JSON has no label/score) and must keep `_post`'s
+        behaviour exactly. Every network/5xx/terminal-status rule still lives in
+        `_post` and is unchanged — this only re-asks a *successful* request whose
+        answer decided nothing.
+        """
+        raw = ""
+        for attempt in range(self._PARSE_RETRY_LIMIT):
+            # The re-ask shares the caller's wall clock: two parse attempts x three
+            # transport attempts is exactly the multiplication that stalled the
+            # session, so once the clock is spent we stop and let the caller degrade.
+            if budget is not None and budget.exhausted():
+                log.warning("Cloud verdict attempt skipped · %.1fs of %.0fs budget spent",
+                            budget.spent(), budget.limit)
+                raise budget.error("no usable verdict · raw=" + (raw or "<empty>"))
+            body = self._post(payload, budget=budget)
+            content = _content_or_none(body) or ""
+            if _has_usable_verdict(_extract_json(content)):
+                return body
+            raw = _raw_prefix(content)
+            log.warning("Cloud 200 carried no usable verdict · attempt=%d/%d · raw=%s",
+                        attempt + 1, self._PARSE_RETRY_LIMIT, raw or "<empty>")
+        raise RuntimeError("malformed 200: unparseable content · raw=" + (raw or "<empty>"))
+
+    def _latch_degraded(self, status: int) -> None:
+        """Turn the cloud leg off for the rest of this router's life and say why in
+        operator language. Logged at ERROR exactly once — the per-call degrade
+        warning that follows is already noisy enough."""
+        self._degraded = True
+        self._degraded_reason = f"HTTP {status} — {_FATAL_STATUS_HINT[status]}"
+        log.error("Cloud LLM disabled for this run · %s · every remaining call "
+                  "uses the local stand-in until this is fixed", self._degraded_reason)
 
     @staticmethod
     def _looks_like_param_rejection(err: Exception) -> bool:
@@ -318,6 +600,20 @@ class OpenRouterRouter:
         is the culprit and worth retrying without (and latching off)."""
         msg = str(err).lower()
         if "malformed 200" in msg:        # the flaky/free-model failure — not our param
+            return False
+        if _BUDGET_MARKER in msg:
+            # Out of wall clock says nothing about response_format, and the stripped
+            # retry would share the same (spent) budget anyway — so it would cost a
+            # no-op request and could latch JSON mode off for a model that is merely
+            # slow. The latch still happens on any later call whose rejection comes
+            # back inside its budget.
+            return False
+        if isinstance(err, _TerminalProviderError) or _DEGRADED_MARKER in msg:
+            # A dead key/credit/model is not a response_format problem. Without
+            # this, every latched call would still burn a second _post to "retry
+            # without JSON mode" — cheap now that it no-ops, but it would also
+            # permanently disable JSON mode for a router whose only sin was a
+            # typo'd model id.
             return False
         return ("response_format" in msg or "400" in msg
                 or "client error" in msg or "unsupported" in msg)
@@ -402,9 +698,12 @@ class OpenRouterRouter:
             return self._degrade(campaign_id, stage, "spend cap")
         payload = self._build_text_payload(instruction=instruction, content=content,
                                            system=system, model=self.text_model)
+        # ONE budget for the whole classification — parse-retries, transport
+        # retries and the stripped retry below all draw on it.
+        budget = self._new_budget()
         t0 = time.time()
         try:
-            body = self._post(payload)
+            body = self._post_verdict(payload, budget=budget)
         except Exception as e:  # noqa: BLE001
             # A model that rejects `response_format` must not degrade every call.
             # If the failure looks like a request rejection (not a flaky 200/5xx),
@@ -414,7 +713,12 @@ class OpenRouterRouter:
                 self._json_mode = False
                 payload.pop("response_format", None)
                 try:
-                    body = self._post(payload)
+                    # Same budget on purpose: the stripped retry is part of the same
+                    # logical classification, so it must not double the wall clock.
+                    # If the rejection ladder already ate the budget this raises
+                    # without a socket and we degrade — the latch is still set, so
+                    # the next call pays nothing for JSON mode.
+                    body = self._post_verdict(payload, budget=budget)
                 except Exception as e2:  # noqa: BLE001
                     return self._degrade(campaign_id, stage, str(e2))
             else:
@@ -443,7 +747,11 @@ class OpenRouterRouter:
                                            system=system, model=model)
         t0 = time.time()
         try:
-            body = self._post(payload)
+            # Its own budget, not the primary's: these run on worker threads (a
+            # shared _CallBudget would be cross-thread state) but the reel still
+            # WAITS on them in `_classify_text_with_comparison`, so an unbounded
+            # comparison model would stall the session just as the primary did.
+            body = self._post(payload, budget=self._new_budget())
             text = _content_or_none(body)
             if text is None:
                 raise RuntimeError(f"malformed response: {str(body)[:160]}")
@@ -555,7 +863,9 @@ class OpenRouterRouter:
         })
         t0 = time.time()
         try:
-            body = self._post(payload)
+            # Vision is on the same per-reel path as the text gate, under the same
+            # watchdog, so it gets the same bounded wall clock.
+            body = self._post(payload, budget=self._new_budget())
         except Exception as e:  # noqa: BLE001
             return self._degrade(campaign_id, stage, str(e))
         text = _content_or_none(body)

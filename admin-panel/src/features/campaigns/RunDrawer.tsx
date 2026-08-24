@@ -8,6 +8,7 @@ import { queryKeys } from '@/shared/api/queryKeys';
 import { ResultError, type AppError } from '@/shared/lib/result';
 import { usePauseRun, useResumeRun, useRunCampaign, useStopRun } from '@/shared/hooks/useWriteMutations';
 import { useRunActivity } from '@/shared/hooks/useRunActivity';
+import { useAgentReadiness } from '@/shared/hooks/useAgentReadiness';
 import { useCan } from '@/shared/hooks/useCan';
 import {
   selectIsAnyRunActive,
@@ -147,6 +148,17 @@ export function RunDrawer({ campaign, run, isOpen, onClose }: RunDrawerProps) {
   useEffect(() => {
     if (!isOpen) runCampaign.reset();
   }, [isOpen, runCampaign]);
+
+  // Readiness NARROWED to this campaign's platforms. The global banner asks unscoped and
+  // therefore answers "some worker is online", which reads green for an instagram
+  // campaign on a youtube-only fleet — the run is accepted, dispatched, and dies on the
+  // box. Here the campaign is in scope, so this is the one place that can ask the
+  // question the operator actually has. Only polled while the drawer is open.
+  const { readiness: scopedReadiness } = useAgentReadiness(isOpen ? campaign.id : undefined);
+  // `ready` is the server's own gate; an undefined readiness (still loading, or the
+  // probe errored) must NOT block the button — this warns, it never gates. The server
+  // remains the real gate, exactly as the RBAC mirror rule says of UI gating.
+  const platformUnready = isOpen && scopedReadiness !== undefined && !scopedReadiness.ready;
 
   const leads = leadSelection === 'custom' ? Number.parseInt(customLeads, 10) : leadSelection;
   const leadsValid = Number.isInteger(leads) && leads >= 1 && leads <= MAX_LEADS;
@@ -320,6 +332,12 @@ export function RunDrawer({ campaign, run, isOpen, onClose }: RunDrawerProps) {
 
           {isAnyActive ? (
             <p className="text-xs font-medium text-warn">Another run is active — wait for it to finish.</p>
+          ) : null}
+          {platformUnready ? (
+            <p className="text-xs font-medium text-warn">
+              {scopedReadiness.detail
+                ?? 'No worker is ready for this campaign’s platform.'}
+            </p>
           ) : null}
           {runCampaign.isError ? <RunStartError error={runCampaign.error} /> : null}
 

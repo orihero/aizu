@@ -10,6 +10,20 @@ did not construct).
 Auth is a per-worker bearer token. The dispatch contract (the real ``server.py`` worker
 plane, Phase 3): all responses are HTTP 200 with the ``{ok, data, error}`` envelope; an
 empty lease is ``{ok: true, data: null}`` (never HTTP 204).
+
+ONE exception to "everything is a 200": a rejected bearer answers **HTTP 401** on every
+worker-plane route (`server.py` — "invalid or revoked worker token"). That is why every
+``Result`` carries the raw ``status``: the sidecar has to tell "this box has been REVOKED"
+(terminal — clear the token and stop, ledger B10) from "the network is flaky / the cloud is
+down" (transient — keep retrying), and it must do so on a status CODE, never by
+string-matching an error message. See :attr:`Result.is_unauthorized`.
+
+The status code alone is NOT enough, though, and the ``envelope`` flag is why: the dispatch
+is documented to run behind a reverse proxy, and an intermediary (nginx basic-auth, an SSO
+/ Cloudflare-Access rule, a captive portal) answers 401 with HTML or an empty body — never
+the ``{ok, data, error}`` envelope. Reading THAT as revocation would let one proxy
+misconfiguration disenrol an entire fleet, so only a 401 that is provably the dispatch
+APPLICATION speaking counts (see :attr:`Result.is_unauthorized`).
 """
 from __future__ import annotations
 
@@ -23,6 +37,12 @@ from ..core.logsetup import get_logger
 
 log = get_logger("aizu.worker.lease_client")
 
+# The ONE status that means "this box's bearer token is no longer accepted" — revoked,
+# expired, or pointed at a dispatch that never knew it (ledger B10). Every other failure
+# mode (transport, timeout, 5xx, a 4xx about the BODY) is transient or job-scoped and must
+# NOT be read as revocation.
+UNAUTHORIZED_STATUS = 401
+
 
 @dataclass(frozen=True)
 class Result:
@@ -34,11 +54,32 @@ class Result:
     data: Optional[Any] = None
     error: Optional[str] = None
     status: Optional[int] = None
+    envelope: bool = False
+    """True iff the body really was the dispatch's ``{ok, data, error}`` envelope (a JSON
+    object carrying a boolean ``ok``). False for HTML, an empty body, a JSON array, or a
+    parse failure — i.e. for anything an intermediary in front of the dispatch produced."""
 
     @property
     def is_empty(self) -> bool:
         """A successful call that returned no payload (e.g. lease found no job)."""
         return self.ok and self.data is None
+
+    @property
+    def is_unauthorized(self) -> bool:
+        """The dispatch APPLICATION rejected our bearer token: HTTP 401 **and** a genuine
+        ``{ok: false, ...}`` envelope. That pair is the sidecar's revocation signal
+        (ledger B10) — see the module docstring for why both halves are required.
+
+        Deliberately keyed on the numeric status, not on ``error`` text: the 401 body's
+        wording differs per route ("invalid or revoked worker token" vs. "worker
+        registration requires a valid token") and string-matching it would rot silently.
+        A transport failure carries ``status=None`` and is therefore NEVER unauthorized;
+        neither is a proxy's HTML/empty-bodied 401, which carries no envelope. Both stay
+        transient, which is what keeps a flaky network or a misconfigured ingress from
+        bricking the whole fleet."""
+        return (self.status == UNAUTHORIZED_STATUS
+                and self.envelope
+                and not self.ok)
 
 
 class LeaseClient:
@@ -52,6 +93,13 @@ class LeaseClient:
         # Injectable for tests; owns its own client otherwise.
         self._client = client or httpx.Client(timeout=timeout)
         self._owns_client = client is None
+
+    @property
+    def token(self) -> Optional[str]:
+        """The bearer this client presents. Read by the sidecar so a 401 can be matched
+        against the credential that was ACTUALLY refused (ledger B10) rather than against
+        whatever the shared token store happens to hold now."""
+        return self._token
 
     def with_token(self, token: str) -> "LeaseClient":
         """Return a client bound to ``token`` (set after register). New object — the
@@ -121,14 +169,23 @@ def _parse_envelope(resp: "httpx.Response", path: str) -> Result:
     """Validate an ``{ok, data, error}`` response without ever raising.
 
     Logs the raw body + status on any parse/shape failure so the next bad payload is
-    diagnosable in seconds (external-boundary rule)."""
+    diagnosable in seconds (external-boundary rule).
+
+    ``envelope`` is set ONLY on the two paths where the body really was the dispatch's
+    ``{ok, data, error}`` object; every earlier return leaves it False, which is what
+    keeps an intermediary's 401 out of :attr:`Result.is_unauthorized`."""
     status = resp.status_code
     raw = resp.text or ""
     if status >= 500:
         log.warning("dispatch %s → HTTP %s (body=%.200s)", path, status, raw)
         return Result(ok=False, error=f"server error {status}", status=status)
+    if not raw.strip():
+        # No body at all — the dispatch always sends an envelope, so this is a proxy,
+        # a load balancer, or a dropped response, NEVER the application answering.
+        log.warning("dispatch %s → empty body (HTTP %s)", path, status)
+        return Result(ok=False, error=f"HTTP {status}", status=status)
     try:
-        body = json.loads(raw) if raw.strip() else {}
+        body = json.loads(raw)
     except json.JSONDecodeError as e:
         log.warning("dispatch %s → non-JSON body (HTTP %s): %.200s | %s",
                     path, status, raw, e)
@@ -137,8 +194,12 @@ def _parse_envelope(resp: "httpx.Response", path: str) -> Result:
         log.warning("dispatch %s → JSON is not an object (HTTP %s): %.200s",
                     path, status, raw)
         return Result(ok=False, error="response envelope is not an object", status=status)
-    if body.get("ok") is True:
-        return Result(ok=True, data=body.get("data"), status=status)
+    if not isinstance(body.get("ok"), bool):
+        log.warning("dispatch %s → JSON object without a boolean 'ok' (HTTP %s): %.200s",
+                    path, status, raw)
+        return Result(ok=False, error="response envelope has no ok flag", status=status)
+    if body["ok"] is True:
+        return Result(ok=True, data=body.get("data"), status=status, envelope=True)
     err = body.get("error") or f"HTTP {status}"
     log.warning("dispatch %s → ok=false (HTTP %s): %s", path, status, err)
-    return Result(ok=False, error=str(err), status=status)
+    return Result(ok=False, error=str(err), status=status, envelope=True)
