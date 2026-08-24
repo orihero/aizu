@@ -96,10 +96,20 @@ def test_brand_of_leaves_everything_else_as_chrome(path):
     assert brand_of(path) == BRAND_CHROME
 
 
+# `brand_of` RESOLVES SYMLINKS before it classifies, so a bare "/usr/bin/chromium" is not a
+# fixed input — it is whatever that path happens to BE on the machine running the suite. Where
+# distro Chromium is a snap or update-alternatives wrapper (GitHub's Ubuntu runner is one)
+# readlink lands on a differently-named target and the leaf rule below never sees "chromium",
+# so these cases failed in CI while passing on macOS, where the path is simply absent. Anchor
+# them under a root that cannot exist: the rule under test is purely LEXICAL, and symlink
+# resolution has its own test (test_brand_of_resolves_symlinks_before_classifying).
+UNREAL_ROOT = "/aizu-no-such-root"
+
+
 @pytest.mark.parametrize("path", [
-    "/usr/bin/chromium",
-    "/usr/bin/chromium-browser",
-    "/usr/lib/chromium-browser/chromium-browser",
+    f"{UNREAL_ROOT}/usr/bin/chromium",
+    f"{UNREAL_ROOT}/usr/bin/chromium-browser",
+    f"{UNREAL_ROOT}/usr/lib/chromium-browser/chromium-browser",
 ])
 def test_brand_of_gives_distro_chromium_its_own_directory(path):
     """Debian/Ubuntu Chromium is a THIRD brand, not a spelling of Chrome: it seals cookies

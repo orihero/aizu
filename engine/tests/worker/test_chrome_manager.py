@@ -221,13 +221,20 @@ def test_distro_chromium_is_its_own_brand_not_a_spelling_of_chrome():
     /usr/bin/chromium and /usr/bin/google-chrome the same directory, and whichever warmed it
     first loses every login the moment the other one opens it. Both are on the Linux
     fallback list, so it is not a hypothetical pairing."""
-    assert brand_of_binary("/usr/bin/chromium") == "chromium"
-    assert brand_of_binary("/usr/bin/chromium-browser") == "chromium"
-    assert brand_of_binary("/usr/lib/chromium/chromium") == "chromium"
+    # Anchored under a root that cannot exist: brand_of_binary RESOLVES SYMLINKS before it
+    # classifies, so a bare "/usr/bin/chromium" is whatever that path happens to be on the
+    # machine running the suite. Where distro Chromium is a snap/update-alternatives wrapper
+    # (GitHub's Ubuntu runner is one) realpath lands on a differently-named target and the
+    # leaf rule never fires — green on macOS, red in CI. The rule here is purely LEXICAL;
+    # resolution is covered by test_brand_of_resolves_symlinks_before_classifying.
+    unreal = "/aizu-no-such-root"
+    assert brand_of_binary(f"{unreal}/usr/bin/chromium") == "chromium"
+    assert brand_of_binary(f"{unreal}/usr/bin/chromium-browser") == "chromium"
+    assert brand_of_binary(f"{unreal}/usr/lib/chromium/chromium") == "chromium"
     assert brand_of_binary(r"C:\tools\chromium.exe") == "chromium"
     # …and it must not swallow Google Chrome, whose leaf is `chrome`/`google-chrome`.
-    assert brand_of_binary("/usr/bin/google-chrome") == "chrome"
-    assert brand_of_binary("/usr/bin/google-chrome-stable") == "chrome"
+    assert brand_of_binary(f"{unreal}/usr/bin/google-chrome") == "chrome"
+    assert brand_of_binary(f"{unreal}/usr/bin/google-chrome-stable") == "chrome"
     # Playwright's cache still wins: rule 2 runs first, so a CfT build whose leaf happens to
     # be `chrome` inside chromium-1234/ is Chrome for Testing, not chromium.
     assert brand_of_binary(

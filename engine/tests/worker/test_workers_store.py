@@ -393,7 +393,40 @@ def test_schema_v23_adds_preflight_column_to_an_upgrading_workers_table():
     store = Store(path)
     try:
         _register(store, "legacy")
-        store._conn.execute("ALTER TABLE workers DROP COLUMN preflight_json")
+        # NOT `ALTER TABLE ... DROP COLUMN`: preflight_json is the LAST column and its
+        # trailing `--` comments run to the closing `);`, so SQLite rewrites the stored DDL
+        # into text that ends mid-comment. Builds before ~3.50 reject that with "error in
+        # table workers after drop column: incomplete input" — Ubuntu 24.04 ships 3.45 and
+        # macOS 3.53, which is exactly why this passed locally and failed in CI. Rebuilding
+        # the table is what the comment above always claimed, and is version-independent.
+        # Frozen v22 DDL — the current `workers` table minus preflight_json. The indexes go
+        # with the dropped table; the schema recreates them (IF NOT EXISTS) on reopen.
+        store._conn.executescript("""
+            CREATE TABLE workers_pre_v23 (
+                id                   TEXT PRIMARY KEY,
+                org_id               INTEGER,
+                display_name         TEXT,
+                host                 TEXT,
+                os                   TEXT,
+                agent_version        TEXT,
+                last_heartbeat_at    REAL,
+                registered_at        REAL NOT NULL,
+                max_sessions         INTEGER NOT NULL DEFAULT 1,
+                current_sessions     INTEGER NOT NULL DEFAULT 0,
+                capabilities         TEXT,
+                worker_token_hash    TEXT NOT NULL,
+                token_expires_at     REAL,
+                revoked_at           REAL,
+                enrolment_scope_kind TEXT
+            );
+            INSERT INTO workers_pre_v23
+                SELECT id, org_id, display_name, host, os, agent_version, last_heartbeat_at,
+                       registered_at, max_sessions, current_sessions, capabilities,
+                       worker_token_hash, token_expires_at, revoked_at, enrolment_scope_kind
+                  FROM workers;
+            DROP TABLE workers;
+            ALTER TABLE workers_pre_v23 RENAME TO workers;
+        """)
         store._conn.commit()
     finally:
         store.close()
