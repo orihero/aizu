@@ -21,6 +21,7 @@ Phase 6a.
 """
 from __future__ import annotations
 
+import dataclasses
 import json
 import os
 import signal
@@ -530,6 +531,64 @@ def _local_spend(store, campaign_id: str) -> float:
         return 0.0
 
 
+def _local_run_matches(store, run_id: str) -> int:
+    """How many leads this RUN has already banked on THIS box — across every session of
+    every earlier ATTEMPT of the job, because a requeued job keeps its run_id and
+    `Store.matches_for_run` joins matches→sessions on `sessions.run_id`.
+
+    0 on any read failure, on a missing run_id, or on a store that does not implement the
+    method (the minimal fakes the worker tests inject): this is an accounting hint,
+    exactly like `_local_spend`, and a bookkeeping hiccup must never block a runnable job.
+    Degrading to 0 restores the historical (over-delivering) behaviour rather than
+    inventing a clamp out of a number we could not read."""
+    if not run_id:
+        return 0
+    try:
+        return len(store.matches_for_run(run_id))
+    except Exception:  # noqa: BLE001 — accounting hint only, never block the run
+        log.warning("could not read local match count for run %s", run_id, exc_info=True)
+        return 0
+
+
+def _effective_lead_target(target: Optional[int], already: int) -> Optional[int]:
+    """The lead target to hand this ATTEMPT so the RUN honours one ceiling.
+
+    WHAT THIS DOES NOT FIX, stated first because an earlier draft of this comment got it
+    backwards: sessions WITHIN one attempt are already re-based. `cli._run_one_channel`
+    tops up with `remaining = (target - agg["matches"])` and breaks on
+    `agg["matches"] >= target`, so the top-up loop has never been the leak.
+
+    The leak is ACROSS ATTEMPTS. Every nack requeues the job under the SAME run_id, and
+    the requeued spec carries the ORIGINAL `target_leads` — nothing subtracts what earlier
+    attempts already banked, so N attempts is N budgets. Re-basing against what this run
+    has already recorded locally collapses them into one, the way `_effective_spend_cap`
+    re-bases the spend ceiling against this box's already-logged spend.
+
+        effective = None                        if target is None
+                  = max(1, target - already)    otherwise
+
+    FLOOR IS 1, NOT 0. `config._coerce_positive_int` rejects `targetLeads <= 0` at the
+    JobSpec boundary ("would produce a never-terminating or instantly-halting run"), so a
+    manufactured 0 is a value this module's own parser refuses — inert today only because
+    the clamped spec is not re-parsed, and a hard-nack trap the moment it is. An
+    already-satisfied run therefore gets 1, not 0: it over-delivers by at most one lead
+    instead of the full target, and never produces a spec that cannot round-trip.
+
+    THIS IS THE SMALLER HALF OF THE FIX. The dominant over-delivery is per-BATCH, not
+    per-attempt: every engine raises `counters.matches` once for a whole comment batch, so
+    a single item can blow past any target before the stop condition is tested. Clamping
+    here cannot prevent that and does not claim to.
+
+    KNOWN GAP: same-box attempts only. A nacked job is requeued UNPINNED, and another
+    box's SQLite has no rows for that run_id, so the clamp is a no-op there. The complete
+    fix mirrors B9's `priorSpendUsd`: a `priorLeads` on the lease payload and
+    `already = max(prior_leads, local_count)` here, once the server ships the field.
+    """
+    if target is None:
+        return None
+    return max(1, int(target) - max(0, int(already)))
+
+
 def _execute_job(store, job: JobSpec, *, cfg: WorkerConfig) -> dict:
     """Resolve and run one leased job IN THIS PROCESS. Returns the engine summary dict
     augmented with ``run_id``/``job_id``. Raises :class:`CampaignNotFound`/
@@ -554,6 +613,23 @@ def _execute_job(store, job: JobSpec, *, cfg: WorkerConfig) -> dict:
     # down from run_one_job because this body also runs in the CHILD process, which has
     # its own Store; the zero-headroom refusal lives in the parent (see run_one_job).
     local_spend_at_start = _local_spend(store, job.campaign_id)
+    # Defect B: re-base the LEAD target against what this RUN already recorded on this box
+    # (earlier sessions of an earlier attempt), the way the line above re-bases the spend
+    # cap. Skipped for a warming job: warming ignores lead_target entirely and must never
+    # be shortened — or refused — because a harvest attempt banked leads under the same
+    # run_id; silently stopping account-warming is a far worse failure than over-delivery.
+    if job.engine_mode != "warming":
+        already = _local_run_matches(store, run_id)
+        effective_target = _effective_lead_target(job.target_leads, already)
+        if effective_target != job.target_leads:
+            log.info("Run %s already has %d lead(s) recorded on this box — clamping this "
+                     "attempt's lead target %s → %s",
+                     run_id, already, job.target_leads, effective_target)
+            # A frozen-dataclass replace, not a mutation: JobSpec is frozen and
+            # `cfg.run_args` is contractually build-once/never-mutated (see its docstring),
+            # so the clamped value must ride IN on a fresh spec rather than be patched onto
+            # the returned Namespace.
+            job = dataclasses.replace(job, target_leads=effective_target)
     args = cfg.run_args(job, spend_cap_override=_effective_spend_cap(
         local_spend_at_start, job.prior_spend_usd, cfg.spend_cap))
 

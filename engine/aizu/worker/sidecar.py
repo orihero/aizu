@@ -71,6 +71,7 @@ bricked box is the worse bug.
 """
 from __future__ import annotations
 
+import json
 import platform
 import random
 import socket
@@ -1359,15 +1360,24 @@ class Sidecar:
             # then nacks with controls.halt_reason — halt always wins).
             summary = job_runner.run_one_job(
                 self._store, job, cfg=self._cfg, halt=controls.halt)
+        # Every branch below reached `job_runner.run_one_job`, so every one passes
+        # collect_leads=True. campaign_not_found / soul_missing / campaign_malformed
+        # provably have zero leads of their OWN, but a PRIOR attempt of the same run_id
+        # may not — and the query costs one indexed read that returns 0 rows when it
+        # does not. The two pre-run nacks (the malformed-spec client call in
+        # `_handle_lease`, and the credential-fetch nack above) are deliberately left
+        # alone: no run_id has produced anything yet.
         except CampaignNotFound:
-            self._nack(job, "campaign_not_found", spend_cursor=cursor)
+            self._nack(job, "campaign_not_found", spend_cursor=cursor,
+                       collect_leads=True)
             return
         except SoulMissing:
-            self._nack(job, "soul_missing", spend_cursor=cursor)
+            self._nack(job, "soul_missing", spend_cursor=cursor, collect_leads=True)
             return
         except ValueError as e:  # malformed brief from resolve_campaign
             log.error("Job %s campaign brief malformed: %s", job.id, e)
-            self._nack(job, "campaign_malformed", spend_cursor=cursor)
+            self._nack(job, "campaign_malformed", spend_cursor=cursor,
+                       collect_leads=True)
             return
         except Exception as e:  # noqa: BLE001 — any run error → nack, never crash the loop
             # Full detail goes to the (redacted) local log; the outbound reason is a
@@ -1378,21 +1388,26 @@ class Sidecar:
             rc = getattr(e, "returncode", None)
             log.error("Job %s crashed (rc=%s): %s%s", job.id, rc, e,
                       f"\n--- child log tail ---\n{tail}" if tail else "", exc_info=True)
-            self._nack(job, "error", spend_cursor=cursor)
+            # A child can crash AFTER hundreds of local matches, so this generic
+            # branch strands just as much harvest as the timeout one.
+            self._nack(job, "error", spend_cursor=cursor, collect_leads=True)
             return
 
         # A halt signalled by the heartbeat thread wins (operator kill / dispatch gone).
         if controls.halt.is_set():
-            self._nack(job, controls.halt_reason or "halted", spend_cursor=cursor)
+            self._nack(job, controls.halt_reason or "halted", spend_cursor=cursor,
+                       collect_leads=True)
             return
         halt_reason = summary.get("halt_reason")
         if halt_reason:
             # A daytime/quiet-hours halt carries a "try again at" the engine computed;
             # forward it so dispatch defers the requeue rather than backing off blind
             # (BUILD-PLAN C7). Other halts fall back to dispatch-side backoff.
+            # This is the branch that carries worker_timeout — the measured
+            # billed-for-spend / zero-leads path.
             self._nack(job, halt_reason, poison=_is_poison(halt_reason),
                        retry_after_at=summary.get("retry_after_at"),
-                       spend_cursor=cursor)
+                       spend_cursor=cursor, collect_leads=True)
             return
         self._ack(job, summary, spend_cursor=cursor)
 
@@ -1444,10 +1459,8 @@ class Sidecar:
 
     def _ack(self, job: JobSpec, summary: dict,
              spend_cursor: Optional[int] = None) -> None:
-        leads = self._collect_leads(summary)
         body = {"jobId": job.id, "summary": summary}
-        if leads:
-            body["leads"] = leads
+        synced = self._attach_leads(body, summary.get("run_id") or job.run_id)
         reported = self._attach_spend(body, job, spend_cursor)
         res = self._client.ack(job.id, body)
         if res.is_unauthorized:
@@ -1455,33 +1468,80 @@ class Sidecar:
             # will reclaim the lease and requeue). Nothing to do for THIS job, but the
             # box must still report the 401 so a CONFIRMED revocation retires its token.
             self._note_unauthorized("ack", presented=self._client.token)
-        if res.ok and reported:
+        recorded = _recorded_flag(res)
+        # `recorded is False` is the bridge saying HTTP 200 / ok:true while writing
+        # NOTHING (`Store.ack_job`'s UPDATE matched 0 rows: lease reclaimed, job already
+        # terminal, or now another box's). Trusting res.ok alone logs a clean success for
+        # leads that were dropped on the floor AND retires the spend mark that would have
+        # re-reported the money. Treat it as a failed report on both counts.
+        if res.ok and reported and recorded is not False:
             self._clear_spend_cursor(job)  # the cloud banked this run's spend
-        if res.ok:
+        if res.ok and recorded is False:
+            log.warning("Job %s ack was a server-side no-op (lease lost / already "
+                        "terminal) — %d leads and %d spend rows were NOT recorded",
+                        job.id, synced, len(body.get("spend", [])))
+        elif res.ok:
             log.success("Job %s done · matches=%s · leads_synced=%d · spend_rows=%d",
-                        job.id, summary.get("matches"), len(leads),
+                        job.id, summary.get("matches"), synced,
                         len(body.get("spend", [])))
         else:
             log.warning("ack for %s failed: %s", job.id, res.error)
 
-    def _collect_leads(self, summary: dict) -> list[dict]:
-        """Read the leads this job captured from the LOCAL store — by run_id, across
-        ALL of the run's sessions (a target-leads run loops many) — and map them to
-        the ack sync DTO. Capped + logged so a big harvest never blows the ack body;
-        the cloud re-caps + forces the job's own campaign on write. A read failure is
-        swallowed (the job is done regardless — never block the ack on the sync)."""
-        run_id = summary.get("run_id")
+    def _collect_leads(self, run_id: Optional[str]) -> list[dict]:
+        """Read the leads captured under `run_id` from the LOCAL store — across ALL of
+        the run's sessions (a target-leads run loops many) — and map them to the sync
+        DTO. The cloud re-caps and forces the job's own campaign on write.
+
+        Keyed on the RUN, not on a summary: every nack path except the clean one has NO
+        summary (the child was SIGKILLed, or an exception fired before it returned), and
+        `job.run_id` is assigned once at lease time (`_handle_lease`) and reused by every
+        attempt — so this returns attempts 1..N cumulatively and a later report heals an
+        earlier one that was rejected. That cross-attempt repair is what makes a lead
+        cursor unnecessary: `matches` has PRIMARY KEY (campaign_id, platform,
+        comment_id) and the cloud upsert is idempotent, unlike spend_log.
+
+        Capped at MAX_SYNC_LEADS rows — the SAME cap the ack path has always used, and
+        deliberately WITHOUT a byte budget. An earlier draft blanked each lead's
+        `extracted` blob to fit a size limit; the cloud upsert writes
+        `extracted=excluded.extracted`, so that NULLs out contact details already
+        stored — on the ACK path too, which works today. Shipping fewer whole leads is
+        recoverable by the next attempt; a blanked `extracted` is silent, permanent
+        loss of the part of a lead the customer pays for.
+        Every failure is swallowed and reported as an empty batch: the ack/nack must go
+        out regardless. NEVER let this raise into `_ack`/`_nack`."""
         if not run_id:
             return []
         try:
             rows = self._store.matches_for_run(run_id)
-        except Exception:  # noqa: BLE001 — a local read hiccup must not block the ack
+        except Exception:  # noqa: BLE001 — a local read hiccup must not block the report
             log.warning("could not read captured leads for run %s", run_id, exc_info=True)
             return []
-        if len(rows) > MAX_SYNC_LEADS:
-            log.warning("run %s captured %d leads; syncing the first %d (excess deferred)",
-                        run_id, len(rows), MAX_SYNC_LEADS)
-        return [_lead_dto(r) for r in rows[:MAX_SYNC_LEADS]]
+        try:
+            if len(rows) > MAX_SYNC_LEADS:
+                # Nothing is deferred (the old wording claimed a deferral that never
+                # happens): `matches_for_run` is captured_at ASC, so every attempt
+                # re-sends the same first MAX_SYNC_LEADS and the tail of a >500-lead run
+                # is never delivered. Follow-up work (a capturedAt high-water offset);
+                # pre-existing on the ack path and out of scope for the nack fix.
+                log.warning("run %s captured %d leads; syncing the first %d (the "
+                            "excess is NOT sent by a later attempt either)",
+                            run_id, len(rows), MAX_SYNC_LEADS)
+            return [_lead_dto(r) for r in rows[:MAX_SYNC_LEADS]]
+        except Exception:  # noqa: BLE001 — mapping must not block the report either
+            log.warning("could not map captured leads for run %s", run_id, exc_info=True)
+            return []
+
+    def _attach_leads(self, body: dict, run_id: Optional[str]) -> int:
+        """Attach this RUN's captured leads to a report body (ack OR nack); return how
+        many rode along. Deliberately INDEPENDENT of `_attach_spend`: spend refuses to
+        ship without a `dbId` because spend_log has no unique key and a same-database
+        double insert would inflate the campaign's spend and halve its effective cap,
+        whereas a lead is never worse for being sent twice or sent from a box whose
+        database identity could not be read. Do not fold the two together."""
+        leads = self._collect_leads(run_id)
+        if leads:
+            body["leads"] = leads
+        return len(leads)
 
     def _spend_cursor_path(self, job: JobSpec) -> Optional[Path]:
         """Where this run's spend cursor is parked between attempts, or None for a job
@@ -1600,10 +1660,28 @@ class Sidecar:
 
     def _nack(self, job: JobSpec, reason: str, *, poison: bool = False,
               retry_after_at: Optional[float] = None,
-              spend_cursor: Optional[int] = None) -> None:
+              spend_cursor: Optional[int] = None,
+              collect_leads: bool = False) -> None:
         body = {"jobId": job.id, "reason": reason, "poison": poison}
         if retry_after_at is not None:
             body["retryAfterAt"] = retry_after_at
+        # A halted / crashed / timed-out attempt still FOUND leads, and they live only in
+        # this box's local sqlite. `worker_timeout` is the NORMAL end of any run that does
+        # not reach its lead target before the wall-clock cap, and it is not in
+        # _POISON_HALTS — so it requeues, burns all DEFAULT_JOB_MAX_ATTEMPTS attempts and
+        # dead-letters WITHOUT ever acking. Because leads rode the ack body only, that is
+        # how a customer ends up billed for spend (which DOES ride the nack, B9) while
+        # receiving zero leads: observed twice on the hosted deployment, where the
+        # worker's local sqlite held the harvest and the cloud DB held none of it (the
+        # evidence lives on the prod server + that desktop box, not in this repo's
+        # aizu.db). Ship leads here for exactly the reason spend ships here — a requeue is
+        # UNPINNED, so attempt 2 may land on a box with no record of attempt 1's harvest.
+        #
+        # OFF BY DEFAULT so the PRE-RUN nacks pay nothing: the malformed-spec rejection
+        # (no JobSpec at all) and CREDENTIAL_FETCH_FAILED_REASON fire before the run and
+        # before a spend cursor is even taken, so there is nothing to read and no local
+        # query worth making. Only the post-run branches in `_run_and_report` opt in.
+        synced = self._attach_leads(body, job.run_id) if collect_leads else 0
         # A crashed/halted attempt still spent real money, and a requeue is UNPINNED —
         # attempt 2 may land on a box with no record of it. Roll it up here too (B9).
         # A report that carries no determined delta (e.g. the credential-fetch nack,
@@ -1614,12 +1692,22 @@ class Sidecar:
         if res.is_unauthorized:
             # B10 — same as _ack: report it; a CONFIRMED revocation retires the token.
             self._note_unauthorized("nack", presented=self._client.token)
-        if res.ok and reported:
+        if res.ok and reported and _recorded_flag(res) is not False:
             self._clear_spend_cursor(job)  # the cloud banked this attempt's spend
+        if synced and res.ok and _leads_recorded(res) is None:
+            # The bridge DROPS unrecognised worker-body keys rather than 400ing (its
+            # validators rebuild a fresh dict from named keys — see
+            # `_validate_worker_nack`), so an un-upgraded dispatch accepts this nack and
+            # discards the leads with no error anywhere. The absent `leadsSynced` echo is
+            # the only way a worker can tell. Loud, because the harvest is stranded.
+            log.warning("Job %s nack shipped %d leads but this dispatch did not "
+                        "acknowledge them (no leadsSynced in the reply) — it predates "
+                        "lead-on-nack and DROPPED them; upgrade the bridge or this "
+                        "run's harvest stays on this box", job.id, synced)
         # A nack always means the job did NOT succeed — log at warning so it is not
         # lost in an info-filtered view, even when dispatch accepts it (code review L-A).
-        log.warning("Job %s nacked (poison=%s, dispatch_ok=%s): %s",
-                    job.id, poison, res.ok, reason)
+        log.warning("Job %s nacked (poison=%s, dispatch_ok=%s, leads_sent=%d): %s",
+                    job.id, poison, res.ok, synced, reason)
 
     def _current_job_info(self, job: JobSpec) -> CurrentJobInfo:
         """Build the immutable current-job snapshot the control surface reports. The log
@@ -1835,6 +1923,26 @@ def _is_poison(halt_reason: str) -> bool:
     return any(token in low for token in _POISON_HALTS)
 
 
+def _recorded_flag(res) -> Optional[bool]:
+    """`data.recorded` off an ack/nack response, or None when the server did not say
+    (an older bridge, or a non-object payload). None means UNKNOWN — never False."""
+    data = getattr(res, "data", None)
+    if isinstance(data, dict) and isinstance(data.get("recorded"), bool):
+        return data["recorded"]
+    return None
+
+
+def _leads_recorded(res) -> Optional[int]:
+    """`data.leadsSynced` off an ack/nack response. None means the dispatch did not echo
+    it — i.e. a bridge that predates lead-on-nack and SILENTLY DROPS the key (the
+    server's worker-body validators build a fresh dict from named keys only:
+    unrecognised keys are dropped, never a 400 — see `_validate_worker_nack`). That
+    absence is the only signal a worker has that its lead sync is inert."""
+    data = getattr(res, "data", None)
+    val = data.get("leadsSynced") if isinstance(data, dict) else None
+    return val if isinstance(val, int) and not isinstance(val, bool) else None
+
+
 def _lead_dto(row: dict) -> dict:
     """Map a local `matches` row to the ack sync DTO (camelCase). The campaign is
     deliberately OMITTED — the cloud forces the job's own campaign on write, never
@@ -1848,6 +1956,11 @@ def _lead_dto(row: dict) -> dict:
         "lang": row.get("lang"),
         "score": row.get("score"),
         "reason": row.get("reason"),
+        # v27: the customer-facing intent line travels WITH the lead. The worker's
+        # LOCAL store is the only place `derive_intent` ever ran, so without this
+        # key the cloud row is NULL-intent and the org sees the neutral
+        # placeholder on every fleet-harvested lead, forever.
+        "intent": row.get("intent"),
         "extracted": row.get("extracted"),
         "tier": row.get("tier"),
         "sessionId": row.get("session_id"),
