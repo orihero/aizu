@@ -235,7 +235,7 @@ function MemberRow({
 
   return (
     <div className="flex items-center gap-3 px-5 py-3">
-      <Avatar username={member.initials || member.name} size="lg" />
+      <Avatar name={member.initials || member.name} size="lg" />
       <div className="min-w-0 flex-1">
         <div className="truncate text-sm font-semibold text-text">
           {member.name}

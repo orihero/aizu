@@ -14,6 +14,7 @@ import type { CampaignDraft } from '@/features/campaigns/useCampaignForm';
 import { blankChannel } from '@/features/campaigns/useCampaignForm';
 import type {
   AuthUser,
+  Billing,
   Campaign,
   ChannelEntry,
   InterviewResponse,
@@ -21,11 +22,12 @@ import type {
   MatchStatus,
   PanelState,
   RunCounters,
-  RunEvent,
+  RunPhase,
   StatusChange,
   TeamMember,
 } from '@/shared/types/domain';
 import {
+  buildBilling,
   buildCampaign,
   buildDashboardPeriod,
   buildIntegration,
@@ -33,7 +35,6 @@ import {
   buildMatch,
   buildPanelState,
   buildReportsPeriod,
-  buildRunEvent,
   buildTeamMember,
 } from '@/test/fixtures';
 
@@ -127,6 +128,12 @@ export const DEMO_CAMPAIGN: Campaign = buildCampaign({
   spent: 24.8,
   leads: 22,
   cpl: 1.13,
+  // Everything this campaign found also reached the account — the healthy pairing.
+  // The demo deliberately never shows the `not_delivered` state: it is an honest
+  // warning about a real failure, not a feature to put on camera.
+  leadsFound: 22,
+  leadsDelivered: 22,
+  delivery: 'delivered',
   spark: [1, 2, 3, 2, 4, 3, 5, 4, 6, 5, 7, 6, 8, 22],
   warmth: {
     score: 88,
@@ -178,6 +185,9 @@ export const DEMO_DRAFT_CAMPAIGN: Campaign = buildCampaign({
   spent: 0,
   leads: 0,
   cpl: null,
+  leadsFound: 0,
+  leadsDelivered: 0,
+  delivery: 'delivered',
   spark: [],
   warmth: {
     score: 32,
@@ -198,11 +208,17 @@ export const DEMO_DRAFT_CAMPAIGN: Campaign = buildCampaign({
 
 // ---- leads (MATCHES) ----
 
+/**
+ * v27: a demo lead carries NO handle and NO comment body — the demo tenant is a
+ * customer-facing surface, and a customer's lead is anonymous until they press Reveal.
+ * `intent` is the whole story of a lead here: one plain-language line saying what the
+ * person wants, with no name, no @handle and no phone/e-mail in it (those are
+ * `extracted` fields, which the drawer shows as contact chips).
+ */
 interface LeadSeed {
   readonly id: string;
   readonly platform: string;
-  readonly username: string;
-  readonly text: string;
+  readonly intent: string;
   readonly score: number;
   readonly reason: string;
   readonly status: MatchStatus;
@@ -213,134 +229,137 @@ interface LeadSeed {
 
 // One entry per lead, in the same platform order the run walks
 // (instagram → linkedin → x → youtube → reddit → telegram). 12 interested
-// (~2/platform, scores 0.72–0.94, dana_t is the 0.91 hero lead), 8 new
+// (~2/platform, scores 0.72–0.94, the 0.91 instagram row is the hero lead), 8 new
 // (mixed, some below the 0.7 threshold), 2 in_progress.
 const LEAD_SEEDS: readonly LeadSeed[] = [
   // instagram
   {
-    id: 'ig-dana', platform: 'instagram', username: 'dana_t', status: 'interested', score: 0.91,
-    text: "How much is the Pro plan? We're drowning in Zendesk tickets and need something that "
-      + 'scales. Can I get a demo?',
+    id: 'ig-dana', platform: 'instagram', status: 'interested', score: 0.91,
+    intent: 'Wants a demo and Pro-plan pricing — drowning in Zendesk tickets and needs '
+      + 'something that scales',
     reason: 'asks for a demo and pricing, names the exact pain (ticket volume)',
     extracted: { email: 'dana@northwindtech.com', phone: '+14155550142', intent: 'demo' },
     time: '08:12', note: 'Called, left a voicemail — following up tomorrow.',
   },
   {
-    id: 'ig-marcus', platform: 'instagram', username: 'marcus_ops', status: 'interested', score: 0.84,
-    text: "We've been comparing a few support-automation tools, Acme looks solid. What's onboarding "
-      + 'like for a 40-person team?',
+    id: 'ig-marcus', platform: 'instagram', status: 'interested', score: 0.84,
+    intent: 'Comparing support-automation tools; asking what onboarding looks like for a '
+      + '40-person team',
     reason: 'actively evaluating tools, gives team size', extracted: { intent: 'inquire' }, time: '09:05',
   },
   {
-    id: 'ig-jess', platform: 'instagram', username: 'jess_growth', status: 'new', score: 0.65,
-    text: 'Following for the SaaS tips 🔥', reason: 'low buying-intent, general engagement', time: '09:40',
+    id: 'ig-jess', platform: 'instagram', status: 'new', score: 0.65,
+    intent: 'Following the account for SaaS tips — no buying signal yet',
+    reason: 'low buying-intent, general engagement', time: '09:40',
   },
   {
-    id: 'ig-alex', platform: 'instagram', username: 'alex_scaling', status: 'new', score: 0.62,
-    text: 'Our support queue is out of control lately, might need to look into this.',
+    id: 'ig-alex', platform: 'instagram', status: 'new', score: 0.62,
+    intent: 'Support queue is out of control lately and they may start looking at tooling',
     reason: 'pain signal but no explicit ask yet', time: '10:02',
   },
   // linkedin
   {
-    id: 'li-sarah', platform: 'linkedin', username: 'sarah.chen', status: 'interested', score: 0.88,
-    text: "We're evaluating support-automation platforms for our 60-person CS team. Does Acme "
-      + 'integrate with our existing Zendesk data?',
+    id: 'li-sarah', platform: 'linkedin', status: 'interested', score: 0.88,
+    intent: 'Evaluating support-automation platforms for a 60-person CS team; asking whether '
+      + 'it integrates with their existing Zendesk data',
     reason: 'specific integration question from a named buyer role', extracted: { email: 'sarah.chen@brightloop.io', intent: 'inquire' },
     time: '10:20',
   },
   {
-    id: 'li-raj', platform: 'linkedin', username: 'raj_patel', status: 'interested', score: 0.79,
-    text: 'Would love a trial — our ticket backlog has tripled this quarter.',
+    id: 'li-raj', platform: 'linkedin', status: 'interested', score: 0.79,
+    intent: 'Wants a trial — their ticket backlog has tripled this quarter',
     reason: 'explicit trial request with quantified pain', extracted: { intent: 'trial' }, time: '10:47',
   },
   {
-    id: 'li-mike', platform: 'linkedin', username: 'mike.torres', status: 'new', score: 0.71,
-    text: 'Interesting post, curious how this compares to Intercom.',
+    id: 'li-mike', platform: 'linkedin', status: 'new', score: 0.71,
+    intent: 'Curious how the product compares to Intercom',
     reason: 'comparison curiosity, early-stage', time: '11:10',
   },
   {
-    id: 'li-helen', platform: 'linkedin', username: 'hr_helen', status: 'in_progress', score: 0.70,
-    text: 'Can someone reach out about pricing for a mid-size team?',
+    id: 'li-helen', platform: 'linkedin', status: 'in_progress', score: 0.70,
+    intent: 'Asking for pricing for a mid-size team and wants someone to reach out',
     reason: 'pricing ask — being worked by the team', time: '11:30',
   },
   // x
   {
-    id: 'x-kate', platform: 'x', username: 'devops_kate', status: 'interested', score: 0.93,
-    text: '@AcmeHQ does your API support webhook triggers for ticket escalation? Ready to switch off '
-      + 'our current stack.',
+    id: 'x-kate', platform: 'x', status: 'interested', score: 0.93,
+    intent: 'Ready to switch off their current stack; asking whether the API supports webhook '
+      + 'triggers for ticket escalation',
     reason: 'technical fit question plus explicit intent to switch', extracted: { email: 'kate@devopsco.dev', intent: 'buy' },
     time: '11:58',
   },
   {
-    id: 'x-leo', platform: 'x', username: 'founder_leo', status: 'interested', score: 0.76,
-    text: 'Been eyeing Acme for weeks, just need budget sign-off.',
+    id: 'x-leo', platform: 'x', status: 'interested', score: 0.76,
+    intent: 'Has been evaluating for weeks and wants to buy — waiting on budget sign-off',
     reason: 'buying intent pending internal approval', extracted: { intent: 'buy' }, time: '12:15',
   },
   {
-    id: 'x-quinn', platform: 'x', username: 'quick_take_q', status: 'new', score: 0.58,
-    text: 'lol our support inbox is a warzone', reason: 'vague pain, no explicit intent', time: '12:40',
+    id: 'x-quinn', platform: 'x', status: 'new', score: 0.58,
+    intent: 'Venting about an overloaded support inbox — no stated intent',
+    reason: 'vague pain, no explicit intent', time: '12:40',
   },
   {
-    id: 'x-bea', platform: 'x', username: 'biz_dev_bea', status: 'new', score: 0.75,
-    text: "What's the pricing tier for a 10-person startup?",
+    id: 'x-bea', platform: 'x', status: 'new', score: 0.75,
+    intent: 'Asking which pricing tier fits a 10-person startup',
     reason: 'pricing question, above threshold, awaiting triage', time: '13:02',
   },
   // youtube
   {
-    id: 'yt-amy', platform: 'youtube', username: 'techreviewer_amy', status: 'interested', score: 0.82,
-    text: 'Great walkthrough — does this integrate with our helpdesk stack? Might feature it in my '
-      + 'next review.',
+    id: 'yt-amy', platform: 'youtube', status: 'interested', score: 0.82,
+    intent: 'Asking whether it integrates with their helpdesk stack; may feature it in an '
+      + 'upcoming review',
     reason: 'integration question from a reviewer with reach', extracted: { email: 'amy@reviewhub.com', intent: 'inquire' },
     time: '13:25',
   },
   {
-    id: 'yt-saas', platform: 'youtube', username: 'saas_curious', status: 'interested', score: 0.72,
-    text: "Signed up for the trial after watching this, hope it's as good as it looks.",
+    id: 'yt-saas', platform: 'youtube', status: 'interested', score: 0.72,
+    intent: 'Signed up for the trial after watching the walkthrough',
     reason: 'self-reported trial signup', extracted: { intent: 'trial' }, time: '13:50',
   },
   {
-    id: 'yt-bob', platform: 'youtube', username: 'reviewer_bob', status: 'new', score: 0.68,
-    text: 'Solid demo, will keep this on my radar.', reason: 'positive but non-committal', time: '14:10',
+    id: 'yt-bob', platform: 'youtube', status: 'new', score: 0.68,
+    intent: 'Liked the demo and is keeping the product on their radar',
+    reason: 'positive but non-committal', time: '14:10',
   },
   // reddit
   {
-    id: 'rd-pm', platform: 'reddit', username: 'pm_throwaway', status: 'interested', score: 0.94,
-    text: "Our team is switching off Zendesk next quarter — has anyone actually used Acme in "
-      + 'production? Need a demo ASAP.',
+    id: 'rd-pm', platform: 'reddit', status: 'interested', score: 0.94,
+    intent: 'Migrating off Zendesk next quarter and wants a demo as soon as possible',
     reason: 'active migration timeline plus explicit demo ask', extracted: { email: 'pm.throwaway88@protonmail.com', intent: 'demo' },
     time: '14:35',
   },
   {
-    id: 'rd-sam', platform: 'reddit', username: 'startup_sam', status: 'interested', score: 0.77,
-    text: "We're a 15-person startup drowning in support tickets, is Acme overkill for us?",
+    id: 'rd-sam', platform: 'reddit', status: 'interested', score: 0.77,
+    intent: 'A 15-person startup drowning in support tickets, asking whether the product is '
+      + 'overkill for their size',
     reason: 'qualifying fit, real quantified pain', extracted: { intent: 'inquire' }, time: '14:58',
   },
   {
-    id: 'rd-dev', platform: 'reddit', username: 'curious_dev', status: 'new', score: 0.73,
-    text: 'How does the scoring model handle multi-language support threads?',
+    id: 'rd-dev', platform: 'reddit', status: 'new', score: 0.73,
+    intent: 'Asking how the scoring model handles multi-language support threads',
     reason: 'technical curiosity, above threshold', time: '15:20',
   },
   {
-    id: 'rd-eval', platform: 'reddit', username: 'eval_team', status: 'in_progress', score: 0.81,
-    text: 'Our eval team is comparing 3 vendors, Acme is on the shortlist. Can we get a call booked?',
+    id: 'rd-eval', platform: 'reddit', status: 'in_progress', score: 0.81,
+    intent: 'Shortlisted the product in a three-vendor evaluation and wants a call booked',
     reason: 'active vendor evaluation — being worked', time: '15:45',
   },
   // telegram
   {
-    id: 'tg-ops', platform: 'telegram', username: 'ops_ninja', status: 'interested', score: 0.86,
-    text: '@acme_scout can you send pricing for the team plan? We manage support for 5 client accounts.',
+    id: 'tg-ops', platform: 'telegram', status: 'interested', score: 0.86,
+    intent: 'Asking for team-plan pricing — an agency managing support for five client accounts',
     reason: 'explicit pricing ask, agency use case', extracted: { email: 'ops@ninjacollective.io', intent: 'pricing' },
     time: '16:05',
   },
   {
-    id: 'tg-jen', platform: 'telegram', username: 'teamlead_jen', status: 'interested', score: 0.80,
-    text: 'Our support lead mentioned Acme in standup, worth a demo for our 20-person team.',
+    id: 'tg-jen', platform: 'telegram', status: 'interested', score: 0.80,
+    intent: 'Referred internally by their support lead; wants a demo for a 20-person team',
     reason: 'internal referral plus demo interest', extracted: { intent: 'demo' }, time: '16:30',
   },
   {
-    id: 'tg-newbie', platform: 'telegram', username: 'newbie_ops', status: 'new', score: 0.55,
-    text: "just joined this channel, what's this group about?", reason: 'no buying signal, off-topic',
-    time: '16:50',
+    id: 'tg-newbie', platform: 'telegram', status: 'new', score: 0.55,
+    intent: 'Just joined the channel and is asking what the group is about',
+    reason: 'no buying signal, off-topic', time: '16:50',
   },
 ];
 
@@ -371,9 +390,8 @@ export const DEMO_MATCHES: readonly Match[] = LEAD_SEEDS.map((seed, index) => {
     campaignId: DEMO_CAMPAIGN_ID,
     platform: seed.platform,
     sessionId: null,
-    username: seed.username,
+    intent: seed.intent,
     lang: 'en',
-    text: seed.text,
     score: seed.score,
     reason: seed.reason,
     extracted: seed.extracted ?? {},
@@ -381,7 +399,6 @@ export const DEMO_MATCHES: readonly Match[] = LEAD_SEEDS.map((seed, index) => {
     escalated: false,
     escalationCost: 0,
     capturedAt: { date: DEMO_DATE, time: seed.time, ts },
-    reelId: `${seed.platform}-${seed.id}`,
     statusBy: seed.status === 'new' ? null : ADMIN_EMAIL,
     statusAt: seed.status === 'new' ? null : DEMO_DATE,
     statusHistory: [...historyFor(seed.status, ts)],
@@ -429,13 +446,17 @@ const DEMO_DASHBOARD_PERIOD = buildDashboardPeriod({
   bestHour: Array.from({ length: 24 }, (_, h) => (h >= 8 && h <= 17 ? 4 : h >= 18 && h <= 20 ? 1 : 0)),
   activeCampaigns: 1,
   topCampaigns: [
-    { id: DEMO_CAMPAIGN_ID, name: DEMO_CAMPAIGN.name, platform: 'instagram', status: 'live', leads: TOTAL_LEADS, cpl: 1.13 },
+    { id: DEMO_CAMPAIGN_ID, name: DEMO_CAMPAIGN.name, platform: 'instagram', status: 'live',
+      leads: TOTAL_LEADS, cpl: 1.13,
+      leadsFound: TOTAL_LEADS, leadsDelivered: TOTAL_LEADS, delivery: 'delivered' },
   ],
+  // The ticker names what each lead WANTS. The server truncates `intent` to a
+  // glance-width line; these are already written short, so they ride through as-is.
   ticker: [...DEMO_MATCHES]
     .sort((a, b) => b.capturedAt.ts - a.capturedAt.ts)
     .slice(0, 6)
     .map((m) => ({
-      id: m.id, username: m.username, platform: m.platform, score: m.score,
+      id: m.id, intent: m.intent, platform: m.platform, score: m.score,
       capturedAt: { date: m.capturedAt.date, time: m.capturedAt.time },
     })),
 });
@@ -460,8 +481,10 @@ const DEMO_REPORTS_PERIOD = buildReportsPeriod({
   ],
   platformRanking: PLATFORM_LEAD_COUNTS.map((c) => ({ platform: c.platform, leads: c.current })),
   perCampaign: [
-    { id: DEMO_CAMPAIGN_ID, name: DEMO_CAMPAIGN.name, status: 'live', leads: TOTAL_LEADS, cpl: 1.13, spend: 24.8 },
-    { id: DEMO_DRAFT_CAMPAIGN.id, name: DEMO_DRAFT_CAMPAIGN.name, status: 'draft', leads: 0, cpl: null, spend: 0 },
+    { id: DEMO_CAMPAIGN_ID, name: DEMO_CAMPAIGN.name, status: 'live', leads: TOTAL_LEADS, cpl: 1.13, spend: 24.8,
+      leadsFound: TOTAL_LEADS, leadsDelivered: TOTAL_LEADS, delivery: 'delivered' },
+    { id: DEMO_DRAFT_CAMPAIGN.id, name: DEMO_DRAFT_CAMPAIGN.name, status: 'draft', leads: 0, cpl: null, spend: 0,
+      leadsFound: 0, leadsDelivered: 0, delivery: 'delivered' },
   ],
 });
 
@@ -470,6 +493,38 @@ export const DEMO_REPORTS = {
   week: DEMO_REPORTS_PERIOD,
   month: DEMO_REPORTS_PERIOD,
 };
+
+// ---- billing (the plan the demo tenant is on) ----
+
+/**
+ * A LITE subscription, chosen so the v27 plan affordances are live on camera instead
+ * of dead code:
+ *   - 2 of 3 campaigns used → the campaigns page shows a real "2 of 3" meter AND the
+ *     New Campaign button still works, so the wizard capture runs to completion and
+ *     ends by flipping the counter to 3 of 3 (the at-cap state, earned rather than
+ *     staged). A Free tenant (cap 1) would boot already at its cap with the wizard's
+ *     entry point disabled.
+ *   - 22 of 50 leads used → a partly-full usage meter, and `maxRunLeads: 50` gives the
+ *     run drawer a real bound to name ("Lite plan: up to 50 leads per run").
+ * `tiers` comes from the shared catalogue so the comparison grid stays in step with
+ * `billing.TIERS`.
+ */
+export const DEMO_BILLING: Billing = buildBilling({
+  tier: 'lite',
+  interval: 'month',
+  status: 'active',
+  periodEnd: 1_756_900_000,
+  cancelAtPeriodEnd: false,
+  leadCap: 50,
+  leadsUsed: TOTAL_LEADS,
+  campaignCap: 3,
+  campaignsUsed: 2,
+  revealCap: 50,
+  revealsUsed: 0,
+  maxRunLeads: 50,
+  usageRatio: TOTAL_LEADS / 50,
+  nearLimit: false,
+});
 
 // ---- full panel state ----
 
@@ -562,65 +617,95 @@ export const DEMO_GENERATED_DRAFT: CampaignDraft = {
   ],
 };
 
-// ---- live run activity replay ----
+// ---- live run progress replay ----
 
 export const DEMO_RUN_ID = 'run-demo-001';
 export const DEMO_RUN_STARTED_AT = '2026-08-05T08:00:00Z';
 
-interface ScriptedEvent {
-  readonly event: RunEvent;
+/**
+ * The lead target the scripted run was started with, so the drawer reads "N of 6
+ * leads". Set to exactly what the script delivers: a capture that ends at "6 of 10"
+ * reads as a run that gave up, and the demo has no business staging that. Well inside
+ * `DEMO_BILLING.maxRunLeads` (50), which is the bound the run UI names.
+ */
+export const DEMO_RUN_TARGET_LEADS = 6;
+
+/**
+ * One poll's worth of run progress.
+ *
+ * v27: the replay is SCALARS, not a narrative log. The org-facing feed carries no
+ * events at all (`/api/run/activity` answers an org with `events: []`), and the events
+ * it used to carry were exactly the rows we now hide — a match event's detail is
+ * `{username, score, tier, reelId}`. Replaying them into a customer-facing demo would
+ * re-leak on camera precisely what the redaction removed from the product.
+ */
+export interface DemoRunTick {
   readonly counters: RunCounters;
+  readonly phase: RunPhase;
+  /** What the run has discovered so far. Monotonic, like every Section E scalar. */
+  readonly leadsFound: number;
+  readonly itemsScanned: number;
+  readonly relevantFound: number;
+  /** Epoch SECONDS — the liveness beat the stall banner reads, not a log line. */
+  readonly lastEventAt: number;
 }
 
 const RUN_TS_BASE = 1_754_380_800; // fixed, arbitrary epoch seconds
 
-function scanMessage(platform: string, reelsSeen: number, relevant: number): string {
-  const noun = platform === 'x' || platform === 'linkedin' ? 'posts seen' : 'reels seen';
-  return `Scanning — ${reelsSeen} ${noun}, ${relevant} relevant`;
-}
+/**
+ * The scripted run: 14 progress snapshots walking all six platforms sequentially, in
+ * the engine's real run order. Every scalar is monotonic (the customer must never
+ * watch a number fall back mid-run), and each row is the state AS OF that poll.
+ *
+ * The tuple is `[phase, itemsScanned, relevantFound, commentsScored, leadsFound,
+ * spendUsd, offsetSec]` — deliberately compact so the whole progression is readable as
+ * a table. `phase` is already the customer-safe word the bridge folds internal phases
+ * into (lifecycle→starting, feed_walk→searching, comments→qualifying); the internal
+ * names never reach a customer, so they are not written down here either.
+ */
+type TickSeed = readonly [RunPhase, number, number, number, number, number, number];
 
-function matchMessage(platform: string, username: string, score: number): string {
-  const handle = platform === 'reddit' ? `u/${username}` : platform === 'linkedin' ? username : `@${username}`;
-  return `Match: ${handle} (score ${score.toFixed(2)})`;
-}
-
-/** ~14 events walking all six platforms sequentially — start, a scan tick, and
- *  a scored match for the first two platforms (to show the fuller cadence),
- *  then start + match for the rest. Counters tick up monotonically; each
- *  event carries the counters snapshot AS OF that event, matching the real
- *  engine's `_emit(phase, level, message, detail)` shape and message copy
- *  (`engine/aizu/engines/{platform}/session.py`). */
-const RUN_SCRIPT: readonly ScriptedEvent[] = [
-  { event: { id: 1, seq: 1, campaignId: DEMO_CAMPAIGN_ID, phase: 'lifecycle', level: 'info', message: 'Run started — campaign cmp-001 (instagram)', detail: '{"campaignId":"cmp-001"}', createdAt: RUN_TS_BASE, platform: 'instagram' },
-    counters: { reelsSeen: 0, relevancePasses: 0, commentsScored: 0, matches: 0, spendUsd: 0, likes: 0, follows: 0 } },
-  { event: { id: 2, seq: 2, campaignId: DEMO_CAMPAIGN_ID, phase: 'feed_walk', level: 'info', message: scanMessage('instagram', 8, 3), detail: '{"reelsSeen":8,"relevancePasses":3}', createdAt: RUN_TS_BASE + 40, platform: 'instagram' },
-    counters: { reelsSeen: 8, relevancePasses: 3, commentsScored: 5, matches: 0, spendUsd: 0.02, likes: 0, follows: 0 } },
-  { event: { id: 3, seq: 3, campaignId: DEMO_CAMPAIGN_ID, phase: 'comments', level: 'success', message: matchMessage('instagram', 'dana_t', 0.91), detail: '{"username":"dana_t","score":0.91}', createdAt: RUN_TS_BASE + 75, platform: 'instagram' },
-    counters: { reelsSeen: 10, relevancePasses: 4, commentsScored: 9, matches: 1, spendUsd: 0.05, likes: 0, follows: 0 } },
-  { event: { id: 4, seq: 1, campaignId: DEMO_CAMPAIGN_ID, phase: 'lifecycle', level: 'info', message: 'Run started — campaign cmp-001 (linkedin)', detail: '{"campaignId":"cmp-001"}', createdAt: RUN_TS_BASE + 110, platform: 'linkedin' },
-    counters: { reelsSeen: 10, relevancePasses: 4, commentsScored: 9, matches: 1, spendUsd: 0.05, likes: 0, follows: 0 } },
-  { event: { id: 5, seq: 2, campaignId: DEMO_CAMPAIGN_ID, phase: 'feed_walk', level: 'info', message: scanMessage('linkedin', 6, 3), detail: '{"reelsSeen":6,"relevancePasses":3}', createdAt: RUN_TS_BASE + 150, platform: 'linkedin' },
-    counters: { reelsSeen: 16, relevancePasses: 7, commentsScored: 14, matches: 1, spendUsd: 0.09, likes: 0, follows: 0 } },
-  { event: { id: 6, seq: 3, campaignId: DEMO_CAMPAIGN_ID, phase: 'comments', level: 'success', message: matchMessage('linkedin', 'sarah.chen', 0.88), detail: '{"username":"sarah.chen","score":0.88}', createdAt: RUN_TS_BASE + 185, platform: 'linkedin' },
-    counters: { reelsSeen: 18, relevancePasses: 8, commentsScored: 17, matches: 2, spendUsd: 0.12, likes: 0, follows: 0 } },
-  { event: { id: 7, seq: 1, campaignId: DEMO_CAMPAIGN_ID, phase: 'lifecycle', level: 'info', message: 'Run started — campaign cmp-001 (x)', detail: '{"campaignId":"cmp-001"}', createdAt: RUN_TS_BASE + 220, platform: 'x' },
-    counters: { reelsSeen: 18, relevancePasses: 8, commentsScored: 17, matches: 2, spendUsd: 0.12, likes: 0, follows: 0 } },
-  { event: { id: 8, seq: 2, campaignId: DEMO_CAMPAIGN_ID, phase: 'comments', level: 'success', message: matchMessage('x', 'devops_kate', 0.93), detail: '{"username":"devops_kate","score":0.93}', createdAt: RUN_TS_BASE + 260, platform: 'x' },
-    counters: { reelsSeen: 24, relevancePasses: 11, commentsScored: 23, matches: 3, spendUsd: 0.17, likes: 0, follows: 0 } },
-  { event: { id: 9, seq: 1, campaignId: DEMO_CAMPAIGN_ID, phase: 'lifecycle', level: 'info', message: 'Run started — campaign cmp-001 (youtube)', detail: '{"campaignId":"cmp-001"}', createdAt: RUN_TS_BASE + 295, platform: 'youtube' },
-    counters: { reelsSeen: 24, relevancePasses: 11, commentsScored: 23, matches: 3, spendUsd: 0.17, likes: 0, follows: 0 } },
-  { event: { id: 10, seq: 2, campaignId: DEMO_CAMPAIGN_ID, phase: 'comments', level: 'success', message: matchMessage('youtube', 'techreviewer_amy', 0.82), detail: '{"username":"techreviewer_amy","score":0.82}', createdAt: RUN_TS_BASE + 335, platform: 'youtube' },
-    counters: { reelsSeen: 30, relevancePasses: 14, commentsScored: 29, matches: 4, spendUsd: 0.22, likes: 0, follows: 0 } },
-  { event: { id: 11, seq: 1, campaignId: DEMO_CAMPAIGN_ID, phase: 'lifecycle', level: 'info', message: 'Run started — campaign cmp-001 (reddit)', detail: '{"campaignId":"cmp-001"}', createdAt: RUN_TS_BASE + 370, platform: 'reddit' },
-    counters: { reelsSeen: 30, relevancePasses: 14, commentsScored: 29, matches: 4, spendUsd: 0.22, likes: 0, follows: 0 } },
-  { event: { id: 12, seq: 2, campaignId: DEMO_CAMPAIGN_ID, phase: 'comments', level: 'success', message: matchMessage('reddit', 'pm_throwaway', 0.94), detail: '{"username":"pm_throwaway","score":0.94}', createdAt: RUN_TS_BASE + 410, platform: 'reddit' },
-    counters: { reelsSeen: 36, relevancePasses: 17, commentsScored: 35, matches: 5, spendUsd: 0.27, likes: 0, follows: 0 } },
-  { event: { id: 13, seq: 1, campaignId: DEMO_CAMPAIGN_ID, phase: 'lifecycle', level: 'info', message: 'Run started — campaign cmp-001 (telegram)', detail: '{"campaignId":"cmp-001"}', createdAt: RUN_TS_BASE + 445, platform: 'telegram' },
-    counters: { reelsSeen: 36, relevancePasses: 17, commentsScored: 35, matches: 5, spendUsd: 0.27, likes: 0, follows: 0 } },
-  { event: { id: 14, seq: 2, campaignId: DEMO_CAMPAIGN_ID, phase: 'comments', level: 'success', message: matchMessage('telegram', 'ops_ninja', 0.86), detail: '{"username":"ops_ninja","score":0.86}', createdAt: RUN_TS_BASE + 485, platform: 'telegram' },
-    counters: { reelsSeen: 42, relevancePasses: 20, commentsScored: 41, matches: 6, spendUsd: 0.32, likes: 0, follows: 0 } },
+const RUN_TICKS: readonly TickSeed[] = [
+  // instagram — start, a scan tick, then the first qualified lead
+  ['starting',   0,  0,  0, 0, 0,    0],
+  ['searching',  8,  3,  5, 0, 0.02, 40],
+  ['qualifying', 10, 4,  9, 1, 0.05, 75],
+  // linkedin
+  ['starting',   10, 4,  9, 1, 0.05, 110],
+  ['searching',  16, 7, 14, 1, 0.09, 150],
+  ['qualifying', 18, 8, 17, 2, 0.12, 185],
+  // x
+  ['starting',   18, 8, 17, 2, 0.12, 220],
+  ['qualifying', 24, 11, 23, 3, 0.17, 260],
+  // youtube
+  ['starting',   24, 11, 23, 3, 0.17, 295],
+  ['qualifying', 30, 14, 29, 4, 0.22, 335],
+  // reddit
+  ['starting',   30, 14, 29, 4, 0.22, 370],
+  ['qualifying', 36, 17, 35, 5, 0.27, 410],
+  // telegram
+  ['starting',   36, 17, 35, 5, 0.27, 445],
+  ['qualifying', 42, 20, 41, 6, 0.32, 485],
 ];
 
-export const DEMO_RUN_SCRIPT: readonly ScriptedEvent[] = RUN_SCRIPT.map(({ event, counters }) => ({
-  event: buildRunEvent(event), counters,
-}));
+export const DEMO_RUN_SCRIPT: readonly DemoRunTick[] = RUN_TICKS.map(
+  ([phase, itemsScanned, relevantFound, commentsScored, leadsFound, spendUsd, offset]) => ({
+    phase,
+    itemsScanned,
+    relevantFound,
+    leadsFound,
+    lastEventAt: RUN_TS_BASE + offset,
+    // `counters.matches` mirrors `leadsFound` here because an in-process run's rows
+    // land immediately. On a real FLEET run the two diverge until the job acks — which
+    // is the whole reason `leadsFound` is computed separately (Section E).
+    counters: {
+      reelsSeen: itemsScanned,
+      relevancePasses: relevantFound,
+      commentsScored,
+      matches: leadsFound,
+      spendUsd,
+      likes: 0,
+      follows: 0,
+    },
+  }),
+);

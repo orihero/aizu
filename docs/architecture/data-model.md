@@ -12,7 +12,7 @@ Every table, column, constraint, and index below is transcribed from `store.py` 
 
 - **One SQLite file** is the whole interface (`store.py:1-11`).
 - Opened in **WAL** mode with `foreign_keys=ON`, `busy_timeout=30000`, connection `timeout=30.0s` (`store.py:1046-1050`).
-- **Schema version:** `SCHEMA_VERSION = 25`, stored in `meta` under key `schema_version` (`store.py:37`). The docstring on that line is the authoritative version history (v2 → v25).
+- **Schema version:** `SCHEMA_VERSION = 27`, stored in `meta` under key `schema_version` (`store.py:37`). The comment on that line is the authoritative version history (v2 → v27).
 - **Timestamps** are **REAL epoch seconds** on data tables (sessions/actions/matches/etc.). A few audit tables use **ISO-8601 TEXT** — notably `audit_log.created_at`. Local time everywhere is **Asia/Tashkent, a fixed UTC+5 with no DST** (`store.py:69-74`; `schedule.py:14-15`).
 
 ### Migration model
@@ -23,7 +23,7 @@ Fresh DBs get everything from the `SCHEMA` `executescript`. Upgrading DBs are pa
 - **v6** status value remap via `UPDATE` (`_STATUS_V6_REMAP`, `store.py:57-61`, `1093-1095`).
 - **v7** multi-tenancy: `settings`/`integrations`/`users` rebuilt or `ADD COLUMN org_id`; existing data folded into one Default org (`_migrate_to_v7`, `store.py:1103-1107`).
 - **v10–v17** are purely additive: `CREATE TABLE IF NOT EXISTS` for net-new tables plus `_add_column_if_missing` for new columns on old tables (`store.py:1111-1157`). Notably `matches.found_by_models` (v17) is added by migration and is **not** in the base `matches` DDL (`store.py:1157`).
-- **v18–v25** follow the same additive idiom. v24 (Campaign Lab per-source attribution) adds the net-new `source_stats` table via `SCHEMA` plus `seen_reels.source` / `matches.source` via `_add_column_if_missing`; v25 adds `seen_reels.author_id` the same way.
+- **v18–v27** follow the same additive idiom. v24 (Campaign Lab per-source attribution) adds the net-new `source_stats` table via `SCHEMA` plus `seen_reels.source` / `matches.source` via `_add_column_if_missing`; v25 adds `seen_reels.author_id` the same way; v26 (Campaign Lab negative capture) adds the net-new `eval_candidates` table plus `matches.confidence` / `matches.raw`; v27 (lead-identity redaction) adds `matches.intent`. `intent` is in the base `matches` DDL **and** in the migration list — a fresh DB gets it from `SCHEMA`, an upgrading one from the guarded `ADD COLUMN`, and existing rows take NULL (rendered as a neutral placeholder, never back-filled from the raw comment).
 - **`author_id` is written on FIRST SIGHTING only for `source`, but refreshed for `author_id`** — a rename should update the display name's id mapping, while provenance (which seed found the item) must never be rewritten by a re-poll. See `mark_seen`'s two differing COALESCE directions.
 - **Index creation after ADD COLUMN.** Indexes naming migration-added columns cannot live in the `SCHEMA` `executescript` (it runs *before* the ALTERs), so they are created in `_init_schema` alongside the `org_id` indexes. They go through `_create_index_if_columns`, which skips an index whose columns are absent rather than aborting `_init_schema` — an index is a read optimisation and must never take a database offline.
 
@@ -76,10 +76,14 @@ Holds `schema_version` among others.
 | updated_at | REAL | NOT NULL |
 | found_by_models | TEXT | JSON array; **added by v17 migration**, not in base DDL (`store.py:1157`) |
 | source | TEXT | **v24** — the seed term whose page produced this lead |
+| confidence / raw | REAL / TEXT | **v26** — the classifier's self-confidence and its unparsed reply (sampled); added by migration, not in base DDL |
+| intent | TEXT | **v27** — the customer-facing one-line summary of what this commenter wants |
 
 - **PK:** `(campaign_id, platform, comment_id)` — writes are idempotent on `comment_id`; a re-poll never overwrites human `status` (`store.py:7-8`).
 - **Indexes:** `idx_matches_reel(campaign_id, platform, reel_id)`, `idx_matches_status(campaign_id, platform, status)`, `idx_matches_time(campaign_id, captured_at)`, `idx_matches_org(org_id)`, and (v24) `idx_matches_source(campaign_id, platform, source)` + `idx_matches_username(username)`.
 - **`source` has one writer, and it is not the engines.** No engine passes it: `_upsert_match_row` derives it from the reel's `seen_reels.source`. That keeps one writer for the fact and fixes the case an engine could not get right anyway — a watchlist re-poll builds a bare `Reel` with no source, but the `seen_reels` row still knows.
+- **`intent` (v27) is the whole customer-facing lead payload, and it upserts by a DIFFERENT rule than `reason`.** Every engine passes it as `intent=derive_intent(...)` (`core/matching.py`) built from the post's caption + the person's comment; the row is written empty-as-NULL (`(intent or "").strip() or None`). On re-poll: `reason=excluded.reason` — the classifier's rationale is a fact about the LATEST verdict, so the newest one simply wins. But `intent=COALESCE(excluded.intent, matches.intent)` — an intent we already have is never nulled by a re-poll that derived nothing (a truncated caption, a model reply missing the key, an older worker whose ack body omits `intent`). The asymmetry matters because the org plane shows NO `username` and NO comment `text`, so blanking `intent` does not degrade a lead's description, it erases it: the customer would be left with a lead that says nothing at all. `matches()` is `SELECT *`, so the column flows to every reader for free.
+- **The raw identity is still stored; it just stops here.** `username` and `text` remain on the row and are served only through the superadmin plane (`build_admin_org_leads` → `_build_matches(include_identity=True)`), which shows handle, comment, and derived `intent` side by side so an operator can check the summary is honest. Rows captured before v27 have `intent IS NULL`; the org payload carries them as `""` for the client to render as a neutral placeholder — never reconstructed from the comment.
 
 **Lead status vocabulary** (`store.py:43-52`): `VALID_STATUS = {new, in_progress, interested, closed, couldnt_connect, archived}`. Moving into `{closed, couldnt_connect, archived}` (`FORCED_REASON_STATUS`) requires a non-empty reason note (enforced in the store, not just UI). `WIN_STATUS = {interested, closed}` count as won for CPL / win-rate.
 
@@ -580,6 +584,23 @@ A campaign with a brief row is **runnable**; a `campaign_meta`-only row is a **d
 
 Provider credentials are env vars, not rows (`store.py:530-531`).
 
+#### Tier entitlements (`billing.TIERS`, not a table)
+
+The catalogue lives in `engine/aizu/billing.py`; the `subscriptions` row only names the tier and (for Scale) overrides its lead cap. Two entitlements, both interval-independent — only price and renewal differ between month and year.
+
+| Tier | `lead_cap` (period leads) | `campaign_cap` (non-archived campaigns) |
+|---|---|---|
+| free | 10 | 1 |
+| lite | 50 | 3 |
+| starter | 250 | NULL = unlimited |
+| pro | 2000 | NULL = unlimited |
+| scale | 0 in the catalogue — a fail-closed placeholder; the real number is `subscriptions.lead_cap_override`, set per deal | NULL = unlimited |
+
+- **`None` means UNLIMITED, not "unset".** Read it through `billing.tier_campaign_cap` and gate on `cap is not None`; a truthiness check turns unlimited into a hard zero and blocks campaign creation for every paying org. Unknown/garbled tier → the FREE cap, the same fail-closed rule `tier_lead_cap` uses.
+- **Archived campaigns do not count** towards `campaign_cap` — it bounds the *working* set, so an org at its limit can archive its way forward instead of being wedged with no self-serve move but an upgrade. `panel.org_campaign_count` is the single producer of "used", shared by the `/api/settings` meter and the create gate in `server.py`, so the number the customer sees and the number that enforces can never disagree.
+- **There is no separate per-run allowance.** `billing.tier_max_run_leads(tier)` is just the period `lead_cap` — a run may aim at the whole period's worth — and the run-start gate then clamps the request again by what is actually left: `remaining = sub["lead_cap"] − count_leads_this_period(org, period_since(org))`, where `sub["lead_cap"]` is already the resolved cap (any `lead_cap_override` overlaid). `remaining <= 0` is the `402`; otherwise a `null` target becomes `remaining` and a stated one becomes `min(requested, remaining)`.
+- **That per-run clamp is a SOFT bound.** The engine's stop condition is `counters.matches >= lead_target` on PER-SESSION counters, and `counters.matches` only increments once per post after a whole comment batch, so one reel yielding 13 qualifying comments overshoots a target of 10 without ever testing in between (10 targeted, 15 delivered — measured on a live run). The HARD enforcement is at the period boundary: once the allowance is spent, the next run start is refused with `402`. An overshoot therefore self-corrects by shortening the next run rather than truncating this one. Docs and UI copy say "up to N leads per run"; "exactly N" and "never more than N" are false.
+
 ---
 
 ### 2.10 Distributed workers & jobs (v14)
@@ -856,6 +877,7 @@ erDiagram
       TEXT status
       REAL score
       TEXT found_by_models
+      TEXT intent
       REAL captured_at
     }
     sessions {
@@ -985,6 +1007,8 @@ A campaign has no dedicated row/PK — it is the union of a `campaign_meta` row 
 
 Captured by a session (idempotent on `comment_id`; human `status` survives re-scrapes — `store.py:7-8`). Kanban pipeline `new → in_progress → interested → closed / couldnt_connect / archived` (`VALID_STATUS`, `store.py:43`). Each transition appends an immutable `lead_status_changes` row; moves into terminal statuses require a reason note (`FORCED_REASON_STATUS`, `store.py:47`). `WIN_STATUS = {interested, closed}` drives CPL / win-rate.
 
+**A lead has two faces (v27).** The stored row is complete; the org-facing projection is redacted. `_build_matches` (`panel.py`) omits `username` and `text` and emits `intent` instead, so `/api/leads`, `/api/state`, the dashboard ticker, and any export built from that list carry no handle and no comment prose. `include_identity=True` — set by exactly one caller, `build_admin_org_leads` — restores both for the superadmin plane. The flag defaults to DENY so a future org-facing caller that forgets it leaks nothing. The one sanctioned way back for a *customer* is `POST /api/lead/reveal`: one lead at a time, gated on the `reveal_lead` action, and audited (denials included) into `audit_log`.
+
 ### 4.4 Run / Session
 
 A RunManager **run** (`run_id`) spawns one or more **sessions**. `sessions.status`: `running → completed | halted` (`store.py:181`), split by `engine_mode` into `harvest` vs warming. During a run, `run_events` (append-only narrative) and telemetry (`spend_log`, `actions`, `health_flags`, `model_comparison_log`) accumulate keyed by `session_id`. `run_events` are retention-pruned (14-day TTL, keep the most recent runs — `store.py:753-757`).
@@ -1006,6 +1030,6 @@ Registered with a hashed bearer token. Presence `status` is **never stored** —
 ## 5. Notable gaps
 
 - **No `campaigns` table exists.** A campaign is modeled implicitly across `campaign_meta` + `campaign_briefs`. This is by design, but there is no single authoritative campaign row/PK.
-- The `SCHEMA` string is the complete DDL. Beyond it, only migration `ADD COLUMN`s add columns; the full set is at `store.py:1111-1157` (`org_id` on `_ORG_ID_TABLES`; `sessions.run_id/org_id/engine_mode/account_id`; `health_flags.account_id`; `actions.account_id`; the twelve `campaign_meta` v12 columns; `jobs.pinned_worker_id`; `matches.found_by_models`).
+- The `SCHEMA` string is the complete DDL. Beyond it, only migration `ADD COLUMN`s add columns; the full set is at `store.py:1111-1157` (`org_id` on `_ORG_ID_TABLES`; `sessions.run_id/org_id/engine_mode/account_id`; `health_flags.account_id`; `actions.account_id`; the twelve `campaign_meta` v12 columns; `jobs.pinned_worker_id`; `matches.found_by_models`; `matches.confidence/raw`).
 - `team_members` is panel-only and unused by the engine (`store.py:263`); it overlaps conceptually with `users` but is a separate table with no FK linkage.
 - Column-level semantics for JSON blobs (`spec`, `brief`, `fingerprint`, `detail`, `extracted`, `capabilities`, `found_by_models`) are documented in comments but their internal shapes are intentionally schema-free and evolve without migration — they are not enumerable from `store.py` alone.

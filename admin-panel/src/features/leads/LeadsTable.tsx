@@ -1,8 +1,8 @@
 import { ChevronRight, ChevronsUpDown, ChevronDown, ChevronUp, Inbox } from 'lucide-react';
-import { Avatar } from '@/shared/ui/Avatar';
+import { cn } from '@/shared/lib/cn';
 import { EmptyState } from '@/shared/ui/EmptyState';
 import { ScorePill } from '@/shared/ui/ScorePill';
-import type { LeadSort, LeadSortKey } from '@/shared/selectors/leads';
+import { LEAD_INTENT_PLACEHOLDER, leadIntentLabel, type LeadSort, type LeadSortKey } from '@/shared/selectors/leads';
 import type { Match } from '@/shared/types/domain';
 import { LeadStatusPill } from './LeadStatusPill';
 import { PlatformChip } from './PlatformChip';
@@ -19,9 +19,15 @@ interface LeadsTableProps {
   readonly onOpen: (lead: Match) => void;
 }
 
-/** Column headers. `key` is the sort field; a null key is a non-sortable column. */
+/**
+ * Column headers. `key` is the sort field; a null key is a non-sortable column.
+ *
+ * v27: the identity column is an INTENT column. A row carries no handle, no comment
+ * and no Avatar — raw identity is reachable only one lead at a time, through the
+ * drawer's audited reveal.
+ */
 const HEADERS: readonly { label: string; key: LeadSortKey | null }[] = [
-  { label: 'Lead', key: 'username' },
+  { label: 'Intent', key: 'intent' },
   { label: 'Platform', key: 'platform' },
   { label: 'Status', key: 'status' },
   { label: 'Score', key: 'score' },
@@ -88,53 +94,58 @@ export function LeadsTable({
           </tr>
         </thead>
         <tbody>
-          {rows.map((lead) => (
-            <tr
-              key={lead.id}
-              onClick={() => { onOpen(lead); }}
-              className="group cursor-pointer transition-colors hover:bg-surface-2"
-            >
-              <td
-                className="rounded-l-card px-3 py-3"
-                onClick={(event) => { event.stopPropagation(); }}
+          {rows.map((lead) => {
+            const intent = leadIntentLabel(lead);
+            return (
+              <tr
+                key={lead.id}
+                onClick={() => { onOpen(lead); }}
+                className="group cursor-pointer transition-colors hover:bg-surface-2"
               >
-                <input
-                  type="checkbox"
-                  aria-label={`Select ${lead.username}`}
-                  checked={selected.has(lead.id)}
-                  onChange={() => { onToggleSelect(lead.id); }}
-                  className="size-4 cursor-pointer accent-brand"
-                />
-              </td>
-              <td className="max-w-72 px-3 py-3">
-                <div className="flex items-center gap-2.5">
-                  <Avatar username={lead.username} />
-                  <div className="min-w-0">
-                    <div className="font-semibold">{lead.username}</div>
-                    <div className="truncate text-[10px] text-text-faint" title={lead.text}>
-                      {lead.text}
-                    </div>
+                <td
+                  className="rounded-l-card px-3 py-3"
+                  onClick={(event) => { event.stopPropagation(); }}
+                >
+                  <input
+                    type="checkbox"
+                    // No handle to name the row by any more; the intent is the row.
+                    aria-label={`Select lead: ${intent}`}
+                    checked={selected.has(lead.id)}
+                    onChange={() => { onToggleSelect(lead.id); }}
+                    className="size-4 cursor-pointer accent-brand"
+                  />
+                </td>
+                <td className="max-w-96 px-3 py-3">
+                  {/* Truncated to keep the row compact; the title carries the full intent. */}
+                  <div
+                    className={cn(
+                      'truncate font-semibold',
+                      intent === LEAD_INTENT_PLACEHOLDER && 'font-normal italic text-text-faint',
+                    )}
+                    title={intent}
+                  >
+                    {intent}
                   </div>
-                </div>
-              </td>
-              <td className="px-3 py-3">
-                <PlatformChip platform={lead.platform} />
-              </td>
-              <td className="px-3 py-3">
-                <LeadStatusPill status={lead.status} />
-              </td>
-              <td className="px-3 py-3">
-                <ScorePill score={lead.score} threshold={threshold} />
-              </td>
-              <td className="px-3 py-3 tabular-nums">
-                <div>{lead.capturedAt.date}</div>
-                <div className="text-[10px] text-text-faint">{lead.capturedAt.time}</div>
-              </td>
-              <td className="rounded-r-card px-3 py-3 text-text-faint transition-transform group-hover:translate-x-0.5 group-hover:text-text">
-                <ChevronRight className="size-3.5" aria-hidden />
-              </td>
-            </tr>
-          ))}
+                </td>
+                <td className="px-3 py-3">
+                  <PlatformChip platform={lead.platform} />
+                </td>
+                <td className="px-3 py-3">
+                  <LeadStatusPill status={lead.status} />
+                </td>
+                <td className="px-3 py-3">
+                  <ScorePill score={lead.score} threshold={threshold} />
+                </td>
+                <td className="px-3 py-3 tabular-nums">
+                  <div>{lead.capturedAt.date}</div>
+                  <div className="text-[10px] text-text-faint">{lead.capturedAt.time}</div>
+                </td>
+                <td className="rounded-r-card px-3 py-3 text-text-faint transition-transform group-hover:translate-x-0.5 group-hover:text-text">
+                  <ChevronRight className="size-3.5" aria-hidden />
+                </td>
+              </tr>
+            );
+          })}
         </tbody>
       </table>
     </div>

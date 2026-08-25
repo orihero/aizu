@@ -54,14 +54,14 @@ function RunRow({
     </div>
   );
 
-  // Only a run correlated to a RunManager run has a recorded event log to open.
+  // Only a run correlated to a RunManager run has recorded progress to open.
   if (session.runId === null) {
     return (
       <li className={ROW_BASE}>
         {header}
         <RunMetrics session={session} />
         <span className="mt-1.5 block text-[10px] font-semibold uppercase tracking-wide text-text-faint">
-          No log available
+          No details available
         </span>
       </li>
     );
@@ -88,7 +88,12 @@ interface CampaignRunHistoryProps {
 /**
  * Recent runs of one campaign, shown beside the campaign details. Each session
  * is one discovery run; newest is on top. A run with a known `runId` opens a
- * drawer with its recorded step-by-step activity feed (`/api/run/activity`).
+ * drawer with its recorded outcome (`/api/run/activity`).
+ *
+ * v27 (B3): what that drawer shows is the run's SCALARS — leads found against the
+ * target, phase, counters, spend, and the found-vs-delivered state when they diverge.
+ * The step-by-step narrative it used to show is a superadmin surface now: a match
+ * event's detail carries the very handle and comment the org-facing payload redacts.
  */
 export function CampaignRunHistory({ sessions }: CampaignRunHistoryProps) {
   const [selected, setSelected] = useState<Session | null>(null);
@@ -126,7 +131,7 @@ export function CampaignRunHistory({ sessions }: CampaignRunHistoryProps) {
         onClose={() => { setSelected(null); }}
         title={
           <div>
-            <div className="text-[13px] font-bold text-text">Run log</div>
+            <div className="text-[13px] font-bold text-text">Run summary</div>
             {selected ? (
               <div className="text-xs text-text-muted">
                 {selected.date} · {selected.start}

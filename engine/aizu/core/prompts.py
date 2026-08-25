@@ -19,12 +19,31 @@ JSON-only output so the tolerant parser rarely has to repair anything.
 """
 from __future__ import annotations
 
+# The customer-facing `intent` key of the MATCH verdict (schema v27). The
+# org-facing lead payload carries NO username and NO comment text, so this one
+# sentence is ALL an operator gets — which is exactly why the prompt has to
+# forbid identity inside it and forbid a verbatim echo of the comment (a
+# redaction that reprints the comment redacts nothing). `matching.derive_intent`
+# re-checks both rules and rebuilds the line from the grounded `extracted`
+# fields when a model ignores them, so this text is the fast path, never the
+# enforcement — and campaign-authored prompts written before v27 simply fall
+# through to that deterministic path.
+MATCH_INTENT_RULE = (
+    'an "intent" key: ONE English sentence saying what the COMMENTER wants, '
+    "combining the POST they commented on with their COMMENT (e.g. "
+    '"Interested in red Nike sneakers, size 42, in Tashkent"). It MUST NOT '
+    "contain their handle, name, phone, or e-mail, and MUST NOT be a verbatim "
+    "copy of the comment"
+)
+
 # --- Relevance gate: is THIS reel on-campaign? (caption / on-screen text) ----
 SYSTEM_GENERIC = (
     "You are a precise classifier for a brief-driven discovery agent. Apply the "
     "BRIEF exactly and judge by meaning regardless of language (uz/ru/en). Reply "
     'with ONLY a JSON object: {"label": str, "score": 0..1, "confidence": 0..1, '
-    '"reason": str, "extracted": object}. score = strength of fit to the brief.'
+    '"reason": str, "intent": str, "extracted": object}. score = strength of fit '
+    "to the brief. When the content being judged is a COMMENT, fill "
+    f'{MATCH_INTENT_RULE}. For anything else, set "intent" to "".'
 )
 
 # Domain-free vision fallback — used only when a campaign omits its own
@@ -145,7 +164,9 @@ SYSTEM_CAMPAIGN_PROMPTS = (
     "and end by requiring the model to output ONLY a single minified JSON object "
     'with EXACTLY these keys: {"label":str,"score":0..1,"confidence":0..1,'
     '"reason":str,"extracted":object}. The MATCH prompt MUST also require the '
-    "`extracted` object to include the campaign's extract fields, and MUST state "
+    "`extracted` object to include the campaign's extract fields, MUST require "
+    f"{MATCH_INTENT_RULE} (the operator sees this line INSTEAD of the commenter's "
+    "name and comment), and MUST state "
     "that the SUPPLY side (a commenter OFFERING or SELLING) is NOT a lead. Keep each "
     "prompt under 1200 characters and self-contained.\n\n"
     "Output ONLY one minified JSON object with EXACTLY these string keys:\n"

@@ -63,6 +63,14 @@ def srv():
         store.upsert_campaign_brief("camp-a", {"platform": "instagram"}, org_id=org_a)
         store.upsert_campaign_meta("camp-b", org_id=org_b, display_name="BetaCampaign")
         store.upsert_campaign_brief("camp-b", {"platform": "instagram"}, org_id=org_b)
+        # One real lead for org B: the leads read used to be asserted on shape alone,
+        # against an EMPTY array — which cannot tell a superadmin payload that keeps
+        # the identity from one that redacts it like the org plane now does (v27).
+        store.upsert_match(campaign_id="camp-b", reel_id="r1", comment_id="b-c1",
+                           username="aziz", text="how much for the red ones?",
+                           lang="en", score=0.9, reason="asked price", extracted=None,
+                           tier="local", platform="instagram",
+                           intent="Wants a price for the red sneakers")
         secret = admin_auth.generate_totp_secret()
         store.create_platform_admin(email="ops@x.io", password_hash=hash_password(PW),
                                     mfa_secret=cipher.encrypt({"totp": secret}))
@@ -178,6 +186,35 @@ def test_org_leads_read_matches_admin_contract(srv):
     assert isinstance(data["leads"], list)
     assert data["page"] == 1 and data["pageSize"] == 10
     assert isinstance(data["total"], int)
+
+
+def test_admin_org_leads_keep_the_identity_the_org_plane_hides(srv):
+    """v27 splits the two lead views apart, and this is the half that must NOT be
+    redacted: the superadmin sees the handle and the raw comment BESIDE the derived
+    intent. Without the raw evidence there is no way to tell a good intent line from
+    one that quietly leaked the comment, which is the only reason this plane exists.
+    """
+    cookie = _admin_cookie(srv)
+    status, resp, _ = _req("GET", srv["base"],
+                           f"/api/admin/orgs/{srv['org_b']}/leads?page=1&pageSize=10",
+                           cookie=cookie)
+    assert status == 200, resp
+    lead = next(m for m in resp["data"]["leads"] if m["commentId"] == "b-c1")
+    assert lead["username"] == "aziz"
+    assert lead["text"] == "how much for the red ones?"
+    assert lead["intent"] == "Wants a price for the red sneakers"
+
+
+def test_admin_org_leads_search_still_spans_the_handle(srv):
+    """The org plane's search deliberately no longer answers for a username (it would
+    be an oracle for the identity the payload hides). The superadmin plane must keep
+    it — a support request usually arrives AS a handle."""
+    cookie = _admin_cookie(srv)
+    status, resp, _ = _req("GET", srv["base"],
+                           f"/api/admin/orgs/{srv['org_b']}/leads?q=aziz",
+                           cookie=cookie)
+    assert status == 200, resp
+    assert [m["commentId"] for m in resp["data"]["leads"]] == ["b-c1"]
 
 
 def test_org_read_unknown_org_is_404(srv):

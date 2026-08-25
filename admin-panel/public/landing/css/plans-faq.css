@@ -28,12 +28,11 @@
   max-width: 560px;
 }
 
-/* Four tiers: Free, Starter, Pro, Scale. Paid plans start at Starter — the
-   Lite tier exists in engine/aizu/billing.py but is deliberately not sold on
-   the page. */
+/* Five tiers: Free, Lite, Starter, Pro, Scale — the full engine/aizu/billing.py
+   TIERS catalogue, in upgrade order. */
 .plans-grid {
   display: grid;
-  grid-template-columns: repeat(4, 1fr);
+  grid-template-columns: repeat(5, 1fr);
   gap: 22px;
   align-items: stretch;
 }
@@ -100,6 +99,19 @@
   color: var(--muted);
 }
 
+/* Scale's "amount" is a WORD, not a price — Custom / Договорная / Individual — and a
+   ten-letter word at the price size is ~194px wide, which needs a ~245px
+   column. This grid never gets one: the narrowest columns the ladder below
+   produces are 211px (5-across, just above the 1240px step) and 201px
+   (2-across, just above the 520px step), so at 34px the ru/uz word ran out
+   past the card edge. Measured in Chrome: 24px keeps every locale inside a
+   195px column, i.e. narrower than anything the ladder can produce. English
+   ("Custom", six letters) happened to fit, which is exactly why this has to
+   be a rule rather than a translation note. */
+.plan__amount--word {
+  font-size: 24px;
+}
+
 .plan__year {
   margin-top: 7px;
   font-family: var(--font-mono);
@@ -125,6 +137,16 @@
   letter-spacing: -0.01em;
 }
 
+/* The second entitlement (billing.py TIERS.campaign_cap). Deliberately quieter
+   than .plan__leads — the lead allowance is what a buyer is choosing between,
+   the campaign allowance is the qualifier under it. */
+.plan__campaigns {
+  margin-top: 8px;
+  font-size: 14px;
+  line-height: 1.5;
+  color: var(--muted-2);
+}
+
 .plan .btn {
   margin-top: auto;
   width: 100%;
@@ -142,7 +164,17 @@
   color: var(--muted-2);
 }
 
-/* 4 cards fold to a clean 2x2 rather than 3-plus-an-orphan */
+/* Ladder 5 -> 3 -> 2 -> 1. The binding constraint is the widest numeric price,
+   "$24.99" plus its /mo | /мес | /oy suffix: it needs a ~200px column, and
+   5-across holds that down to a 1240px viewport (211px columns) but no lower.
+   With an odd card count some row always ends short — 3+2 and 2+2+1 are the
+   least ragged foldings. */
+@media (max-width: 1240px) {
+  .plans-grid {
+    grid-template-columns: repeat(3, 1fr);
+  }
+}
+
 @media (max-width: 1020px) {
   .plans-grid {
     grid-template-columns: repeat(2, 1fr);

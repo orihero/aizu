@@ -3,11 +3,13 @@ import { Link } from 'react-router-dom';
 import { PageHeader } from '@/app/layout/PageHeader';
 import { useCampaigns } from '@/shared/hooks/useCampaigns';
 import { usePersistedQueryState } from '@/shared/hooks/usePersistedQueryState';
+import { useSettings } from '@/shared/hooks/useSettings';
 import { useCan } from '@/shared/hooks/useCan';
 import { AsyncBoundary } from '@/shared/ui/AsyncBoundary';
 import { Card, CardBody } from '@/shared/ui/Card';
 import { Chip } from '@/shared/ui/Chip';
 import { EmptyState } from '@/shared/ui/EmptyState';
+import { formatNumber } from '@/shared/lib/formatters';
 import {
   type CampaignStatusFilter,
   selectCampaignsByStatus,
@@ -27,8 +29,75 @@ const FILTERS: readonly { readonly key: CampaignStatusFilter; readonly label: st
 
 const FILTER_KEYS: readonly CampaignStatusFilter[] = FILTERS.map((f) => f.key);
 
+const NEW_CAMPAIGN_CLASS =
+  'inline-flex items-center gap-1.5 rounded-full bg-accent px-3.5 py-1.5 text-xs font-bold text-accent-ink transition hover:-translate-y-px hover:shadow-lift active:scale-95';
+
 function asCampaignFilter(raw: unknown): CampaignStatusFilter | null {
   return FILTER_KEYS.includes(raw as CampaignStatusFilter) ? (raw as CampaignStatusFilter) : null;
+}
+
+/**
+ * The New-campaign action plus this org's campaign allowance (v27 plan limits).
+ *
+ * Rendered only for a role that can author campaigns — the same owner/admin set that
+ * receives BILLING on `/api/settings`, so the quota is always answerable here and its
+ * absence (a fetch still in flight) degrades to the plain button rather than to a
+ * disabled one. The server's 402 is the real gate; this exists so a full plan is
+ * visible BEFORE the form is filled in, instead of arriving as a silent rejection.
+ *
+ * `campaignCap === null` means UNLIMITED, not zero — a falsy check here would disable
+ * New campaign for every paying org on Starter and above.
+ */
+function NewCampaignAction() {
+  const { data: settings } = useSettings();
+  const billing = settings?.BILLING;
+  const cap = billing?.campaignCap ?? null;
+  const used = billing?.campaignsUsed ?? 0;
+  const capped = billing !== undefined && cap !== null && used >= cap;
+  const planName = billing
+    ? (billing.tiers.find((t) => t.tier === billing.tier)?.displayName ?? billing.tier)
+    : null;
+
+  return (
+    <div className="flex flex-col items-end gap-1">
+      <div className="flex items-center gap-3">
+        {billing ? (
+          <span className="text-[11.5px] font-semibold tabular-nums text-text-faint">
+            {cap === null
+              ? `${formatNumber(used)} campaigns · unlimited`
+              : `${formatNumber(used)} of ${formatNumber(cap)} campaigns used`}
+          </span>
+        ) : null}
+        {capped ? (
+          // A disabled <span>, not a Link: the route itself still works (the form 402s on
+          // submit), but offering it here would send the operator down a path we already
+          // know ends in a rejection.
+          <span
+            aria-disabled="true"
+            className={`${NEW_CAMPAIGN_CLASS} pointer-events-none cursor-not-allowed opacity-50`}
+          >
+            <Plus className="size-4" aria-hidden />
+            New campaign
+          </span>
+        ) : (
+          <Link to="/campaigns/new" className={NEW_CAMPAIGN_CLASS}>
+            <Plus className="size-4" aria-hidden />
+            New campaign
+          </Link>
+        )}
+      </div>
+      {capped ? (
+        <p className="max-w-[22rem] text-right text-[11.5px] font-medium text-warn">
+          {planName ?? 'Your plan'} includes {formatNumber(cap)}
+          {cap === 1 ? ' campaign' : ' campaigns'}. Archive one, or{' '}
+          <Link to="/settings/billing" className="font-bold text-brand hover:underline">
+            upgrade your plan
+          </Link>{' '}
+          to add another.
+        </p>
+      ) : null}
+    </div>
+  );
 }
 
 interface CampaignsViewProps {
@@ -82,7 +151,9 @@ function CampaignsView({ campaigns, run }: CampaignsViewProps) {
 export function CampaignsPage() {
   const { data: state, isLoading, error, refetch } = useCampaigns();
   // Viewers can read campaigns but not author or run them — hide the write controls
-  // (the server enforces this regardless; this keeps the UI honest).
+  // (the server enforces this regardless; this keeps the UI honest). Gating the whole
+  // action component also keeps the BILLING fetch inside it off a viewer's page, where
+  // /api/settings would 403.
   const canEdit = useCan('edit_campaigns');
 
   return (
@@ -90,17 +161,7 @@ export function CampaignsPage() {
       <PageHeader
         title="Campaigns"
         subtitle="Briefs the engine runs every session — pause, resume, or draft a new one."
-        actions={
-          canEdit ? (
-            <Link
-              to="/campaigns/new"
-              className="inline-flex items-center gap-1.5 rounded-full bg-accent px-3.5 py-1.5 text-xs font-bold text-accent-ink transition hover:-translate-y-px hover:shadow-lift active:scale-95"
-            >
-              <Plus className="size-4" aria-hidden />
-              New campaign
-            </Link>
-          ) : undefined
-        }
+        actions={canEdit ? <NewCampaignAction /> : undefined}
       />
       <AsyncBoundary isLoading={isLoading} error={error} onRetry={() => void refetch()}>
         {state ? <CampaignsView campaigns={state.CAMPAIGNS} run={state.RUN} /> : null}

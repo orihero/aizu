@@ -57,22 +57,46 @@ describe('CampaignRunHistory', () => {
     renderHistory([buildSession({ runId: null })]);
 
     expect(screen.queryByRole('button')).not.toBeInTheDocument();
-    expect(screen.getByText(/no log available/i)).toBeInTheDocument();
+    expect(screen.getByText(/no details available/i)).toBeInTheDocument();
   });
 
-  test('clicking a run opens its recorded activity log', async () => {
+  test('clicking a run opens its recorded outcome', async () => {
     const user = userEvent.setup();
     const repo = new FakePanelRepository(buildPanelState());
     repo.runActivity = buildRunActivity({
       runId: 'run-xyz',
       finished: true,
-      events: [buildRunEvent({ id: 1, message: 'session started' })],
+      phase: 'done',
+      leadsFound: 4,
+      leadsDelivered: 4,
+      delivery: 'delivered',
+      targetLeads: 10,
     });
     renderHistory([buildSession({ id: 's1', runId: 'run-xyz' })], repo);
 
     await user.click(screen.getByRole('button'));
 
-    expect(await screen.findByText('session started')).toBeInTheDocument();
+    expect(await screen.findByText('of 10 leads')).toBeInTheDocument();
+    expect(screen.getByText('Finished')).toBeInTheDocument();
     expect(repo.runActivityFetches[0]?.runId).toBe('run-xyz');
+  });
+
+  test('the opened run shows NO narrative event text (B3)', async () => {
+    // The log is a superadmin surface now: a match event's detail carries the very
+    // handle and comment the org-facing payload redacts, so a "filtered" feed would
+    // have shipped exactly those rows and trusted a filter to drop them.
+    const user = userEvent.setup();
+    const repo = new FakePanelRepository(buildPanelState());
+    repo.runActivity = buildRunActivity({
+      runId: 'run-xyz',
+      finished: true,
+      events: [buildRunEvent({ id: 1, message: 'matched @dana_t (0.91)' })],
+    });
+    renderHistory([buildSession({ id: 's1', runId: 'run-xyz' })], repo);
+
+    await user.click(screen.getByRole('button'));
+
+    await screen.findByText('Posts seen'); // the drawer's progress block has painted
+    expect(screen.queryByText(/dana_t/)).not.toBeInTheDocument();
   });
 });

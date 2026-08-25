@@ -27,7 +27,7 @@ Two shapes, verified per endpoint:
 
 ### Org-route RBAC gate (`do_POST`, `server.py:1745`)
 
-For protected org routes the ladder is: `401` (no session) → `403` (no `orgId`) → `403` (role lacks the route's action per `_ROUTE_ACTIONS`, `server.py:181`). Per-op finer checks live inside the handlers. Roles (`rbac.py`): `owner`, `admin`, `member`, `viewer`. Assignable via invite/direct-add: `admin`, `member`, `viewer` (owner is established at signup or by ownership transfer only).
+For protected org routes the ladder is: `401` (no session) → `403` (no `orgId`) → `403` (role lacks the route's action per `_ROUTE_ACTIONS`, `server.py:181`). Per-op finer checks live inside the handlers. One route is deliberately absent from that table: `POST /api/lead/reveal` does its own `reveal_lead` check inside the handler, because the table 403s before any handler runs and a *denied* reveal must still write its audit row. Roles (`rbac.py`): `owner`, `admin`, `member`, `viewer`. Assignable via invite/direct-add: `admin`, `member`, `viewer` (owner is established at signup or by ownership transfer only).
 
 ### CORS / CSRF
 
@@ -96,6 +96,8 @@ Public invite-landing lookup (org branding + intended role before signup).
 
 All require an org session; each is gated by an RBAC view-action via `_gated_org_user` (401→403→role, `server.py:3990`). Pages built with `attach_run=true` fold in an in-memory `RUN` block scoped to the org (from `RunManager.status(org_id)`, attached verbatim).
 
+> **Two things the customer plane deliberately does NOT return (v27).** A lead's **identity** — no `username`, no comment `text`, anywhere under `/api/*` except `POST /api/lead/reveal` (§3, one lead, audited) — and the **narrative run event feed**, which `/api/run/activity` folds into scalars and answers as `events: []`. Neither was deleted: the raw handle/comment live on in `matches` and are served by `GET /api/admin/orgs/{id}/leads`, and the full event stream by `GET /api/admin/run/activity` (§10, superadmin + IP allowlist). A missing `username` on a customer surface is the contract, not a bug. What is *not* redacted: `REELS`/post rows keep their `author` — that is the content creator whose post was scanned, not the lead — so leave `_build_reels` alone.
+
 | Method | Path | Role (view-action) | Envelope |
 |---|---|---|---|
 | GET | `/api/state?campaign=<id>` | session + orgId (pruned by role in builder) | Raw |
@@ -110,7 +112,7 @@ Full single-campaign panel state. `?campaign=` selects one campaign (verified in
 - **Response**: **RAW** dict from `build_raw` (`panel.py:770`): keys `CONFIG, CAMPAIGNS, SESSIONS, REELS, MATCHES, PLATFORMS, ESCALATION_LOG, ALERTS, HEALTH, SOUL, DASHBOARD, REPORTS`, plus `TEAM`+`INVITES` (view_team), `INTEGRATIONS` (view_settings), and `RUN` (in-memory). A `member` (leads-only role) gets a pruned `{CONFIG, CAMPAIGNS(stubs), MATCHES}`. `404` unknown campaign; `403` no org. Handler `server.py:4066`.
 
 ### GET `/api/dashboard`
-- **Response**: RAW `{DASHBOARD, MATCHES, HEALTH, ALERTS, CONFIG}` + `RUN`. Builder `build_dashboard_org` (`panel_org.py:273`). `DASHBOARD` is keyed by period `today/week/month`, each with `leads, goal, cpl, conversion, channels, funnel, bestHour, activeCampaigns, topCampaigns, ticker, leadStatus, pipeline, teamActivity, needsAttention` (`panel.py:360`).
+- **Response**: RAW `{DASHBOARD, MATCHES, HEALTH, ALERTS, CONFIG}` + `RUN`. Builder `build_dashboard_org` (`panel_org.py:273`). `DASHBOARD` is keyed by period `today/week/month`, each with `leads, goal, cpl, conversion, channels, funnel, bestHour, activeCampaigns, topCampaigns, ticker, leadStatus, pipeline, teamActivity, needsAttention` (`panel.py:360`). `ticker` rows are `{id, intent, platform, score, capturedAt}` — v27 replaced each row's `username` with the lead's `intent`, cut server-side at `TICKER_INTENT_CHARS` (80) on a word boundary so a client cannot widen it.
 
 ### GET `/api/campaigns`
 - **Response**: RAW `{CAMPAIGNS, SESSIONS}` + `RUN`; each card enriched with `fleetRunId` (run_id of the most-recent active fleet job, else null, `server.py:264`). Builder `build_campaigns_org` (`panel_org.py:299`). Card shape: `id, name, goalType, status, platform, platforms, threshold, languages, extractFields, startedAt, brief, budgetCap, goalTarget, briefForm, spent, leads, cpl, spark, warmth` + lifecycle fields `archivedAt, pausedReason, scheduleEnabled, scheduleKind, scheduleDow, scheduleHour, scheduleMinute, scheduleTz, nextRunAt` (`panel.py:49`, `panel.py:630`).
@@ -120,11 +122,13 @@ Full single-campaign panel state. `?campaign=` selects one campaign (verified in
 
 ### GET `/api/settings`
 - **Response**: RAW `{CONFIG, TEAM, INVITES, INTEGRATIONS}`, plus `BILLING` if the role has `view_billing`. Builder `build_settings_org` (`panel_org.py:328`). Same path is POST-write in §6 — split by method.
+- `BILLING` carries both entitlements: `leadCap`/`leadsUsed`/`usageRatio`/`nearLimit` and (v27) `campaignCap` (int or **null = unlimited**), `campaignsUsed` (non-archived campaigns, from `panel.org_campaign_count` — the same producer the create gate counts with), and `maxRunLeads` (the largest target one run may request = the org's resolved period cap, so a provisioned Scale org gets its override, not the catalogue's fail-closed 0). Each row of the `tiers` comparison grid gains `campaignCap` too. Gate on `campaignCap !== null`; a falsy check reads unlimited as zero and disables New Campaign for a paying org.
 
 ### GET `/api/leads`
 Org-wide, server-side filtered/sorted/paginated.
-- **Query**: `page` (default 1), `pageSize` (default 50, max 200), `dir` (`asc`/`desc`, default `desc`), `q` (username/text substring), `status`, `platform`, `campaign` (scopes list + tiles to one campaign), `sort` (`capturedAt|score|username|platform|status`, default `capturedAt`). Parsed leniently (`_query_int` — a bad param falls back, never 400s).
+- **Query**: `page` (default 1), `pageSize` (default 50, max 200), `dir` (`asc`/`desc`, default `desc`), `q` (substring over `intent` + `reason` + the `extracted` field VALUES — v27; the handle and comment are no longer in the payload, so searching them would silently match nothing), `status`, `platform`, `campaign` (scopes list + tiles to one campaign), `sort` (`capturedAt|score|intent|platform|status`, default `capturedAt`; `username` is still accepted and sorts every redacted row as `""`, so a stale bundle 200s instead of 500ing). Parsed leniently (`_query_int` — a bad param falls back, never 400s).
 - **Response**: **Enveloped** `{ok, data:{items, total, page, pageSize, stats, platforms, campaigns, CONFIG}}`. `stats` = `{total, counts{...}, won, escalated, labeled}`. Builder `build_leads_org` (`panel_org.py:409`); handler `server.py:4036`.
+- **Each item is redacted (v27)**: `{id, commentId, campaignId, platform, sessionId, lang, intent, score, reason, extracted, status, escalated, escalationCost, capturedAt{date,time,ts}, reelId, statusBy, statusAt, statusHistory[], notes[]}` — **no `username`, no `text`**. `intent` is the one-line "what this person wants", derived at capture by `core.matching.derive_intent`; it is `""` for a pre-v27 row or when nothing could be derived honestly, and the panel renders a neutral placeholder for that, never a fallback to an identifier. `_build_matches`'s `include_identity` flag is what puts the handle back, and only `build_admin_org_leads` (§10) sets it.
 
 ---
 
@@ -135,6 +139,7 @@ Org-wide, server-side filtered/sorted/paginated.
 | POST | `/api/status` | `edit_leads` (owner/admin/member) |
 | POST | `/api/status/bulk` | `bulk_edit_leads` (owner/admin) |
 | POST | `/api/lead/note` | `edit_leads` (owner/admin/member) |
+| POST | `/api/lead/reveal` | `reveal_lead` (owner/admin/member) — checked in the handler, **not** in `_ROUTE_ACTIONS` |
 
 ### POST `/api/status`
 Set one lead's status.
@@ -150,6 +155,14 @@ Set status on up to 500 leads with one shared reason.
 Create or delete a lead note.
 - **Body**: `{op:"create", campaignId, commentId, body, platform?}` (body ≤4000 chars) OR `{op:"delete", noteId:<int>}`. `_validate_lead_note` (`server.py:430`).
 - **Response**: create → `200 {ok, data:<note>}`; delete → `200 {ok, data:{noteId, op:"delete"}}`; `404` no note; `403 "only the note's author may delete it"`. Handler `server.py:2182`.
+
+### POST `/api/lead/reveal`
+v27 reveal-on-demand: un-redact **one** lead's identity, and audit the attempt. Leads are anonymized by default (§2), which also removed the customer's only way to reach one — this is the sanctioned way back.
+- **Body**: `{campaignId, commentId}` required, `platform` optional (default `instagram`) — the `matches` primary key and nothing else. `_validate_lead_reveal` (`server.py`). There is **no list form**: no `commentIds`, no `status`/`limit`/`all`. A bulk path would quietly rebuild the export leak the redaction exists to close, so the shape refuses to widen rather than trusting a handler to cap it.
+- **Auth**: authenticated org session + `rbac.can(role, "reveal_lead")` (owner/admin/member — a `viewer` is refused, being the read-only role). The role check runs inside `_handle_lead_reveal`, deliberately absent from `_ROUTE_ACTIONS`, because that table 403s before any handler runs and a **denied** reveal must still write its audit row.
+- **Ownership**: the org comes from the SESSION, never from the body (BOLA). A lead that is not this org's, and one that does not exist at all, both answer the same `404 "unknown lead"` — a 403 would confirm the row exists and turn the endpoint into a cross-tenant existence oracle for any guessable (campaign, comment) pair.
+- **Audit**: one `record_audit(org_id, actor, "reveal_lead", target=<lead uid>, detail={campaignId, platform, result})` row per call, with `result` ∈ `denied|not_found|revealed`. The denial is audited *before* the row is looked up, so what is recorded is that the actor asked, independent of whether the lead exists.
+- **Response**: `200 {ok, data:{id, commentId, platform, username, text, reelId}}` — constructed field by field, never `dict(match)` minus keys, so a future `matches` column cannot ship to a customer the day it is added. The comment `text` is included on purpose: the handle alone unlocks the public post where the comment is already visible, so returning the author while withholding their words is incoherent, not safer. `400` bad body; `403` role refused; `404` unknown/foreign lead. Reveal is a **READ** — it writes no status, no history row, no `updated_at`; the audit row is the only write.
 
 ---
 
@@ -169,7 +182,8 @@ All require `edit_campaigns` (owner/admin).
 Upsert campaign meta + brief (create or edit). The brief is **merged** over the stored/file brief, not replaced.
 - **Body**: `{campaignId}` required; optional `op` ∈ `create|edit`, `status` (campaign-status set), `budgetCap` (≥0), `goalTarget` (≥0 int), `displayName`, `brief` (object; camelCase keys mapped to snake per `_BRIEF_KEYS`, `server.py:562`). `live`/`paused` route through pause semantics (`set_campaign_paused`). `_validate_campaign` (`server.py:457`).
 - **Which row it targets** (`_resolve_campaign_target`): a campaign the caller's org already owns is edited in place. An **edit** of anything else — explicit `op:"edit"`, or a legacy payload carrying no brief — 404s for another org's campaign but is allowed for an *unregistered* id (the file-backed `config/campaign.md` campaign has no DB row until its first write; the write stamps it to the caller's org). A **create** — explicit `op:"create"`, or a legacy brief-carrying payload — always allocates a key in the caller's own namespace, `o<orgId>.<requestedId>`, *even when the bare id is free*: two tenants can each hold `q4-outbound`, and since the allocated key is a pure function of the caller's own org it can never reveal whether another tenant holds that name. Clients must therefore read the real id back off the response, not assume the id they asked for. Ids in that reserved `o<digits>.` shape may only be named by the org that owns them (otherwise the namespace would be squattable, since `campaign_meta.campaign_id` is still one global PK).
-- **Response**: `200 {ok, data:<meta>}` (meta gains `hasBrief:true` when a brief was stored); `409 {code:"campaign_exists"}` when a create would land on a campaign the caller already has (refused, never overwritten — `matches` is keyed on `campaign_id`, so a clobber would also inherit the first campaign's leads); `404` cross-org campaign; `400` bad brief shape. Handler `server.py:2218`.
+- **Plan campaign cap** (v27): a **create** — explicit `op:"create"`, or the legacy brief-carrying payload with no `op`, i.e. the same predicate `_resolve_campaign_target` uses — is refused with `402 "Plan limit reached (N campaigns on <Display Name>). Upgrade to add more campaigns."` once the org holds `billing.tier_campaign_cap(tier)` non-archived campaigns (free 1, lite 3, starter/pro/scale unlimited). Checked after the target id is resolved and before the first write. Archived campaigns do not count, so archiving frees a slot; an **edit** is never blocked, whatever the plan. Reads the same `Store.get_subscription` choke point as the run gate, so the settings meter and enforcement cannot disagree.
+- **Response**: `200 {ok, data:<meta>}` (meta gains `hasBrief:true` when a brief was stored); `402` plan campaign cap (above); `409 {code:"campaign_exists"}` when a create would land on a campaign the caller already has (refused, never overwritten — `matches` is keyed on `campaign_id`, so a clobber would also inherit the first campaign's leads); `404` cross-org campaign; `400` bad brief shape. Handler `server.py:2218`.
 
 ### POST `/api/campaign/generate`
 AI-draft a campaign from product url / screenshot / description (+ optional interview transcript). Persists nothing — returns a draft to pre-fill the form. Body cap 8 MB.
@@ -203,15 +217,17 @@ All require `run_campaigns` (owner/admin). All `503` if run control is disabled 
 | POST | `/api/run/stop` | Stop the active run |
 | POST | `/api/run/pause` | Pause the active run (idempotent) |
 | POST | `/api/run/resume` | Resume the active run (idempotent) |
-| GET | `/api/run/activity?runId=<id>&after=<cursor>` | Live activity feed for one run |
+| GET | `/api/run/activity?runId=<id>&after=<cursor>` | Live run progress — scalars only, no event feed (v27) |
 
 ### POST `/api/run`
 Start a run for one campaign or all live campaigns. In-process by default; distributed-backend live runs enqueue to the worker fleet.
 - **Body**: exactly one of `{campaignId}` or `{all:true}`; `mode` ∈ `dry|live` (default `dry`); optional `targetLeadCount` (1–1000), `durationMinutes` (1–720). `_validate_run` (`server.py:1291`).
-- **Billing gate** (`server.py:2884`): `402` if subscription status ∉ `active|trialing`, or `402` if the period lead cap is exhausted; remaining cap **clamps** the target.
+- **Billing gate** (`server.py:2884`): `402` if subscription status ∉ `active|trialing`, or `402` if the period lead cap is exhausted (`remaining = sub["lead_cap"] − count_leads_this_period(...) <= 0`); otherwise `remaining` **clamps** the target — an absent `targetLeadCount` becomes `remaining`, a stated one becomes `min(requested, remaining)`.
+- **The clamp is a SOFT bound, not a ceiling** (v27). The engine's stop condition is `counters.matches >= lead_target` on PER-SESSION counters, incremented once per post after a whole comment batch, so one reel with 13 qualifying comments overshoots a target of 10 without ever testing in between (10 targeted, 15 delivered, measured). The HARD enforcement is this gate at the *period* boundary: the next run start 402s once the allowance is spent, so an overshoot self-corrects by shortening the next run. Copy must say "up to N leads per run"; "exactly N" is false.
 - **Readiness gate** (in-process **live** runs only): `409` with its OWN shape — `{error:"agent_not_ready", detail, readiness}` (not the `{ok,data,error}` envelope) — when the agent that would execute the run isn't ready. Narrow by design: a `dry` run walks a fake feed, and an API-only campaign (youtube/reddit/telegram) never touches the shared browser, so neither is gated. A campaign with an Instagram channel additionally requires `instagram == "logged_in"`; other CDP channels (linkedin/x) only require CDP reachability. A probe failure allows the run rather than blocking it.
-- **Response (in-process)**: `202 {ok, data:{accepted:true, scope, campaignId, mode}}`; `409 "a run is already active"`; `400` not runnable.
-- **Response (distributed)**: `202 {ok, data:{accepted:true, backend:"distributed", scope, jobs:[...], runId, runIds:[...], skipped:[{campaignId,reason}]}}`; `409` if no capable worker / nothing dispatched. Handler `server.py:2853`, fleet dispatch `server.py:2940`.
+- **Response (in-process)**: `202 {ok, data:{accepted:true, scope, campaignId, mode, targetLeads, maxRunLeads, leadsRemaining}}`; `409 "a run is already active"`; `400` not runnable.
+- **Response (distributed)**: `202 {ok, data:{accepted:true, backend:"distributed", scope, jobs:[...], runId, runIds:[...], skipped:[{campaignId,reason}], targetLeads, maxRunLeads, leadsRemaining}}`; `409` if no capable worker / nothing dispatched. Handler `server.py:2853`, fleet dispatch `server.py:2940`.
+- The three plan-bound fields (v27) are identical on both paths and are the **surfacing** of the clamp above: `targetLeads` is what the run was actually started with (a silently clamped target is visible rather than a run that quietly stops early), `maxRunLeads` = `billing.tier_max_run_leads(tier)` (= the period allowance), `leadsRemaining` = what was left when the run started. On the distributed path `targetLeads` is the whole clamped budget, which the dispatcher then SPLITS across the enqueued jobs.
 
 ### POST `/api/run/stop`
 - **Body**: none. **Response**: `200 {ok, data:{stopped:true}}`; `409 "no run is active"` (also covers another org's run). `server.py:3042`.
@@ -223,9 +239,19 @@ Start a run for one campaign or all live campaigns. In-process by default; distr
 - **Body**: none. **Response**: `200 {ok, data:{paused:false}}`; `409` if nothing active. Idempotent. `server.py:3071`.
 
 ### GET `/api/run/activity?runId=<id>&after=<cursor>`
-Live activity feed for one run (counters + narrative event stream + open flags), paged on a monotonic cursor. Ownership proven in-memory or via org-stamped DB rows.
-- **Query**: `runId` required; `after` cursor (default 0).
-- **Response**: `200 {ok, data:{runId, finished, fleetJob, counters:{reelsSeen,relevancePasses,commentsScored,matches,spendUsd,likes,follows}, events:[...], flags:[{kind,severity,detail}], cursor}}`; `400` missing runId; `404` unknown/foreign run. Counters aggregated by `_aggregate_run_counters` (`server.py:246`); handler `server.py:4109`.
+Live **progress** for one run — counters, redaction-safe scalars, `finished`, the fleet job, and open health flags. **No narrative events (v27).** Ownership proven in-memory or via org-stamped DB rows.
+- **Query**: `runId` required; `after` accepted and **inert** (see `cursor` below). A junk value falls back to 0, never 400s.
+- **Response**: `200 {ok, data:{runId, finished, fleetJob, counters:{reelsSeen,relevancePasses,commentsScored,matches,spendUsd,likes,follows}, phase, leadsFound, itemsScanned, relevantFound, lastEventAt, targetLeads, events:[], eventsRedacted:true, flags:[{kind,severity,detail}], cursor}}`; `400` missing runId; `404` unknown/foreign run. Counters aggregated by `_aggregate_run_counters`, the scalars by `_aggregate_run_progress`; handler `_serve_run_activity`.
+- **`events` is always `[]` and `eventsRedacted` always `true`.** The key (and `cursor` with it) survives so the panel's poll contract and `after` plumbing are unchanged. `cursor` echoes `after` and never advances — there is nothing to page. The full feed is superadmin-only (`GET /api/admin/run/activity`, §10). A *filtered* feed was rejected as the wrong shape: a `comments/success` detail is literally `{username, score, tier, reelId}` and a `relevance` one `{reelId, author}`, so it would ship exactly the rows being hidden and trust a client-side filter — and the next detail key an engine invents would ride along for free. The scalars are CONSTRUCTED, never an event row with keys deleted. `message`, `detail`, `sessionId`, `campaignId` never appear here.
+- **The scalars are folded out of `run_events`, which for a fleet run is the ONLY live signal.** Session counters and captured `matches` both travel in the job ACK body (the sidecar collects leads from the *worker's* local store), so the cloud reads zero for both until ack, while events land on the ~45s job heartbeat. Every aggregate is a max/sum over a growing prefix of the run's own events (read from id 0, capped at `RUN_ACTIVITY_AGGREGATE_EVENTS` = 2000), so all of them are monotonic — a progress number must never fall back down mid-run.
+  - `leadsFound` — `comments`/`success` events deduped on `(item id, username)` before counting (`run_events` is append-only per attempt while the store dedupes on comment id, so a retry re-emits), `max`ed against the per-post roll-up and against the authoritative `matches_for_run` count, which is what makes it exact once the run acks. The item id is resolved through an allow-list (`reelId|postId|submissionId|messageId|videoId`) — deduping on `reelId` alone would collapse every non-Instagram run into one bucket.
+  - `itemsScanned` / `relevantFound` — `feed_walk` details taken as the highest-`seq` per `session_id` and then SUMMED (one run id spans many sessions), `max`ed against the ack-time counters. `detail.matches` is deliberately never read: it lags the per-comment success events and was observed at 0 against 15 of them.
+  - `phase` — the latest event's phase through an explicit allow-list (`lifecycle→starting`, `feed_walk|relevance→searching`, `comments|engage→qualifying`, `halt→stopped`), plus `done`/`failed` from run/job state; an unknown phase degrades to `working`, never a raw internal stage name. Zero events on a live run is `starting`, not "nothing found".
+  - `lastEventAt` — `MAX(created_at)`. A timestamp is not a log; it is the liveness beat that keeps the panel's stall banner honest.
+  - `targetLeads` — the plan-clamped target, so the panel can show "7 of 10 leads". Only a fleet job carries it durably (off `job.spec.target_leads`); for an in-process run it is `null` here and reaches the panel in the `POST /api/run` 202 instead.
+  - `counters.reelsSeen/relevancePasses/matches` are overwritten with the same three aggregates rather than shipped alongside them — a payload carrying "0 reels scanned" next to "searching · 40 scanned" would just make the panel pick a side.
+- **`flags` stay.** They drive the "fix your agent" UX and are a state, not a log.
+- **Known limitation, present it honestly, do not paper over it.** A dead-lettered job never acks, so its leads stay in the worker's local SQLite and the org's `matches` rows stay 0 forever — `leadsFound` collapses to the event estimate permanently and must not be reset or recomputed to zero when the job flips to `failed`; it is the only record that run will ever have. Spend, by contrast, *is* banked on nack, so such a run reads "$X spent, 0 delivered". A companion `leadsDelivered` (the real row count, so the two can be shown as what they are) is specified but **not yet in the payload**.
 - `fleetJob` is `null` for an in-process run, else `{jobId, status, lastEventAt, leaseExpiresAt, reason, attempts, maxAttempts}`. `reason` is the worker's nack code (`cdp_unreachable`, `worker_timeout`, `worker_stall`, `credential_fetch_failed`, `campaign_not_found`, `soul_missing`, `campaign_malformed`, `error`, …) or the acked summary's `halt_reason`, capped at 200 chars, `null` when unknown — key the failed/succeeded wording off `status`, never off `reason` being present.
 
 ---
@@ -436,7 +462,8 @@ There is no signup and no password-reset **route** here on purpose — an emaile
 | GET | `/api/admin/audit?limit=<n>` | List audit entries |
 | GET | `/api/admin/audit/verify` | Verify audit hash-chain |
 | GET | `/api/admin/orgs` | Cross-org index |
-| GET | `/api/admin/orgs/{orgId}/{campaigns\|leads}` | Cross-org read of one org |
+| GET | `/api/admin/orgs/{orgId}/{campaigns\|leads\|runs}` | Cross-org read of one org |
+| GET | `/api/admin/run/activity?runId=<id>` | Full narrative feed for one run (v27) |
 | GET | `/api/admin/fleet` | Worker fleet view |
 | GET/POST | `/api/admin/control-flags` | List / set / clear control flags |
 | POST | `/api/admin/jobs/enqueue` | Operator enqueue one job |
@@ -473,11 +500,18 @@ Start impersonation (stamps the effective principal on the admin session; audite
 Cross-org index (member/campaign counts). Read-only, cross-tenant by design.
 - **Response**: `200 {ok, data:{orgs:[{..., campaign_count}]}}`. Handler `server.py:3430`.
 
-### GET `/api/admin/orgs/{orgId}/{campaigns|leads}`
-Cross-org read of one org's campaigns or leads (reuses the org builders). Route parsed by `_match_admin_org_route` (`server.py:1132`).
+### GET `/api/admin/orgs/{orgId}/{campaigns|leads|runs}`
+Cross-org read of one org's campaigns, leads or runs (reuses the org builders). Route parsed by `_match_admin_org_route` (`server.py:1132`); the subresource allow-list is the whole gate on that half of the path, so adding a name to it is exactly as load-bearing as writing the handler.
 - **campaigns**: `200 {ok, data:{campaigns:[{id, displayName, platform, status, createdAt, updatedAt, archived}]}}` (`panel_org.py:463`).
-- **leads**: same query params as `/api/leads`; `200 {ok, data:{leads:[{commentId, campaignId, platform, username, text, capturedAt, status, score, reason, extracted, tier}], page, pageSize, total}}` (`panel_org.py:504`).
+- **leads**: same query params as `/api/leads`; `200 {ok, data:{leads:[{commentId, campaignId, platform, username, text, intent, capturedAt, status, score, reason, extracted, tier}], page, pageSize, total}}` (`panel_org.py:504`). **This is the one surface that still carries a lead's identity**: `build_admin_org_leads` is the only caller passing `include_identity=True`, and it shows the handle, the raw comment, and the derived `intent` side by side so an operator can check the summary is honest. `q` here therefore spans the handle and comment text too.
+- **runs** (v27): `200 {ok, data:{runs:[{runId, campaignId, campaignName, mode, status, platforms, startedAt, finishedAt, sessions, leads}]}}`, newest first, capped at `ADMIN_ORG_RUNS_LIMIT` (50) — the picker for the narrative feed below. There is no `runs` table: a run IS the set of `sessions` sharing a `run_id`, folded by `_build_admin_org_runs`, with the org's *active fleet jobs* merged in as started-but-empty runs (a fleet run has no cloud session rows until its job acks, and the run an operator most wants to inspect is the one running right now). `mode` is `live`/`dry` only for runs this process still remembers in `RunManager.status(None)`, else `null` — `sessions` records no mode, so an older run says so rather than guessing.
 - `404` unknown org. Handler `server.py:3452`.
+
+### GET `/api/admin/run/activity?runId=<id>&after=<cursor>`
+v27: the **full** narrative feed for one run — messages, details, identities — i.e. the rows `/api/run/activity` no longer hands an org. The only route on the server that still emits event text, hence the admin gate.
+- **Cross-tenant and NOT org-scoped, by design**: a superadmin picks a run off `/api/admin/orgs/{id}/runs` and inspects it whoever owns it. Same posture as the other Phase 5d read views — read-only, no impersonation, no audit row (only writes and impersonation are audited on this plane).
+- **Query**: `runId` required (`400` without it); `after` is a real cursor here and does page. A junk value falls back to 0.
+- **Response**: `200 {ok, data:{runId, finished, counters:{...}, events:[...], flags:[{kind,severity,detail}], cursor}}`. An **unknown run answers an empty feed, not 404** — there is no tenant boundary left to protect, and a fleet run that has not yet heartbeated its first event is exactly the run an operator is trying to watch. Handler `_handle_admin_run_activity`.
 
 ### GET `/api/admin/fleet`
 - **Response**: `200 {ok, data:{workers:[...]}}` — straight pass-through of `store.list_workers()`, no re-serialization. Handler `server.py:3490`.
@@ -516,6 +550,6 @@ Operator enqueue one job. Rejects (400) a job no registered worker can serve.
 - **Retired env** `AIZU_PLATFORM_ADMINS` (`PLATFORM_ADMINS_ENV`, `server.py:139`) is a named constant only — no code reads it (replaced by the real admin plane). Do not treat it as active.
 - Detailed `data` field shapes for `<meta>`, `<integration row>`, `<note>`, worker `job`, control-flag `row`, fleet `workers`, and audit `entries` are produced by `core/store.py` methods (e.g. `upsert_campaign_meta`, `add_note`, `enqueue_job`, `list_workers`, `list_admin_audit`); only the wire keys the handlers/panel builders construct explicitly are documented here. Column-level shapes must be traced in `store.py` rather than inferred.
 - The `RUN` block shape comes from `RunManager.status(org_id)` in `runner.py`; the server attaches it verbatim.
-- The path-constants block (`server.py:64`–`127`) enumerates the complete set of `/api/*` routes; every one is dispatched in `do_GET`/`do_POST` above.
+- The path-constants block near the top of `server.py` (from `STATE_PATH` down through the `ADMIN_*` constants) enumerates the complete set of `/api/*` routes; every one is dispatched in `do_GET`/`do_POST` above.
 
 **Primary sources**: `engine/aizu/server.py` (routing + handlers), `panel.py` / `panel_org.py` (response builders), `rbac.py` (roles), `connections.py` (integration validation), `core/config.py` (platforms), `core/store.py` (status/campaign enums). `dispatch.py` (engine selection) and `core/router.py` (LLM router) have no HTTP surface.

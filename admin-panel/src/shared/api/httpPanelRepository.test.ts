@@ -123,6 +123,52 @@ describe('HttpPanelRepository.runCampaign', () => {
     expect(JSON.parse(init?.body as string)).toEqual(RUN_REQUEST);
   });
 
+  test('carries the v27 plan bounds through the boundary instead of stripping them', async () => {
+    // A9 spreads `plan_bounds` into the 202 body. Zod strips anything the schema does not
+    // declare, so an undeclared field is not a missing feature — it is a feature that
+    // ships INERT: the run drawer's `targetLeadsHint` reads `undefined` forever and an
+    // in-process run shows a bare lead count with no denominator, silently.
+    mockFetchOnce({
+      status: 202,
+      jsonValue: {
+        ok: true,
+        data: {
+          accepted: true, runId: 'run-1', backend: 'distributed',
+          targetLeads: 10, maxRunLeads: 10, leadsRemaining: 7,
+        },
+        error: null,
+      },
+    });
+
+    const result = await new HttpPanelRepository().runCampaign(RUN_REQUEST);
+
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.value.targetLeads).toBe(10);
+      expect(result.value.maxRunLeads).toBe(10);
+      expect(result.value.leadsRemaining).toBe(7);
+    }
+  });
+
+  test('a pre-v27 bridge that omits the bounds reads as UNKNOWN, never as zero', async () => {
+    // `null` is "the bridge did not report a bound" and leaves the run form unbounded.
+    // A 0 here would read as "your plan allows no leads" and lock a working org out of
+    // its own run button — the repo's unknown-is-never-zero invariant.
+    mockFetchOnce({
+      status: 202,
+      jsonValue: { ok: true, data: { accepted: true, runId: 'run-1' }, error: null },
+    });
+
+    const result = await new HttpPanelRepository().runCampaign(RUN_REQUEST);
+
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.value.targetLeads).toBeNull();
+      expect(result.value.maxRunLeads).toBeNull();
+      expect(result.value.leadsRemaining).toBeNull();
+    }
+  });
+
   test('surfaces the 409 "already active" message with its status', async () => {
     mockFetchOnce({
       ok: false,
@@ -286,6 +332,10 @@ describe('HttpPanelRepository.launchAgentLogin', () => {
 });
 
 describe('HttpPanelRepository.fetchRunActivity', () => {
+  // v27: the ORG-facing payload is scalars only. `events` is always [] and the cursor
+  // never advances — the narrative feed moved to the superadmin endpoint below. This
+  // fixture is the real shape `server._serve_run_activity` constructs; modelling it
+  // with events would test a payload no customer can receive.
   const ACTIVITY = {
     runId: 'abc123',
     finished: false,
@@ -293,16 +343,17 @@ describe('HttpPanelRepository.fetchRunActivity', () => {
       reelsSeen: 12, relevancePasses: 5, commentsScored: 40,
       matches: 3, spendUsd: 0.0123, likes: 2, follows: 1,
     },
-    events: [
-      {
-        id: 142, seq: 3, campaignId: 'c1', phase: 'comments', level: 'success',
-        message: 'Match: @aziz (score 0.82)', detail: '{"username":"aziz","score":0.82,"tier":"A"}',
-        createdAt: 1_718_800_000.123,
-      },
-    ],
+    phase: 'qualifying',
+    leadsFound: 3,
+    leadsDelivered: 3,
+    itemsScanned: 12,
+    relevantFound: 5,
+    lastEventAt: 1_718_800_000.123,
+    targetLeads: 10,
+    events: [],
+    eventsRedacted: true,
     flags: [],
-    // cursor is the max event id in the page (global), not seq.
-    cursor: 142,
+    cursor: 1,
   };
 
   test('GETs the runId + after query params and unwraps the data on 200', async () => {
@@ -316,8 +367,11 @@ describe('HttpPanelRepository.fetchRunActivity', () => {
     // Assert
     expect(result.ok).toBe(true);
     if (result.ok) {
-      expect(result.value.cursor).toBe(142); // max event id (global), not seq
-      expect(result.value.events[0]?.id).toBe(142);
+      expect(result.value.events).toEqual([]);
+      expect(result.value.eventsRedacted).toBe(true);
+      expect(result.value.leadsFound).toBe(3);
+      expect(result.value.targetLeads).toBe(10);
+      expect(result.value.phase).toBe('qualifying');
     }
     const [url, init] = vi.mocked(fetch).mock.calls[0] ?? [];
     expect(url).toBe('/api/run/activity?runId=abc123&after=1');
@@ -595,5 +649,204 @@ describe('HttpPanelRepository auth', () => {
     const result = await new HttpPanelRepository().logout();
     expect(result.ok).toBe(true);
     expect(vi.mocked(fetch).mock.calls[0]?.[0]).toBe('/api/auth/logout');
+  });
+});
+
+describe('HttpPanelRepository.revealLead (v27 reveal-on-demand)', () => {
+  const INPUT = { campaignId: 'cmp-001', platform: 'instagram', commentId: 'c1' } as const;
+
+  test('POSTs the single lead identity and unwraps username/text/reelId', async () => {
+    mockFetchOnce({
+      jsonValue: {
+        ok: true,
+        data: {
+          id: 'cmp-001:instagram:c1', commentId: 'c1', platform: 'instagram',
+          username: 'aziz', text: 'how much?', reelId: 'r1',
+        },
+        error: null,
+      },
+    });
+
+    const result = await new HttpPanelRepository().revealLead(INPUT);
+
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.value.username).toBe('aziz');
+      expect(result.value.text).toBe('how much?');
+      expect(result.value.reelId).toBe('r1');
+      expect(result.value.id).toBe('cmp-001:instagram:c1');
+    }
+    const [url, init] = vi.mocked(fetch).mock.calls[0] ?? [];
+    expect(url).toBe('/api/lead/reveal');
+    expect(init?.method).toBe('POST');
+    // Exactly one lead per call — no ids array, no filter, nothing that widens it to a
+    // list. A bulk path would quietly restore the export leak the redaction closed.
+    expect(JSON.parse(init?.body as string)).toEqual(INPUT);
+  });
+
+  test('every call hits the network — the answer is never served from a cache', async () => {
+    const body = {
+      ok: true,
+      data: {
+        id: 'cmp-001:instagram:c1', commentId: 'c1', platform: 'instagram',
+        username: 'aziz', text: 'hi', reelId: 'r1',
+      },
+      error: null,
+    };
+    mockFetchOnce({ jsonValue: body });
+    const repository = new HttpPanelRepository();
+    await repository.revealLead(INPUT);
+    await repository.revealLead(INPUT);
+    // Two reveals = two requests = two audit rows. If a reveal were ever memoised here
+    // (or wired into React Query), "anonymized by default" would decay into
+    // "anonymized until first viewed" and the audit trail would go quiet.
+    expect(vi.mocked(fetch)).toHaveBeenCalledTimes(2);
+  });
+
+  test('surfaces a 403 (viewer) with its status rather than an empty identity', async () => {
+    mockFetchOnce({
+      ok: false,
+      status: 403,
+      jsonValue: { ok: false, data: null, error: 'your role does not permit this action' },
+    });
+    const result = await new HttpPanelRepository().revealLead(INPUT);
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error.status).toBe(403);
+      expect(result.error.message).toContain('does not permit');
+    }
+  });
+
+  test('surfaces the reveal-allowance 402 with its status AND the server’s wording', async () => {
+    // Both halves matter: the drawer branches on the STATUS (a message-text match would
+    // confuse this with the run gate's lead-cap 402), and it prints the server's
+    // sentence as the detail line under its own plain-language headline.
+    mockFetchOnce({
+      ok: false,
+      status: 402,
+      jsonValue: {
+        ok: false,
+        data: null,
+        error: 'Plan limit reached (10 lead reveals on Free). Resets Jul 1. Upgrade to reveal more leads.',
+      },
+    });
+    const result = await new HttpPanelRepository().revealLead(INPUT);
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error.status).toBe(402);
+      expect(result.error.message).toContain('Resets Jul 1');
+    }
+  });
+
+  test('surfaces a 404 for a lead outside the caller’s org', async () => {
+    mockFetchOnce({ ok: false, status: 404, jsonValue: { ok: false, data: null, error: 'unknown lead' } });
+    const result = await new HttpPanelRepository().revealLead(INPUT);
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error.status).toBe(404);
+  });
+
+  test('returns a network error instead of throwing when fetch rejects', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new Error('ECONNREFUSED')));
+    const result = await new HttpPanelRepository().revealLead(INPUT);
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error.kind).toBe('network');
+  });
+});
+
+describe('HttpPanelRepository admin run inspection (v27)', () => {
+  const RUN = {
+    runId: 'run-9', campaignId: 'cmp-001', campaignName: 'Q4 Outbound',
+    mode: 'live', status: 'running', platforms: ['instagram'],
+    startedAt: 1_718_800_000, finishedAt: null, sessions: 2, leads: 5,
+  };
+
+  test('fetchAdminOrgRuns GETs the org subresource and unwraps runs[]', async () => {
+    mockFetchOnce({ jsonValue: { ok: true, data: { runs: [RUN] }, error: null } });
+    const result = await new HttpPanelRepository().fetchAdminOrgRuns(7);
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(result.value[0]?.runId).toBe('run-9');
+    expect(vi.mocked(fetch).mock.calls[0]?.[0]).toBe('/api/admin/orgs/7/runs');
+  });
+
+  test('fetchAdminOrgRuns keeps a not-yet-acked fleet run (no sessions, mode unknown)', async () => {
+    mockFetchOnce({
+      jsonValue: {
+        ok: true,
+        data: { runs: [{ ...RUN, mode: null, sessions: 0, leads: 0, platforms: 'oops' }] },
+        error: null,
+      },
+    });
+    const result = await new HttpPanelRepository().fetchAdminOrgRuns(7);
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.value[0]?.mode).toBeNull();   // honestly unknown, never a guess
+      expect(result.value[0]?.platforms).toEqual([]);
+    }
+  });
+
+  test('fetchAdminRunActivity pages the FULL feed by global event id', async () => {
+    mockFetchOnce({
+      jsonValue: {
+        ok: true,
+        data: {
+          runId: 'run-9',
+          finished: false,
+          counters: {
+            reelsSeen: 12, relevancePasses: 5, commentsScored: 40,
+            matches: 3, spendUsd: 0.01, likes: 0, follows: 0,
+          },
+          events: [{
+            id: 142, seq: 3, campaignId: 'cmp-001', sessionId: 's1', phase: 'comments',
+            level: 'success', message: 'Match: @aziz (score 0.82)',
+            detail: '{"username":"aziz","score":0.82,"tier":"A"}',
+            createdAt: 1_718_800_000.123, platform: 'instagram',
+          }],
+          flags: [],
+          cursor: 142,
+        },
+        error: null,
+      },
+    });
+
+    const result = await new HttpPanelRepository().fetchAdminRunActivity({
+      runId: 'run-9', after: 100,
+    });
+
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      // The superadmin plane is the ONE surface that still carries identity.
+      expect(result.value.events[0]?.message).toContain('@aziz');
+      expect(result.value.events[0]?.sessionId).toBe('s1');
+      expect(result.value.cursor).toBe(142);
+    }
+    expect(vi.mocked(fetch).mock.calls[0]?.[0])
+      .toBe('/api/admin/run/activity?runId=run-9&after=100');
+  });
+
+  test('fetchAdminRunActivity defaults the cursor to 0 (read from the start)', async () => {
+    mockFetchOnce({
+      jsonValue: {
+        ok: true,
+        data: {
+          runId: 'run-9', finished: true,
+          counters: {
+            reelsSeen: 0, relevancePasses: 0, commentsScored: 0,
+            matches: 0, spendUsd: 0, likes: 0, follows: 0,
+          },
+          events: [], flags: [], cursor: 0,
+        },
+        error: null,
+      },
+    });
+    await new HttpPanelRepository().fetchAdminRunActivity({ runId: 'run-9' });
+    expect(vi.mocked(fetch).mock.calls[0]?.[0])
+      .toBe('/api/admin/run/activity?runId=run-9&after=0');
+  });
+
+  test('returns a network error instead of throwing when fetch rejects', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new Error('ECONNREFUSED')));
+    const result = await new HttpPanelRepository().fetchAdminOrgRuns(7);
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error.kind).toBe('network');
   });
 });

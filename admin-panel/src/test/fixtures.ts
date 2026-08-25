@@ -27,6 +27,12 @@ import type {
   TeamMember,
   Invite,
 } from '@/shared/types/domain';
+import type {
+  AdminOrgLead,
+  AdminOrgRun,
+  AdminRunActivity,
+  AdminRunEvent,
+} from '@/shared/schemas/admin';
 import { leadUidOf } from '@/shared/lib/leadId';
 
 export function buildSession(overrides: Partial<Session> = {}): Session {
@@ -57,6 +63,12 @@ export function buildSession(overrides: Partial<Session> = {}): Session {
  * commentId) unless explicitly overridden, so a fixture that only varies
  * `commentId` — or only `campaignId` — still gets a distinct, realistic id. That
  * mirrors what the engine emits and what matchSchema recomputes at the boundary.
+ *
+ * v27: no `username`, no comment `text` — an org-facing lead carries neither, so a
+ * fixture must not either. `intent` is the only lead prose the app renders; the raw
+ * identity is reachable only through the audited reveal (see
+ * `FakePanelRepository.revealLead`). A test that wants the "nothing derivable" case
+ * overrides `intent: ''`, which is a REAL value the server sends.
  */
 export function buildMatch(overrides: Partial<Match> = {}): Match {
   const match: Match = {
@@ -65,9 +77,10 @@ export function buildMatch(overrides: Partial<Match> = {}): Match {
     campaignId: 'cmp-001',
     platform: 'instagram',
     sessionId: 's-001',
-    username: 'dana_t',
+    // Derived from the post + the comment, with identity and contact digits stripped
+    // out — those live in `extracted`, not in a line every viewer sees.
+    intent: 'Wants pricing for the Pro plan and left a phone number',
     lang: 'en',
-    text: 'How much is the Pro plan? +1 415 555 0142',
     score: 0.91,
     reason: 'asks price with phone number',
     extracted: { phone: '+14155550142', intent: 'pricing' },
@@ -75,7 +88,6 @@ export function buildMatch(overrides: Partial<Match> = {}): Match {
     escalated: false,
     escalationCost: 0,
     capturedAt: { date: 'Jun 10', time: '11:12', ts: 1_718_017_920 },
-    reelId: 'r1',
     statusBy: null,
     statusAt: null,
     statusHistory: [],
@@ -119,8 +131,10 @@ export function buildReel(overrides: Partial<Reel> = {}): Reel {
     thumbSeed: 'r1',
     addedAt: 'Jun 8',
     lastPoll: 'Jun 10',
-    expiresInDays: 5,
-    newSinceLastPoll: 3,
+    // v27: `expiresInDays`/`newSinceLastPoll` are watchlist-derived and the engine
+    // writes a watchlist row ONLY for a post that produced a lead — so they mark
+    // WHICH scanned post a lead came from and no longer reach an org caller. The
+    // default fixture is the ORG wire; a superadmin-shaped reel overrides them in.
     pollHistory: [],
     ...overrides,
   };
@@ -154,6 +168,16 @@ export function buildCampaign(overrides: Partial<Campaign> = {}): Campaign {
     spent: 4.2,
     leads: 12,
     cpl: 0.35,
+    // E.7: `spent` and `leads` share this card and have opposite failure asymmetries,
+    // so the delivery trio travels with them. The pair defaults to NULL — the shape a
+    // bridge that cannot report a gap sends — which is what makes the card's documented
+    // fallback (`c.leadsFound ?? c.leads`) the path a test exercises unless it opts out.
+    // Override all three together (`leadsFound: 15, leadsDelivered: 12, delivery:
+    // 'not_delivered'`), never the numbers alone: the panel reads `delivery` for the
+    // verdict rather than re-deriving the comparison.
+    leadsFound: null,
+    leadsDelivered: null,
+    delivery: 'delivered',
     spark: [1, 2, 0, 3, 2, 4, 1, 2, 3, 1, 0, 2, 3, 4],
     warmth: {
       score: 82,
@@ -229,10 +253,14 @@ export function buildDashboardPeriod(overrides: Partial<DashboardPeriod> = {}): 
     bestHour: Array.from({ length: 24 }, (_, h) => (h >= 9 && h <= 18 ? 3 : 0)),
     activeCampaigns: 1,
     topCampaigns: [
-      { id: 'cmp-001', name: 'Acme SaaS Lead Gen', platform: 'instagram', status: 'live', leads: 12, cpl: 0.35 },
+      // Delivery trio defaults as on the card it mirrors: the pair null (fall back to
+      // `leads`), the verdict 'delivered'. See buildCampaign.
+      { id: 'cmp-001', name: 'Acme SaaS Lead Gen', platform: 'instagram', status: 'live', leads: 12, cpl: 0.35,
+        leadsFound: null, leadsDelivered: null, delivery: 'delivered' },
     ],
+    // v27: the ticker names what the lead WANTS, not who they are.
     ticker: [
-      { id: 'c1', username: 'aziz_t', platform: 'instagram', score: 0.91, capturedAt: { date: 'Jun 10', time: '11:12' } },
+      { id: 'c1', intent: 'Wants pricing for the Pro plan', platform: 'instagram', score: 0.91, capturedAt: { date: 'Jun 10', time: '11:12' } },
     ],
     ...overrides,
   };
@@ -249,7 +277,8 @@ export function buildReportsPeriod(overrides: Partial<ReportsPeriod> = {}): Repo
     ],
     platformRanking: [{ platform: 'instagram', leads: 12 }],
     perCampaign: [
-      { id: 'cmp-001', name: 'Acme SaaS Lead Gen', status: 'live', leads: 12, cpl: 0.35, spend: 4.2 },
+      { id: 'cmp-001', name: 'Acme SaaS Lead Gen', status: 'live', leads: 12, cpl: 0.35, spend: 4.2,
+        leadsFound: null, leadsDelivered: null, delivery: 'delivered' },
     ],
     ...overrides,
   };
@@ -296,6 +325,20 @@ export function buildFleetJob(overrides: Partial<FleetJob> = {}): FleetJob {
   };
 }
 
+/**
+ * One poll of the org-facing activity feed.
+ *
+ * v27: `events` is EMPTY and `eventsRedacted` is true, because that is the only shape
+ * an org caller can ever receive — the narrative log is a superadmin surface now
+ * (`buildAdminRunActivity`). A customer-app test that seeds events here would be
+ * asserting against a payload the bridge cannot produce.
+ *
+ * The scalars default to a healthy live run mid-flight: 3 of a 10-lead target found
+ * and all 3 delivered. `leadsFound`/`leadsDelivered`/`delivery` move together — the
+ * dead-letter case is `{ finished: true, leadsFound: 15, leadsDelivered: 0,
+ * delivery: 'not_delivered' }`, and `leadsDelivered: null` is the pre-E.5 bridge that
+ * never reported the number at all (UNKNOWN, which is not zero).
+ */
 export function buildRunActivity(overrides: Partial<RunActivity> = {}): RunActivity {
   return {
     runId: 'run-001',
@@ -309,10 +352,107 @@ export function buildRunActivity(overrides: Partial<RunActivity> = {}): RunActiv
       likes: 2,
       follows: 1,
     },
-    events: [buildRunEvent()],
+    events: [],
+    eventsRedacted: true,
+    phase: 'qualifying',
+    leadsFound: 3,
+    leadsDelivered: 3,
+    delivery: 'delivered',
+    itemsScanned: 12,
+    relevantFound: 5,
+    lastEventAt: 1_718_800_000,
+    targetLeads: 10,
+    flags: [],
+    cursor: 0,
+    fleetJob: null,
+    ...overrides,
+  };
+}
+
+/* ---- superadmin plane (v27): the run feed + the leads that keep their identity ----
+ *
+ * These are the ONLY fixtures that carry a handle or a comment body, and they carry
+ * them on purpose: `/api/admin/*` is the plane the redaction deliberately exempts.
+ * Never feed one of these into an org-facing component — the types are separate
+ * branches (`schemas/admin.ts` vs `schemas/panelState.ts`) precisely so that a
+ * mistake here cannot compile. */
+
+/** One row of the superadmin run picker (GET /api/admin/orgs/{id}/runs). Epoch
+ *  SECONDS; `mode` null is a run this process no longer remembers. */
+export function buildAdminOrgRun(overrides: Partial<AdminOrgRun> = {}): AdminOrgRun {
+  return {
+    runId: 'run-001',
+    campaignId: 'cmp-001',
+    campaignName: 'Acme SaaS Lead Gen',
+    mode: 'live',
+    status: 'done',
+    platforms: ['instagram'],
+    startedAt: 1_718_800_000,
+    finishedAt: 1_718_801_800,
+    sessions: 1,
+    leads: 3,
+    ...overrides,
+  };
+}
+
+/** One narrative event as the superadmin feed serves it — `message` and the raw
+ *  `detail` blob included, identities and all (`detail` is a JSON STRING). */
+export function buildAdminRunEvent(overrides: Partial<AdminRunEvent> = {}): AdminRunEvent {
+  return {
+    id: 1,
+    seq: 1,
+    campaignId: 'cmp-001',
+    sessionId: 's-001',
+    phase: 'comments',
+    level: 'success',
+    message: 'Match: @dana_t (score 0.91)',
+    detail: '{"username":"dana_t","score":0.91,"tier":"match","reelId":"r1"}',
+    createdAt: 1_718_800_075,
+    platform: 'instagram',
+    ...overrides,
+  };
+}
+
+/** One poll of the FULL feed. Unlike `buildRunActivity` this one HAS events —
+ *  that asymmetry is the whole point of the split. */
+export function buildAdminRunActivity(
+  overrides: Partial<AdminRunActivity> = {},
+): AdminRunActivity {
+  return {
+    runId: 'run-001',
+    finished: false,
+    counters: {
+      reelsSeen: 12,
+      relevancePasses: 5,
+      commentsScored: 40,
+      matches: 3,
+      spendUsd: 0.0123,
+      likes: 2,
+      follows: 1,
+    },
+    events: [buildAdminRunEvent()],
     flags: [],
     cursor: 1,
-    fleetJob: null,
+    ...overrides,
+  };
+}
+
+/** One superadmin lead row: `username` + `text` beside the derived `intent`, which
+ *  is the pairing an operator uses to check the redaction summarises honestly. */
+export function buildAdminOrgLead(overrides: Partial<AdminOrgLead> = {}): AdminOrgLead {
+  return {
+    commentId: 'c1',
+    campaignId: 'cmp-001',
+    platform: 'instagram',
+    username: 'dana_t',
+    text: 'How much is the Pro plan? +1 415 555 0142',
+    intent: 'Wants pricing for the Pro plan and left a phone number',
+    capturedAt: 1_718_017_920,
+    status: 'new',
+    score: 0.91,
+    reason: 'asks price with phone number',
+    extracted: true,
+    tier: 'match',
     ...overrides,
   };
 }
@@ -442,22 +582,31 @@ export function buildReportsPayload(overrides: Partial<ReportsPayload> = {}): Re
   return { REPORTS: s.REPORTS, HEALTH: s.HEALTH, ...overrides };
 }
 
-/** The full tier catalogue as the backend's TIERS map surfaces it (5 tiers). */
+/** The full tier catalogue as the backend's TIERS map surfaces it (5 tiers).
+ *  `campaignCap: null` is UNLIMITED, not "unset" — mirrors `billing.TIERS`. */
 const BILLING_TIERS = [
-  { tier: 'free', displayName: 'Free', leadCap: 10, selfServe: false,
+  { tier: 'free', displayName: 'Free', leadCap: 10, campaignCap: 1, selfServe: false,
     prices: { month: 0, year: 0 } },
-  { tier: 'lite', displayName: 'Lite', leadCap: 50, selfServe: true,
+  { tier: 'lite', displayName: 'Lite', leadCap: 50, campaignCap: 3, selfServe: true,
     prices: { month: 9.99, year: 99 } },
-  { tier: 'starter', displayName: 'Starter', leadCap: 250, selfServe: true,
+  { tier: 'starter', displayName: 'Starter', leadCap: 250, campaignCap: null, selfServe: true,
     prices: { month: 24.99, year: 249 } },
-  { tier: 'pro', displayName: 'Pro', leadCap: 2000, selfServe: true,
+  { tier: 'pro', displayName: 'Pro', leadCap: 2000, campaignCap: null, selfServe: true,
     prices: { month: 149, year: 1490 } },
-  { tier: 'scale', displayName: 'Scale', leadCap: 0, selfServe: false,
+  { tier: 'scale', displayName: 'Scale', leadCap: 0, campaignCap: null, selfServe: false,
     prices: { month: null, year: null } },
 ] as const;
 
-/** A billing summary as `/api/settings.BILLING` ships it. Defaults to a Free org
- * (the implicit default) with a partial usage meter. */
+/**
+ * A billing summary as `/api/settings.BILLING` ships it. Defaults to a Free org
+ * (the implicit default) with a partial usage meter.
+ *
+ * `campaignsUsed: 0` against a cap of 1 keeps the default org UNDER its campaign cap,
+ * so a test opts INTO the at-cap state (`buildBilling({ campaignsUsed: 1 })`) rather
+ * than every unrelated campaigns-page test rendering a disabled New Campaign button.
+ * It is deliberately not derived from the CAMPAIGNS fixture: the gate reads this
+ * number, and a test asserting the gate must be able to set it directly.
+ */
 export function buildBilling(overrides: Partial<Billing> = {}): Billing {
   return {
     tier: 'free',
@@ -467,6 +616,16 @@ export function buildBilling(overrides: Partial<Billing> = {}): Billing {
     cancelAtPeriodEnd: false,
     leadCap: 10,
     leadsUsed: 3,
+    campaignCap: 1,
+    campaignsUsed: 0,
+    // The Free tier's reveal allowance, well under its cap for the same reason
+    // `campaignsUsed` is: a test opts INTO the exhausted state rather than every
+    // unrelated billing test rendering an at-limit meter.
+    revealCap: 10,
+    revealsUsed: 2,
+    // The Free tier's period allowance, which is also the largest target one run may
+    // ask for. A SOFT bound (E.6) — copy reads "up to 10 leads per run".
+    maxRunLeads: 10,
     usageRatio: 0.3,
     nearLimit: false,
     tiers: BILLING_TIERS.map((t) => ({ ...t, prices: { ...t.prices } })),
@@ -487,13 +646,33 @@ const _LEAD_STATUS_KEYS = [
 ] as const;
 
 const sortByCaptured = (m: Match): number | string => m.capturedAt.ts;
+// v27: `username` is gone as a sort key — mirrors the server's `_LEAD_SORT_KEYS`,
+// which now sorts on the same `intent` the column shows.
 const _LEAD_SORTERS: Record<string, (m: Match) => number | string> = {
   capturedAt: sortByCaptured,
   score: (m) => m.score,
-  username: (m) => m.username.toLowerCase(),
+  intent: (m) => m.intent.toLowerCase(),
   platform: (m) => m.platform,
   status: (m) => m.status,
 };
+
+/**
+ * Everything the free-text lead search may look at, lowercased — the mirror of the
+ * server's `panel_org._lead_haystack`. It searches what a customer can actually SEE
+ * (the derived intent, the classifier's reason, and the `extracted` field VALUES a
+ * lead was captured with), because username/text are no longer on the row and
+ * searching them would silently match nothing.
+ */
+function leadHaystack(m: Match): string {
+  // Only the primitive values: a nested object would stringify to '[object Object]',
+  // which matches nothing an operator would ever type and only pollutes the haystack.
+  const extracted = Object.values(m.extracted)
+    .filter((v): v is string | number | boolean => (
+      typeof v === 'string' || typeof v === 'number' || typeof v === 'boolean'
+    ))
+    .map((v) => String(v));
+  return [m.intent, m.reason, ...extracted].join(' ').toLowerCase();
+}
 
 /**
  * Apply a LeadsQuery to a match list exactly as the server does: status/platform/q
@@ -512,10 +691,7 @@ export function paginateLeads(allMatches: readonly Match[], query: LeadsQuery): 
   if (query.platform) rows = rows.filter((m) => m.platform === query.platform);
   if (query.q) {
     const needle = query.q.toLowerCase();
-    rows = rows.filter(
-      (m) => m.username.toLowerCase().includes(needle)
-        || m.text.toLowerCase().includes(needle),
-    );
+    rows = rows.filter((m) => leadHaystack(m).includes(needle));
   }
   const sorter = _LEAD_SORTERS[query.sort ?? 'capturedAt'] ?? sortByCaptured;
   rows.sort((a, b) => {

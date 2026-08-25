@@ -65,32 +65,53 @@ RUNNABLE_STATUSES = frozenset({"active", "trialing"})
 
 # --- Tier catalogue -----------------------------------------------------------
 
-# tier → entitlement. `lead_cap` is the period allowance (rows in `matches`
-# scoped by org_id within the billing period); it is INTERVAL-INDEPENDENT — only
-# price/renewal differ by month vs year. There is NO separate "run allowance".
+# tier → entitlement. TWO entitlements, both INTERVAL-INDEPENDENT (only
+# price/renewal differ by month vs year):
+#
+#   `lead_cap`     — the period lead allowance (rows in `matches` scoped by
+#                    org_id within the billing period). There is NO separate
+#                    "run allowance": a single run may target at most the whole
+#                    period allowance (`tier_max_run_leads`), and the run gate
+#                    then clamps that again by what is actually left.
+#   `campaign_cap` — how many non-archived campaigns the org may hold at once.
+#                    None means UNLIMITED (starter/pro/scale) — it is a real
+#                    entitlement value, not "unset", so read it with
+#                    `tier_campaign_cap` rather than `... or 0`, which would
+#                    silently turn unlimited into a hard zero. Archived
+#                    campaigns do not count: the cap bounds the working set, so
+#                    an org at the cap can always archive its way forward
+#                    instead of being wedged.
+#
 # `self_serve` tiers have a hosted Polar checkout; Free is the implicit default
-# (no checkout, no Polar customer); Scale is sales-led (cap negotiated per deal
-# and stored in subscriptions.lead_cap_override — the catalogue cap below is a
-# fail-closed placeholder so an unprovisioned Scale row blocks rather than leaks).
+# (no checkout, no Polar customer); Scale is sales-led (lead cap negotiated per
+# deal and stored in subscriptions.lead_cap_override — the catalogue cap below is
+# a fail-closed placeholder so an unprovisioned Scale row blocks rather than
+# leaks; its campaign_cap is unlimited because the deal, not the catalogue, sizes
+# a Scale account).
 TIERS: dict[str, dict[str, Any]] = {
     "free": {
-        "display_name": "Free", "lead_cap": 10, "self_serve": False,
+        "display_name": "Free", "lead_cap": 10, "campaign_cap": 1,
+        "self_serve": False,
         "prices": {"month": 0.0, "year": 0.0},
     },
     "lite": {
-        "display_name": "Lite", "lead_cap": 50, "self_serve": True,
+        "display_name": "Lite", "lead_cap": 50, "campaign_cap": 3,
+        "self_serve": True,
         "prices": {"month": 9.99, "year": 99.0},
     },
     "starter": {
-        "display_name": "Starter", "lead_cap": 250, "self_serve": True,
+        "display_name": "Starter", "lead_cap": 250, "campaign_cap": None,
+        "self_serve": True,
         "prices": {"month": 24.99, "year": 249.0},
     },
     "pro": {
-        "display_name": "Pro", "lead_cap": 2000, "self_serve": True,
+        "display_name": "Pro", "lead_cap": 2000, "campaign_cap": None,
+        "self_serve": True,
         "prices": {"month": 149.0, "year": 1490.0},
     },
     "scale": {
-        "display_name": "Scale", "lead_cap": 0, "self_serve": False,
+        "display_name": "Scale", "lead_cap": 0, "campaign_cap": None,
+        "self_serve": False,
         "prices": {"month": None, "year": None},
     },
 }
@@ -105,6 +126,24 @@ def tier_lead_cap(tier: str) -> int:
     """Catalogue cap for a tier (the per-row `lead_cap_override` wins when set —
     resolved in Store.get_subscription, not here). Unknown tier → Free cap."""
     return int(TIERS.get(tier, TIERS["free"])["lead_cap"])
+
+
+def tier_campaign_cap(tier: str) -> Optional[int]:
+    """How many non-archived campaigns this tier may hold at once; None =
+    unlimited. Unknown tier → the FREE cap, same fail-closed rule as
+    `tier_lead_cap`: a garbled/stale tier string must never hand out an
+    unlimited grant. Note the return is `Optional[int]`, so callers gate on
+    `cap is not None` — a falsy check would read unlimited as zero."""
+    cap = TIERS.get(tier, TIERS["free"])["campaign_cap"]
+    return None if cap is None else int(cap)
+
+
+def tier_max_run_leads(tier: str) -> int:
+    """Largest lead target a SINGLE run may request on this tier. There is no
+    separate per-run allowance, so this is just the period `lead_cap` — a run
+    may aim at the whole period's worth, and the run gate clamps it again by
+    what the org has actually left. Unknown tier → Free cap (fail closed)."""
+    return tier_lead_cap(tier)
 
 
 # --- Errors -------------------------------------------------------------------

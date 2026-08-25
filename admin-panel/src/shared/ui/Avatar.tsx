@@ -1,7 +1,16 @@
 import { cn } from '@/shared/lib/cn';
 
+/**
+ * v27: the prop is `name`, not `username`. This component was born on the leads table,
+ * keyed off a commenter's handle — the surface the redaction removed it from. Its only
+ * caller now is the team panel, where the string is a WORKSPACE MEMBER's own name.
+ * The old prop name read as an invitation to hand it a lead's handle again; there is no
+ * longer such a thing on an org-facing lead, and the drawer's revealed identity is
+ * deliberately typographic, not an avatar.
+ */
 interface AvatarProps {
-  readonly username: string;
+  /** A workspace person's display name or initials. Never a lead's identity. */
+  readonly name: string;
   readonly size?: 'sm' | 'lg';
 }
 
@@ -24,15 +33,15 @@ function hashCode(value: string): number {
   return Math.abs(hash);
 }
 
-function initials(username: string): string {
-  const parts = username.split(/[._-]/).filter(Boolean);
+function initials(name: string): string {
+  const parts = name.split(/[._-]/).filter(Boolean);
   const first = parts[0]?.charAt(0) ?? '?';
   const second = parts[1]?.charAt(0) ?? '';
   return (first + second).toUpperCase();
 }
 
-export function Avatar({ username, size = 'sm' }: AvatarProps) {
-  const background = PALETTE[hashCode(username) % PALETTE.length] ?? PALETTE[0];
+export function Avatar({ name, size = 'sm' }: AvatarProps) {
+  const background = PALETTE[hashCode(name) % PALETTE.length] ?? PALETTE[0];
   return (
     <span
       aria-hidden
@@ -42,7 +51,7 @@ export function Avatar({ username, size = 'sm' }: AvatarProps) {
       )}
       style={{ background }}
     >
-      {initials(username)}
+      {initials(name)}
     </span>
   );
 }

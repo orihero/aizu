@@ -366,13 +366,23 @@ export const adminOrgCampaignsResponseSchema = adminEnvelope(
   z.object({ campaigns: z.array(adminOrgCampaignSchema) }),
 );
 
-/** Cross-org lead row (camelCase off build_leads_org). */
+/**
+ * Cross-org lead row (camelCase off build_leads_org).
+ *
+ * This is the ONE surface that still carries a lead's real identity. v27 redaction
+ * removed `username` and the comment `text` from every ORG-facing payload; here they
+ * STAY, and the derived `intent` is added beside them — that pairing is how an operator
+ * checks that the redaction is summarising honestly. Keep the three together.
+ */
 export const adminOrgLeadSchema = z.object({
   commentId: z.string(),
   campaignId: z.string(),
   platform: z.string(),
   username: z.string(),
   text: z.string(),
+  // The customer-facing line derived from the two fields above. `''` for a pre-v27 row
+  // captured before redaction existed — render a placeholder, never the raw text.
+  intent: z.string().catch(''),
   capturedAt: z.number().nullable().catch(null),
   status: z.string(),
   score: z.number().nullable().catch(null),
@@ -393,6 +403,114 @@ export const adminOrgLeadsResponseSchema = adminEnvelope(
 export type AdminOrgLeadsPage = NonNullable<
   z.infer<typeof adminOrgLeadsResponseSchema>['data']
 >;
+
+// ---------------------------------------------------------------------------
+// Run inspection (v27) — the narrative feed the ORG plane no longer serves
+//
+// Run logs left the customer app entirely: /api/run/activity answers an org with
+// scalars and `events: []`. The full feed lives here, behind the real admin gate
+// (IP-allowlist + admin session). Two endpoints: a picker
+// (GET /api/admin/orgs/{id}/runs, org-scoped) and the feed itself
+// (GET /api/admin/run/activity?runId=&after=, cross-tenant BY DESIGN — a superadmin
+// inspects a run whoever owns it, so it carries no org scope at all).
+//
+// The event/counter/flag shapes are declared LOCALLY rather than imported from
+// panelState: the two planes are deliberately separate branches (see the module
+// header), and these rows are the un-redacted variant — an admin event carries the
+// `message`, the raw `detail` blob and the `sessionId` an org row must never see.
+// ---------------------------------------------------------------------------
+
+/** One of an org's recent runs, newest first — the picker for the feed below. A run is
+ * the set of `sessions` sharing a run_id, folded server-side; a fleet run that has not
+ * acked yet has no session rows, so it is merged in from its live job (0 sessions, 0
+ * leads, status running). `mode` is null for a run this process no longer remembers —
+ * honestly unknown rather than a guess. Epoch SECONDS. */
+export const adminOrgRunSchema = z.object({
+  runId: z.string(),
+  campaignId: z.string(),
+  campaignName: z.string(),
+  mode: z.string().nullable().catch(null),
+  status: z.string(),
+  platforms: z.array(z.string()).catch([]),
+  startedAt: z.number().nullable().catch(null),
+  finishedAt: z.number().nullable().catch(null),
+  sessions: z.number().catch(0),
+  leads: z.number().catch(0),
+});
+export type AdminOrgRun = z.infer<typeof adminOrgRunSchema>;
+
+export const adminOrgRunsResponseSchema = adminEnvelope(
+  z.object({ runs: z.array(adminOrgRunSchema) }),
+);
+
+/** Severity of one event. Unknown levels degrade to 'info' — one odd row must never
+ * fail the array and blank the whole feed. */
+export const adminRunEventLevelSchema = z
+  .enum(['info', 'success', 'warn', 'error'])
+  .catch('info');
+
+/**
+ * One narrative run event, in full. `id` is the global insertion id — the paging cursor
+ * and the React key; `seq` RESETS per session and is display-only, so never page or key
+ * on it. `detail` is a raw JSON STRING to parse lazily (and tolerate failing to parse).
+ * `createdAt` is epoch SECONDS (float).
+ *
+ * SECURITY: `message` and `detail` are ENGINE-authored text carrying real identities
+ * (a match detail is `{username, score, tier, reelId}`). Render them as text, never as
+ * markup, and never plumb this type into an org-facing component.
+ */
+export const adminRunEventSchema = z.object({
+  id: z.number(),
+  seq: z.number(),
+  campaignId: z.string().nullable(),
+  sessionId: z.string().nullable().catch(null),
+  phase: z.string(),
+  level: adminRunEventLevelSchema,
+  message: z.string(),
+  detail: z.string().nullable().catch(null),
+  createdAt: z.number(),
+  platform: z.string().nullable().catch(null),
+});
+export type AdminRunEvent = z.infer<typeof adminRunEventSchema>;
+
+/** Live tally for the run (summed across its sessions). Each counter degrades to 0. */
+export const adminRunCountersSchema = z.object({
+  reelsSeen: z.number().catch(0),
+  relevancePasses: z.number().catch(0),
+  commentsScored: z.number().catch(0),
+  matches: z.number().catch(0),
+  spendUsd: z.number().catch(0),
+  likes: z.number().catch(0),
+  follows: z.number().catch(0),
+});
+
+/** An open health/safety flag surfaced for the run. */
+export const adminRunFlagSchema = z.object({
+  kind: z.string(),
+  severity: z.string(),
+  detail: z.string().nullable(),
+});
+
+/**
+ * One poll of the FULL feed. `events` are oldest-first and only those with id > the
+ * `after` we sent; `cursor` is the max event id in this page (or the `after` echoed
+ * back when empty). Unlike the org endpoint there is no fleet-job block and no
+ * redaction: `finished` comes straight off the in-memory active run + the durable
+ * session rows, and an unknown run answers an empty feed rather than 404 (there is no
+ * tenant boundary left to protect, and a fleet run that has not heartbeated yet is
+ * exactly the run an operator is trying to watch).
+ */
+export const adminRunActivitySchema = z.object({
+  runId: z.string(),
+  finished: z.boolean(),
+  counters: adminRunCountersSchema,
+  events: z.array(adminRunEventSchema),
+  flags: z.array(adminRunFlagSchema).catch([]),
+  cursor: z.number().catch(0),
+});
+export type AdminRunActivity = z.infer<typeof adminRunActivitySchema>;
+
+export const adminRunActivityResponseSchema = adminEnvelope(adminRunActivitySchema);
 
 // ---------------------------------------------------------------------------
 // Audit log + chain verify
@@ -489,6 +607,13 @@ export interface MintEnrolmentTokenInput {
   readonly orgId?: number;
   readonly label?: string;
   readonly ttlHours?: number;
+}
+
+/** GET /api/admin/run/activity — one run's full feed. `after` is the global event id
+ * cursor (0 = from the start), NOT a `seq`. No org id: the endpoint is cross-tenant. */
+export interface AdminRunActivityQuery {
+  readonly runId: string;
+  readonly after?: number;
 }
 
 export interface AdminOrgLeadsQuery {

@@ -58,6 +58,17 @@ def panel():
     base = f"http://127.0.0.1:{httpd.server_address[1]}"
     ctx = {"base": base, "db": db_path}
     ctx["cookie"] = _signup_cookie(base, "scope-tester@aizu.test", "test-password-123")
+    # v27: campaign creation is plan-limited (free = 1) and this fixture needs two
+    # platforms under ONE tenant to prove the narrowing. The second tenant below
+    # creates a single campaign and stays on Free.
+    store = Store(db_path)
+    try:
+        org_id = int(store._conn.execute(
+            "SELECT id FROM organizations ORDER BY id LIMIT 1").fetchone()[0])
+        store.upsert_subscription(org_id, last_event_ts=1.0, tier="pro",
+                                  status="active")
+    finally:
+        store.close()
     ctx["ig"] = _make_campaign(ctx, "ig-scope", "instagram")
     ctx["yt"] = _make_campaign(ctx, "yt-scope", "youtube")
     # A SECOND tenant, for the ownership check: its campaign id must never narrow (or

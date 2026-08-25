@@ -46,7 +46,7 @@ from .core.config import (CDP_PLATFORMS, MAX_CAMPAIGN_BRIEF_BYTES, PER_ORG_CREDE
                      SUPPORTED_PLATFORMS, Campaign, campaign_from_brief, campaign_to_brief,
                      load_campaign, load_soul, resolve_campaign)
 from . import billing
-from .panel import build_empty_raw, build_raw
+from .panel import build_empty_raw, build_raw, delivery_state, lead_uid
 from .panel_org import (LEADS_PAGE_SIZE_DEFAULT, build_admin_org_campaigns,
                         build_admin_org_leads, build_campaigns_org,
                         build_dashboard_org, build_leads_org, build_reports_org,
@@ -60,6 +60,7 @@ from .core.store import (CONTROL_FLAG_SCOPES, DEFAULT_PLATFORM,
                     EXECUTION_BACKENDS, EXECUTION_DISTRIBUTED, EXECUTION_IN_PROCESS,
                     FORCED_REASON_STATUS,
                     MAX_NOTE_LENGTH, MAX_SYNC_LEADS, MAX_SYNC_SPEND_ROWS,
+                    REVEAL_ACTION,
                     VALID_CAMPAIGN_STATUS, VALID_STATUS,
                     WORKER_HEARTBEAT_INTERVAL_SEC, WORKER_TOKEN_TTL_SEC,
                     default_lease_ttl_sec, Store)
@@ -78,6 +79,7 @@ REPORTS_PATH = "/api/reports"
 STATUS_PATH = "/api/status"
 STATUS_BULK_PATH = "/api/status/bulk"
 LEAD_NOTE_PATH = "/api/lead/note"
+LEAD_REVEAL_PATH = "/api/lead/reveal"   # v27: audited, per-lead un-redaction
 CAMPAIGN_PATH = "/api/campaign"
 CAMPAIGN_GENERATE_PATH = "/api/campaign/generate"
 CAMPAIGN_INTERVIEW_PATH = "/api/campaign/interview"
@@ -138,8 +140,12 @@ ADMIN_IMPERSONATE_END_PATH = "/api/admin/impersonate/end"  # v15 Phase 5c: end
 ADMIN_AUDIT_PATH = "/api/admin/audit"                      # v15 Phase 5c: list
 ADMIN_AUDIT_VERIFY_PATH = "/api/admin/audit/verify"        # v15 Phase 5c: chain check
 ADMIN_ORGS_PATH = "/api/admin/orgs"                        # v15 Phase 5d: cross-org index
-ADMIN_ORGS_PREFIX = "/api/admin/orgs/"                     # /{id}/{campaigns|leads}
-_ADMIN_ORG_SUBRESOURCES = ("campaigns", "leads")
+ADMIN_ORGS_PREFIX = "/api/admin/orgs/"                     # /{id}/{campaigns|leads|runs}
+_ADMIN_ORG_SUBRESOURCES = ("campaigns", "leads", "runs")
+# v27 run-log redaction: the narrative run feed is a SUPERADMIN surface now. The org
+# plane's /api/run/activity returns scalars only (see _serve_run_activity), so this is
+# the ONLY route that still hands out event messages/details — hence the admin gate.
+ADMIN_RUN_ACTIVITY_PATH = "/api/admin/run/activity"        # ?runId=&after=
 # Lease long-poll: a worker may ask us to hold the request open this long before
 # returning an empty lease. Clamped so a hostile/buggy worker can't pin a thread.
 WORKER_LEASE_POLL_MAX_SEC = 30
@@ -291,6 +297,11 @@ _ROUTE_ACTIONS = {
     STATUS_PATH: "edit_leads",
     STATUS_BULK_PATH: "bulk_edit_leads",
     LEAD_NOTE_PATH: "edit_leads",
+    # LEAD_REVEAL_PATH is DELIBERATELY absent. Its `reveal_lead` check runs inside
+    # `_handle_lead_reveal` instead, because a refused reveal must still write an
+    # audit row — and this table's gate 403s before any handler runs, so a denial
+    # here would be invisible. A denied reveal attempt is the row an operator most
+    # wants to find later; it must not be the one row we don't keep.
     CAMPAIGN_PATH: "edit_campaigns",
     CAMPAIGN_GENERATE_PATH: "edit_campaigns",   # AI-draft a campaign = creating one
     CAMPAIGN_INTERVIEW_PATH: "edit_campaigns",   # interview step of campaign creation
@@ -388,6 +399,385 @@ def _aggregate_run_counters(sessions: list[dict], actions: dict[str, int]) -> di
     agg["likes"] = int(actions.get("like", 0))
     agg["follows"] = int(actions.get("follow", 0))
     return agg
+
+
+# --- v27 run-log redaction: org-facing run progress ---------------------------------
+#
+# The narrative run feed is a SUPERADMIN surface now (ADMIN_RUN_ACTIVITY_PATH), but a
+# customer must still be able to watch a run work. So the events are folded into
+# NUMBERS here, server-side, and only scalars go org-facing. Shipping a "filtered feed"
+# instead was the tempting shortcut and is the wrong shape: a comments/success detail is
+# literally `{"username", "score", "tier", "reelId"}` and a relevance one is
+# `{"reelId", "author"}` — i.e. we would ship exactly the rows we are hiding and trust a
+# client-side filter, and a future engine's new detail key would ride along for free.
+#
+# The events are ALSO the only live signal a fleet-routed run has. Both the session
+# counters and the captured `matches` rows travel in the job ACK body (the sidecar
+# collects leads from the WORKER's local store), so the cloud reads zero for both for
+# the whole run, while run_events land on the ~45s job heartbeat (_sync_job_run_events).
+# Measured mid-flight on a live prod run: every counter 0 and /api/leads total 0 against
+# 29 landed events, 13 of them matches.
+
+# How many of a run's events the aggregate folds. Always read from the START of the run
+# (never from the poll cursor): the numbers are a function of the whole run, not of what
+# arrived since the last poll. A growing PREFIX is what makes every number monotonic —
+# a run that out-runs this cap freezes its estimate until the authoritative ack-time
+# rows overtake it below.
+RUN_ACTIVITY_AGGREGATE_EVENTS = 2000
+# The per-item id key inside an event detail is platform-specific: reelId (instagram),
+# postId (linkedin/x), submissionId (reddit), messageId (telegram), videoId (youtube).
+# Deduping on "reelId" alone would collapse every non-instagram run into one bucket, so
+# resolve the id through this allow-list. These two keys and `found`/`reelsSeen`/
+# `relevancePasses` are the ONLY things ever read out of a detail blob on the org path.
+_RUN_EVENT_ITEM_KEYS = ("reelId", "postId", "submissionId", "messageId", "videoId")
+# run_events.phase -> the one customer-safe word the panel renders. An explicit ALLOW-
+# list, never a passthrough: an unknown (or newly invented) engine phase degrades to
+# "working" rather than leaking an internal stage name into a customer's UI.
+_ORG_RUN_PHASES = {
+    "lifecycle": "starting",
+    "feed_walk": "searching",
+    "relevance": "searching",
+    "comments": "qualifying",
+    "engage": "qualifying",
+    "halt": "stopped",
+}
+
+
+def _event_detail(event: dict) -> dict:
+    """One event's `detail` decoded, or `{}`. It is a TEXT column holding JSON written
+    by an engine (or by a worker's sync), so it can be NULL, malformed, or a non-object.
+    Never raises — a progress number must not be able to 500 the activity poll."""
+    raw = event.get("detail")
+    if isinstance(raw, dict):        # already decoded (some callers/tests pass objects)
+        return raw
+    if not raw:
+        return {}
+    try:
+        decoded = json.loads(raw)
+    except (TypeError, ValueError):
+        return {}
+    return decoded if isinstance(decoded, dict) else {}
+
+
+def _event_item_id(detail: dict) -> str:
+    """The post/reel/video id this event is about, "" when the blob names none. Used
+    only as a dedupe key — never emitted."""
+    for key in _RUN_EVENT_ITEM_KEYS:
+        value = detail.get(key)
+        if value:
+            return str(value)
+    return ""
+
+
+def _leads_from_match_events(details: Iterable[dict]) -> int:
+    """The deduped lead estimate for ONE run, from its match-event `detail` blobs.
+
+    THE single definition of "how many leads did this run find", shared by the run
+    activity feed and by the superadmin run picker. It lives on its own precisely
+    because the two used to answer differently: the picker summed `sessions.matches`,
+    and a dead-lettered run has no session rows in the cloud at all, so a run that
+    really found fifteen leads was listed as "0 leads" next to a log that said 15.
+
+    Two shapes arrive on the same (phase=comments, level=success) channel and are
+    reconciled with max(), never added:
+
+    * the per-COMMENT match event, deduped on `(item id, username)`. `run_events` is
+      append-only per ATTEMPT while the store dedupes via `upsert_match` on comment
+      id, so a retry that re-scans a post it already scored emits a SECOND success
+      for the same comment — and retries are the normal case (a live run was observed
+      on attempt 4 of 5). It under-counts only when one person leaves two qualifying
+      comments on one post: the safe direction, and it self-corrects against the real
+      rows at ack.
+    * the per-POST roll-up ("3 match(es) on reel X"), MAXed per item. It is an
+      aggregate OF those same comment events, so adding the two would double-count
+      every lead.
+
+    Blobs are accepted raw (JSON text) or decoded — `_event_detail` normalises both
+    and never raises, because a progress number must not be able to 500 a poll.
+    """
+    keys: set[tuple[str, str]] = set()
+    rollup: dict[str, int] = {}
+    for raw in details:
+        # `{"detail": raw}` re-uses the one decoder for both callers: the feed passes
+        # already-decoded dicts, the picker passes the TEXT column straight from SQL.
+        detail = _event_detail({"detail": raw})
+        item = _event_item_id(detail)
+        username = detail.get("username")
+        if username:
+            keys.add((item, str(username)))
+        elif isinstance(detail.get("found"), int):
+            rollup[item] = max(rollup.get(item, 0), int(detail["found"]))
+    return max(len(keys), sum(rollup.values()))
+
+
+def _aggregate_run_progress(events: list[dict], *, counters: dict[str, Any],
+                            lead_rows: int, finished: bool,
+                            failed: bool) -> dict[str, Any]:
+    """Fold a run's narrative events into the scalars an ORG caller may see.
+
+    THE single place these aggregates are computed. Every one of them is a max/sum over
+    a prefix of the run's own events, so all of them are monotonic — a customer must
+    never watch a progress number fall back down mid-run.
+
+    `counters` is the ack-time `sessions` aggregate: it reads all-zero for the whole of
+    a fleet-routed run and becomes correct at ack, so it is folded in with `max`, never
+    taken blindly. `lead_rows` is the authoritative count of the org's real `matches`
+    rows for the run — also empty until ack, also folded with `max`, which is what makes
+    `leadsFound` end up exact.
+
+    E.5: `lead_rows` ALSO ships on its own as `leadsDelivered`, because the "authoritative
+    rows win at ack" reconciliation never fires for a run that never acks. A dead-lettered
+    run's harvest stays in the worker's local sqlite, so its rows stay 0 permanently and
+    `max(estimate, rows)` collapses to the estimate — forever. That estimate is therefore
+    never discarded, reset, or recomputed to zero when the job flips to `failed`: for that
+    run it is the only record the customer will ever have. Shipping both numbers (and the
+    `delivery` word `delivery_state` derives from them) is what stops the panel having to
+    choose which of the two available lies to tell.
+    """
+    match_details: list[dict] = []            # (comments, success) detail blobs
+    walk: dict[str, tuple[int, int, int]] = {}  # session -> (seq, itemsSeen, relevant)
+    last_phase: Optional[str] = None
+    last_event_at: Optional[float] = None
+    for event in events:
+        created = event.get("createdAt")
+        if isinstance(created, (int, float)) and (
+                last_event_at is None or created > last_event_at):
+            last_event_at = float(created)
+        phase = event.get("phase") or None
+        if phase:
+            last_phase = phase        # rows arrive oldest-first, so the last one wins
+        detail = _event_detail(event)
+        if phase == "comments" and event.get("level") == "success":
+            # Deduping/reconciling these is `_leads_from_match_events` — one
+            # definition, shared with the superadmin run picker so the list and the
+            # log can never quote different numbers for the same run.
+            match_details.append(detail)
+        elif phase == "feed_walk":
+            # PER-SESSION MAX, THEN SUM. The emitting engine reads its OWN Session
+            # counters, and one run_id spans MANY sessions (a batch run loops them, a
+            # multi-channel campaign fans them out). Taking "the newest feed_walk detail"
+            # both under-reports (a session that matched twice may emit no feed_walk at
+            # all) and GOES BACKWARDS on a retry — the customer watches the number fall
+            # from 8 to 2. Grouping by session mirrors _aggregate_run_counters.
+            session_id = str(event.get("sessionId") or "")
+            seq = int(event.get("seq") or 0)
+            previous = walk.get(session_id)
+            if previous is None or seq >= previous[0]:
+                walk[session_id] = (seq,
+                                    int(detail.get("reelsSeen") or 0),
+                                    int(detail.get("relevancePasses") or 0))
+            # NOTE: `detail["matches"]` is deliberately NOT read. `counters.matches` is
+            # incremented once per POST after a whole comment batch while the success
+            # events fire per COMMENT, so it lags — observed reading 0 against 15 success
+            # rows in the same run. `leadsFound` is the only lead number that goes on
+            # screen; two disagreeing counts must never render together.
+    if failed:
+        phase_word = "failed"
+    elif finished:
+        phase_word = "done"
+    elif last_phase is None:
+        phase_word = "starting"       # zero events + a live run is "starting", not "0 found"
+    else:
+        phase_word = _ORG_RUN_PHASES.get(last_phase, "working")
+    return {
+        # E.5: `leadsFound` / `leadsDelivered` / `delivery` come out of the ONE helper
+        # that reconciles the pair, shared with the panel builders so a run drawer and a
+        # campaign card can never disagree about what "not delivered" means. A failed run
+        # is over, so its gap is a verdict rather than ack lag.
+        **delivery_state(max(_leads_from_match_events(match_details), int(lead_rows)),
+                         lead_rows, finished=finished or failed),
+        "itemsScanned": max(sum(w[1] for w in walk.values()),
+                            int(counters.get("reelsSeen") or 0)),
+        "relevantFound": max(sum(w[2] for w in walk.values()),
+                             int(counters.get("relevancePasses") or 0)),
+        # A timestamp is not a log — it is the liveness beat that stops the panel's
+        # stall banner from lying about a quiet-but-alive run.
+        "lastEventAt": last_event_at,
+        "phase": phase_word,
+    }
+
+
+# How many of an org's runs the superadmin picker lists. Newest-first, so the cap only
+# ever hides history an operator would have to scroll for anyway.
+ADMIN_ORG_RUNS_LIMIT = 50
+
+
+def _build_admin_org_runs(store: Any, org_id: int, modes: dict[str, str],
+                          limit: int = ADMIN_ORG_RUNS_LIMIT) -> list[dict[str, Any]]:
+    """One org's recent runs, newest first — the superadmin's picker for the narrative
+    feed at ADMIN_RUN_ACTIVITY_PATH.
+
+    There is no `runs` table: a run IS the set of `sessions` sharing a `run_id` (a batch
+    run loops several, a multi-channel campaign fans several out), so the rows are folded
+    here. That is the durable record — but a FLEET-routed run has NO session rows in the
+    cloud until its job acks (they are mirrored from the worker at ack), so the org's
+    active fleet jobs are merged in as started-but-empty runs. Without that merge the one
+    run an operator most wants to inspect — the one running right now — would be the one
+    missing from the list.
+
+    `modes` maps run_id -> 'live'/'dry' for the runs THIS process still remembers; the
+    sessions table records no mode, so an older run's `mode` is honestly null rather than
+    a guess. The N+1 over campaigns mirrors _handle_admin_orgs and is fine at PRD scale.
+
+    LEAD COUNTS. Summing `sessions.matches` — the only source this used to have — reads
+    ZERO for exactly the run an operator is most likely to be looking at: a fleet run
+    that dead-lettered never acked, so it mirrored no session rows into the cloud at all.
+    A run that really harvested fifteen leads was listed as "0 leads" while its own
+    narrative log said fifteen. So each row now carries the SAME pair the log does, out
+    of the same `_leads_from_match_events` definition:
+      * `leadsFound`     — the deduped event estimate: what the run discovered.
+      * `leadsDelivered` — real `matches` rows: what actually reached the account.
+      * `delivery`       — the word that reconciles them (E.5/E.7), so a not-delivered
+        run is legible as one instead of as a number that looks either inflated or lost.
+    `leads` is kept as an alias of `leadsFound` so an older picker keeps rendering — and
+    now renders the honest number rather than the session sum's zero.
+    """
+    names: dict[str, str] = {}
+    runs: dict[str, dict[str, Any]] = {}
+    platforms: dict[str, set] = {}
+    for meta in store.list_campaign_meta(org_id):
+        cid = meta["campaign_id"]
+        names[cid] = meta.get("display_name") or cid
+        for s in store.all_sessions(cid):
+            run_id = s.get("run_id")
+            if not run_id:
+                continue  # pre-v10 sessions and CLI runs carry no run correlation
+            run = runs.get(run_id)
+            if run is None:
+                run = runs[run_id] = {
+                    "runId": run_id, "campaignId": cid, "campaignName": names[cid],
+                    "mode": modes.get(run_id), "status": "done", "platforms": [],
+                    "startedAt": None, "finishedAt": None, "sessions": 0, "leads": 0,
+                }
+                platforms[run_id] = set()
+            if s.get("platform"):
+                platforms[run_id].add(s["platform"])
+            started, ended = s.get("started_at"), s.get("ended_at")
+            if started is not None and (run["startedAt"] is None
+                                        or started < run["startedAt"]):
+                run["startedAt"] = started
+            run["sessions"] += 1
+            run["leads"] += int(s.get("matches") or 0)
+            if s.get("status") == "running" or ended is None:
+                # Still open (or crashed without an end_session) — the run is not over,
+                # and `finishedAt` must stay null rather than report the last session's
+                # end as the run's end.
+                run["status"] = "running"
+                run["finishedAt"] = None
+            elif run["status"] != "running":
+                if s.get("status") == "halted":
+                    run["status"] = "halted"
+                if run["finishedAt"] is None or ended > run["finishedAt"]:
+                    run["finishedAt"] = ended
+    for cid, run_id in store.active_fleet_runs_for_org(org_id).items():
+        if run_id in runs:
+            continue  # already acked and mirrored into sessions
+        job = store.get_job_for_run(run_id, org_id)
+        runs[run_id] = {
+            "runId": run_id, "campaignId": cid, "campaignName": names.get(cid, cid),
+            # Only LIVE runs are ever dispatched to the fleet (dry runs stay in-process),
+            # so this one is not a guess.
+            "mode": "live", "status": "running",
+            "platforms": [job["platform"]] if job and job.get("platform") else [],
+            "startedAt": job.get("createdAt") if job else None,
+            "finishedAt": None, "sessions": 0, "leads": 0,
+        }
+    _merge_event_only_runs(store, org_id, runs, names, limit)
+    for run_id, marks in platforms.items():
+        runs[run_id]["platforms"] = sorted(marks)
+    ordered = sorted(runs.values(), key=lambda r: r["startedAt"] or 0.0,
+                     reverse=True)[:limit]
+    _attach_admin_run_leads(store, org_id, ordered)
+    return ordered
+
+
+def _merge_event_only_runs(store: Any, org_id: int, runs: dict[str, dict[str, Any]],
+                           names: dict[str, str], limit: int) -> None:
+    """Add the org's runs that exist ONLY as narrative events, in place.
+
+    THIRD source, after sessions and active fleet jobs, and the one that catches the
+    run an operator is most likely hunting for. Sessions reach the cloud in the ACK
+    body, so a job that dead-lettered mirrored none — and the moment it leaves the
+    active statuses it also drops out of the fleet merge above. The run then vanished
+    from the picker while ADMIN_RUN_ACTIVITY_PATH could still render its complete log,
+    which is the same list/log disagreement as a wrong lead count, only total.
+
+    Everything about such a run is derived from what did arrive:
+      * `startedAt`/`finishedAt` from the first/last event timestamp — the run really
+        was alive between them;
+      * `status` from its JOB row, which nack_job DID update (spend rides on the nack
+        body even though leads do not), so a dead-lettered run reads `failed` rather
+        than being dressed up as a normal `done`;
+      * `mode` is `live` only when a job proves the run was dispatched to the fleet
+        (dry runs never are) and null otherwise — honestly unknown, not guessed.
+    Best-effort — the picker's job is to reach a log, so a read failure here leaves the
+    session-derived list intact rather than failing the org page.
+    """
+    try:
+        candidates = store.run_event_runs(org_id, limit=limit)
+    except Exception:  # noqa: BLE001 — additive rows; never break the picker.
+        log.exception("admin run picker event scan failed · org=%s", org_id)
+        return
+    for row in candidates:
+        run_id = row["runId"]
+        if run_id in runs:
+            continue          # sessions or a live job already described it, in full
+        job = None
+        try:
+            job = store.get_job_for_run(run_id, org_id)
+        except Exception:  # noqa: BLE001 — status degrades, the row still lists.
+            log.exception("admin run picker job lookup failed · run=%s", run_id)
+        status = (job or {}).get("status")
+        cid = row["campaignId"] or (job or {}).get("campaignId") or ""
+        runs[run_id] = {
+            "runId": run_id, "campaignId": cid, "campaignName": names.get(cid, cid),
+            # A fleet job is the only way a run gets here with no sessions, and only
+            # LIVE runs are dispatched to the fleet — but say nothing when there is no
+            # job to prove it rather than guessing.
+            "mode": "live" if job else None,
+            "status": "failed" if status in ("failed", "interrupted") else (
+                "running" if status in ("queued", "leased", "running") else "done"),
+            "platforms": [job["platform"]] if job and job.get("platform") else [],
+            "startedAt": row["firstAt"],
+            # A run with no session row never reported an end; its last event is the
+            # last thing anyone knows about it, and calling that the finish is more
+            # honest than a null that reads as "still going".
+            "finishedAt": None if status in ("queued", "leased", "running")
+            else row["lastAt"],
+            "sessions": row["sessions"], "leads": 0,
+        }
+
+
+def _attach_admin_run_leads(store: Any, org_id: int,
+                            rows: list[dict[str, Any]]) -> None:
+    """Fold the log's own lead pair into each picker row, in place.
+
+    Two bulk reads for the whole page (never a per-run N+1) and both are best-effort:
+    the picker's job is to let an operator REACH a run's log, so a counting failure
+    must leave the list usable rather than 500 the org page. On that path the rows
+    keep the session-derived `leads` they already carry.
+
+    `finished` for the pair is "the run is not still running": a live run's gap is ack
+    lag (`pending`), while a run that is over and still short really did lose leads.
+    """
+    if not rows:
+        return
+    try:
+        delivered_by_run = store.lead_counts_by_run(org_id)
+        details_by_run = store.match_event_details_by_run(
+            org_id, [r["runId"] for r in rows])
+    except Exception:  # noqa: BLE001 — additive numbers; never break the picker.
+        log.exception("admin run picker lead counts failed · org=%s", org_id)
+        return
+    for row in rows:
+        delivered = delivered_by_run.get(row["runId"], 0)
+        estimate = _leads_from_match_events(details_by_run.get(row["runId"], []))
+        # The session counter joins the max as a third floor: it is the only source
+        # for a pre-v10 run whose events have since been pruned by retention.
+        row.update(delivery_state(max(estimate, delivered, int(row["leads"] or 0)),
+                                  delivered,
+                                  finished=row["status"] != "running"))
+        row["leads"] = row["leadsFound"]
 
 
 def _attach_fleet_run_ids(store: Any, raw: dict, org_id: int) -> None:
@@ -636,6 +1026,30 @@ def _validate_lead_note(payload: Any) -> tuple[Optional[dict], Optional[str]]:
     if isinstance(note_id, bool) or not isinstance(note_id, int):
         return None, "missing or invalid field: noteId"
     return {"op": op, "noteId": note_id}, None
+
+
+def _validate_lead_reveal(payload: Any) -> tuple[Optional[dict], Optional[str]]:
+    """One lead's composite key: campaignId + commentId (+ optional platform).
+
+    Exactly ONE lead, by the `matches` primary key — there is no list form, no
+    `commentIds`, no `status`/`limit`/`all` filter. That is the point of the
+    endpoint: a bulk reveal would silently rebuild the export leak that the v27
+    redaction exists to close, so the shape refuses to widen rather than relying
+    on a handler to cap it. Mirrors `_validate_status_request`'s field checks.
+    """
+    if not isinstance(payload, dict):
+        return None, "body must be a JSON object"
+    fields: dict[str, Any] = {}
+    for key in ("campaignId", "commentId"):
+        value = payload.get(key)
+        if not isinstance(value, str) or not value.strip():
+            return None, f"missing or empty field: {key}"
+        fields[key] = value.strip()
+    platform = payload.get("platform")
+    if platform is not None and (not isinstance(platform, str) or not platform.strip()):
+        return None, "platform, if present, must be a non-empty string"
+    fields["platform"] = platform.strip() if isinstance(platform, str) else DEFAULT_PLATFORM
+    return fields, None
 
 
 class PortInUseError(RuntimeError):
@@ -1537,9 +1951,13 @@ def _match_worker_job_route(path: str) -> Optional[tuple[str, str]]:
 
 
 def _match_admin_org_route(path: str) -> Optional[tuple[int, str]]:
-    """Parse ``/api/admin/orgs/{id}/{campaigns|leads}`` → ``(org_id, subresource)``, else
-    None. The cross-org read views (Phase 5d); the variable org id stays out of the
-    static route dicts. Returns None on a non-integer id or an unknown subresource."""
+    """Parse ``/api/admin/orgs/{id}/{campaigns|leads|runs}`` → ``(org_id, subresource)``,
+    else None. The cross-org read views (Phase 5d); the variable org id stays out of the
+    static route dicts. Returns None on a non-integer id or an unknown subresource.
+
+    The allow-list is the whole gate on the subresource half: an unknown segment must
+    fall through to None (→ SPA/404) rather than reach the handler, so adding a name
+    here is exactly as load-bearing as writing the handler itself."""
     if not path.startswith(ADMIN_ORGS_PREFIX):
         return None
     rest = path[len(ADMIN_ORGS_PREFIX):]
@@ -1609,7 +2027,16 @@ def _validate_worker_nack(payload: Any) -> tuple[Optional[dict], Optional[str]]:
     """Validate a nack body: reason (required, capped string), poison (optional bool),
     retryAfterAt (optional epoch number — e.g. the engine's daytime 'try again at'),
     plus the optional B9 `spend` rollup and `dbId` sentinel (a crashed attempt spent
-    real money before it died — see store.nack_job)."""
+    real money before it died — see store.nack_job), plus the optional `leads` batch.
+
+    `leads` is the sibling of `spend` and arrived for the same reason: a run that never
+    acks (dead-lettered at max attempts — the NORMAL end of a run that hits its
+    wall-clock cap before its lead target) previously shipped its spend and kept its
+    leads, so the customer was billed for a harvest they never received. Tolerant like
+    the ack validator: non-object rows are dropped and the batch is capped here, so one
+    ragged row never turns a nack into a 400 — and a REJECTED nack is worse than
+    unsynced leads, because the attempts counter never increments and the job stays
+    leased until ReclaimManager sweeps it."""
     if not isinstance(payload, dict):
         return None, "body must be a JSON object"
     reason = payload.get("reason")
@@ -1625,6 +2052,12 @@ def _validate_worker_nack(payload: Any) -> tuple[Optional[dict], Optional[str]]:
         retry_after, err = _finite_number(retry_after, "retryAfterAt")
         if err is not None:
             return None, err
+    leads = payload.get("leads")
+    if leads is None:
+        leads = []
+    if not isinstance(leads, list):
+        return None, "leads must be an array"
+    leads = [row for row in leads if isinstance(row, dict)][:MAX_SYNC_LEADS]
     spend, err = _validate_worker_spend(payload)
     if err is not None:
         return None, err
@@ -1633,7 +2066,7 @@ def _validate_worker_nack(payload: Any) -> tuple[Optional[dict], Optional[str]]:
         return None, err
     return {"reason": reason.strip()[:_WORKER_MAX_STR], "poison": poison,
             "retryAfterAt": float(retry_after) if retry_after is not None else None,
-            "spend": spend, "dbId": db_id}, None
+            "leads": leads, "spend": spend, "dbId": db_id}, None
 
 
 def _validate_worker_ack(payload: Any) -> tuple[Optional[dict], Optional[str]]:
@@ -1973,6 +2406,28 @@ def _billing_inactive_message(sub: dict[str, Any]) -> str:
 def _billing_cap_message(sub: dict[str, Any]) -> str:
     return (f"Plan limit reached ({sub.get('lead_cap')} leads). "
             f"Resets {_billing_reset_label(sub)}. Upgrade to keep running.")
+
+
+def _billing_reveal_cap_message(sub: dict[str, Any]) -> str:
+    """The 402 an org hits when its plan's per-period REVEAL allowance is full (v27).
+
+    Same idiom as `_billing_cap_message` — the number, the reset, the fix — because it
+    is the same allowance: an org may not un-anonymize more DISTINCT leads in a period
+    than the plan let it capture. Without a cap, `POST /api/lead/reveal` is a per-lead
+    endpoint that a twenty-line script walks into the bulk export the redaction exists
+    to prevent.
+    """
+    return (f"Plan limit reached ({sub.get('lead_cap')} lead reveals). "
+            f"Resets {_billing_reset_label(sub)}. Upgrade to reveal more leads.")
+
+
+def _billing_campaign_cap_message(cap: int, tier: str) -> str:
+    """The 402 an org hits when its plan's CAMPAIGN allowance is full (v27). Names the
+    number and the plan for the same reason _billing_cap_message does: the fix is an
+    upgrade (or archiving a campaign), and a bare "limit reached" reads as a bug."""
+    display = billing.TIERS.get(tier, billing.TIERS["free"])["display_name"]
+    return (f"Plan limit reached ({cap} campaigns on {display}). "
+            "Upgrade to add more campaigns.")
 
 
 class _HeadBodySuppressor:
@@ -2393,6 +2848,7 @@ class PanelHandler(SimpleHTTPRequestHandler):
             STATUS_PATH: self._handle_status,
             STATUS_BULK_PATH: self._handle_status_bulk,
             LEAD_NOTE_PATH: self._handle_lead_note,
+            LEAD_REVEAL_PATH: self._handle_lead_reveal,
             CAMPAIGN_PATH: self._handle_campaign,
             CAMPAIGN_GENERATE_PATH: self._handle_generate_campaign,
             CAMPAIGN_INTERVIEW_PATH: self._handle_campaign_interview,
@@ -2940,6 +3396,126 @@ class PanelHandler(SimpleHTTPRequestHandler):
             return
         self._send_json(200, True, data={"noteId": fields["noteId"], "op": "delete"})
 
+    def _handle_lead_reveal(self, payload: Any) -> None:
+        """v27 reveal-on-demand: un-redact ONE lead's identity, and audit the attempt.
+
+        Leads are anonymized by default (`panel._build_matches` drops `username` and
+        the comment `text`), which also removed the customer's only way to REACH a
+        lead. This is the sanctioned way back: an explicit, per-lead, audited
+        disclosure instead of a payload that leaks by default.
+
+        Four rules, each of which the naive implementation gets wrong:
+
+        * The org comes from the SESSION, never the body. The body names a lead;
+          it never names whose lead it is (BOLA).
+        * A lead that is not this org's — or does not exist at all — is a **404**,
+          not a 403. A 403 would confirm the row exists, turning the endpoint into a
+          cross-tenant existence oracle for any (campaign, comment) pair someone can
+          guess. Both cases answer with the same message for the same reason.
+        * The `reveal_lead` role check runs HERE rather than in `_ROUTE_ACTIONS`, so
+          a refusal still writes its audit row (see the comment there).
+        * Reveal is a READ. It writes no status, no history row, no `updated_at` —
+          the only thing it writes is the audit row.
+
+        Returns `{username, text, reelId}`. The comment text ships deliberately: the
+        handle alone unlocks the public post where the comment is already visible, so
+        withholding the words while handing over the author is incoherent, not safer.
+        `reelId` ships here and NOWHERE else org-facing (`panel._build_matches` moved
+        it behind `include_identity`): it is a pointer to the identity, so it belongs
+        on the audited path with the identity itself.
+
+        FIFTH rule, and the one that makes the other four hold at scale: the reveal is
+        CAPPED by the plan's period lead allowance (free 10 … scale = override). An
+        uncapped per-lead endpoint is a bulk export with extra round-trips — a script
+        walks the anonymized list and reveals every row. The meter counts DISTINCT
+        leads, never calls, and a re-reveal of a lead already revealed this period is
+        always free; see `Store.count_reveals_this_period`.
+        """
+        fields, err = _validate_lead_reveal(payload)
+        if err is not None:
+            self._send_json(400, False, error=err)
+            return
+        user = self._current_user()  # non-None: route is behind the auth gate
+        org_id = user["orgId"]
+        uid = lead_uid(fields["campaignId"], fields["platform"], fields["commentId"])
+        store = Store(self.db_path)
+
+        def audit(result: str) -> None:
+            """One row per call, whatever the outcome. `result` is the only thing that
+            differs between them; `record_audit` swallows its own failures by contract,
+            so this can never take the reveal down.
+
+            These rows are ALSO the meter (`Store.count_reveals_this_period`), which is
+            why the detail blob is built by `Store.reveal_audit_detail` rather than
+            inline: the writer and the reader's LIKE have to be one definition.
+            """
+            store.record_audit(
+                org_id, user["id"], REVEAL_ACTION, target=uid,
+                detail=Store.reveal_audit_detail(fields["campaignId"],
+                                                 fields["platform"], result))
+
+        try:
+            # Denial is audited FIRST, before the row is even looked up: what we are
+            # recording is that this actor asked, and the answer must not depend on
+            # whether the lead happens to exist.
+            if not rbac.can(user.get("role"), "reveal_lead"):
+                audit("denied")
+                self._send_json(403, False,
+                                error="your role does not permit this action")
+                return
+            if not self._campaign_in_org(store, fields["campaignId"], org_id):
+                audit("not_found")
+                self._send_json(404, False, error="unknown lead")  # cross-org → hide
+                return
+            match = None
+            for m in store.matches(fields["campaignId"]):
+                if (m.get("comment_id") == fields["commentId"]
+                        and (m.get("platform") or DEFAULT_PLATFORM) == fields["platform"]):
+                    match = m
+                    break
+            if match is None:
+                audit("not_found")
+                self._send_json(404, False, error="unknown lead")
+                return
+            # v27 plan cap. LAST of the four gates on purpose: a 402 therefore always
+            # means "this really is your lead, the allowance is spent", and the two
+            # earlier refusals stay indistinguishable from each other, so an org that
+            # is over its cap still cannot use the endpoint as an existence oracle.
+            sub = store.get_subscription(org_id)
+            since = store.period_since(org_id)
+            # A lead already revealed this period is FREE, and checking that first is
+            # what makes the cap survive contact with the product: revealed data is
+            # never cached client-side (Section F), so reopening a drawer re-reveals.
+            # Metering CALLS would spend a Free org's ten-lead allowance on one lead
+            # opened ten times. The meter counts DISTINCT leads for the same reason.
+            if not store.lead_revealed_this_period(org_id, uid, since):
+                cap = int(sub["lead_cap"] or 0)
+                if store.count_reveals_this_period(org_id, since) >= cap:
+                    # Audited like every other outcome — a refusal at the cap is
+                    # precisely the row that explains a support ticket, and the row a
+                    # scripted enumeration attempt writes over and over.
+                    audit("capped")
+                    self._send_json(402, False,
+                                    error=_billing_reveal_cap_message(sub))
+                    return
+            audit("revealed")
+        except Exception:  # noqa: BLE001 — generic 500; detail to the log only
+            self._send_internal_error("lead reveal")
+            return
+        finally:
+            store.close()
+        # CONSTRUCT the response from named fields — never `dict(match)` minus keys.
+        # An inverted filter would ship every future `matches` column (source, tier,
+        # found_by_models, …) to the customer the day it is added.
+        self._send_json(200, True, data={
+            "id": uid,
+            "commentId": fields["commentId"],
+            "platform": fields["platform"],
+            "username": match.get("username") or "",
+            "text": match.get("text") or "",
+            "reelId": match.get("reel_id") or "",
+        })
+
     def _resolve_campaign_target(
             self, store: Store, org_id: Optional[int], requested: str,
             op: Optional[str], *,
@@ -3007,6 +3583,34 @@ class PanelHandler(SimpleHTTPRequestHandler):
                                 error_code="campaign_exists" if err_code == 409 else None)
                 return
             fields = {**fields, "campaignId": campaign_id}
+            # v27 plan limits: the campaign allowance is a CREATE-time gate. Checked
+            # after the target id is resolved (so we know this really is a new row) and
+            # before the first write, since upsert_campaign_meta commits in its own
+            # transaction. `Store.get_subscription` is the SAME single choke point the
+            # run gate uses, so the panel's meter and enforcement can never disagree.
+            #
+            # The predicate MIRRORS _resolve_campaign_target's own notion of a create:
+            # an explicit `op="create"`, or the legacy brief-carrying payload with no
+            # `op` (which also allocates a fresh org-scoped key). Gating on the literal
+            # `op == "create"` alone would leave that legacy shape as a free bypass;
+            # gating on "the row does not exist yet" would over-reach and block a
+            # legacy status-only write against an unregistered id. An EDIT — explicit,
+            # or inferred — is never blocked, whatever the plan.
+            if fields["op"] == "create" or (fields["op"] is None and bool(fields["brief"])):
+                sub = store.get_subscription(org_id)
+                cap = billing.tier_campaign_cap(sub["tier"])
+                # `cap is not None` — None means UNLIMITED. A falsy check would read
+                # unlimited as zero and block every create on the paid tiers.
+                if cap is not None:
+                    # Archived campaigns do not count: the cap bounds the WORKING set,
+                    # so an org at its limit can archive its way forward instead of
+                    # being wedged with no self-serve move but an upgrade.
+                    used = sum(1 for r in store.list_campaign_meta(org_id)
+                               if r.get("archived_at") is None)
+                    if used >= cap:
+                        self._send_json(402, False, error=_billing_campaign_cap_message(
+                            cap, sub["tier"]))
+                        return
             # VALIDATE EVERYTHING BEFORE THE FIRST WRITE. upsert_campaign_meta
             # commits in its own transaction, so building the merged brief after it
             # meant a brief that failed campaign_from_brief (e.g. an unsupported
@@ -3847,6 +4451,13 @@ class PanelHandler(SimpleHTTPRequestHandler):
         if requested is not None and clamped < requested:
             log.info("Run lead target clamped by plan · org=%s requested=%s remaining=%s",
                      org_id, requested, remaining)
+        # v27: echo the resolved bounds on every successful start. The clamp above is the
+        # enforcement; this is the SURFACING of it, so the run UI can say "10 of 10 leads
+        # left on Free" and bound its own input without a second round-trip — and so a
+        # silently clamped target is visible rather than a run that quietly stops early.
+        plan_bounds = {"targetLeads": clamped,
+                       "maxRunLeads": billing.tier_max_run_leads(sub["tier"]),
+                       "leadsRemaining": remaining}
         spec = RunSpec(scope=fields["scope"], campaign_id=fields["campaignId"],
                        mode=fields["mode"], org_id=org_id,
                        target_leads=clamped,
@@ -3860,7 +4471,7 @@ class PanelHandler(SimpleHTTPRequestHandler):
         finally:
             estore.close()
         if backend == EXECUTION_DISTRIBUTED and spec.mode == "live":
-            self._dispatch_run_to_fleet(spec, org_id)
+            self._dispatch_run_to_fleet(spec, org_id, plan_bounds)
             return
         if self.run_manager is None:
             self._send_json(503, False, error="run control is not enabled on this server")
@@ -3901,9 +4512,10 @@ class PanelHandler(SimpleHTTPRequestHandler):
                  getattr(active, "run_id", "?"))
         self._send_json(202, True, data={"accepted": True, "scope": fields["scope"],
                                          "campaignId": fields["campaignId"],
-                                         "mode": fields["mode"]})
+                                         "mode": fields["mode"], **plan_bounds})
 
-    def _dispatch_run_to_fleet(self, spec: RunSpec, org_id: Optional[int]) -> None:
+    def _dispatch_run_to_fleet(self, spec: RunSpec, org_id: Optional[int],
+                               plan_bounds: dict[str, Any]) -> None:
         """Distributed backend: enqueue the run as job(s) for the worker fleet instead of
         launching in-process. scope='campaign' → one job; scope='all' → one job per LIVE
         campaign that has a capable worker. A capability miss for a single-campaign run is
@@ -4049,7 +4661,11 @@ class PanelHandler(SimpleHTTPRequestHandler):
         self._send_json(202, True, data={"accepted": True, "backend": "distributed",
                                          "scope": spec.scope, "jobs": enqueued,
                                          "runId": run_ids[0] if run_ids else None,
-                                         "runIds": run_ids, "skipped": skipped})
+                                         "runIds": run_ids, "skipped": skipped,
+                                         # v27: same plan bounds as the in-process 202 —
+                                         # `targetLeads` is the whole clamped budget,
+                                         # which pass 2 above SPLIT across these jobs.
+                                         **plan_bounds})
 
     def _handle_run_stop(self, _payload: Any) -> None:
         """Stop the in-flight run early (the panel's Stop button). org-scoped: a 409
@@ -4570,10 +5186,10 @@ class PanelHandler(SimpleHTTPRequestHandler):
 
     def _handle_admin_org_read(self, org_id: int, subresource: str,
                                query: dict[str, list[str]]) -> None:
-        """Cross-org READ of one org's campaigns or leads (Phase 5d), reusing the same
-        org-page builders the org plane uses — with the target org_id and owner role for
-        full visibility. Distinct from impersonation: read-only, no effective principal is
-        set, and it is gated by the admin session (not an org cookie)."""
+        """Cross-org READ of one org's campaigns, leads or runs (Phase 5d), reusing the
+        same org-page builders the org plane uses — with the target org_id and owner role
+        for full visibility. Distinct from impersonation: read-only, no effective principal
+        is set, and it is gated by the admin session (not an org cookie)."""
         admin = self._require_admin()
         if admin is None:
             return
@@ -4585,6 +5201,21 @@ class PanelHandler(SimpleHTTPRequestHandler):
             if subresource == "campaigns":
                 data = build_admin_org_campaigns(store, org_id=org_id)
                 self._send_json(200, True, data=data)
+                return
+            if subresource == "runs":
+                # v27: the run picker for the narrative feed the org plane no longer
+                # serves. Modes come from the in-memory RunManager UNFILTERED (org_id
+                # None) — this is the cross-tenant admin plane, and the map is keyed by
+                # run id, so only the target org's own runs can pick anything out of it.
+                status = (self.run_manager.status(None) if self.run_manager is not None
+                          else {"active": None, "recent": []})
+                modes = {r["id"]: r.get("mode") for r in status.get("recent", [])
+                         if r.get("id")}
+                active = status.get("active")
+                if active and active.get("id"):
+                    modes[active["id"]] = active.get("mode")
+                self._send_json(200, True, data={
+                    "runs": _build_admin_org_runs(store, org_id, modes)})
                 return
             # leads — server-side filtered/sorted/paginated, like /api/leads
             page = _query_int(query.get("page"), 1)
@@ -4605,6 +5236,57 @@ class PanelHandler(SimpleHTTPRequestHandler):
             self._send_json(500, False, error="internal server error")
         finally:
             store.close()
+
+    def _handle_admin_run_activity(self, query: dict[str, list[str]]) -> None:
+        """The FULL narrative feed for one run (v27): messages, details, identities — the
+        rows /api/run/activity no longer hands an org. Cross-tenant BY DESIGN and NOT
+        org-scoped: a superadmin picks a run off /api/admin/orgs/{id}/runs and inspects it
+        whoever owns it. Same posture as the other Phase 5d read views — the real admin
+        gate (IP-allowlist + admin session), read-only, no impersonation, and no audit row
+        (only the writes and impersonation are audited on this plane).
+
+        An unknown run answers an empty feed rather than 404: there is no tenant boundary
+        left to protect here, and a fleet run that has not yet heartbeated its first event
+        is exactly the run an operator is trying to watch."""
+        if self._require_admin() is None:
+            return
+        run_id = (query.get("runId") or [""])[0].strip()
+        if not run_id:
+            self._send_json(400, False, error="runId is required")
+            return
+        try:  # same lenient cursor parse as the org endpoint — a junk `after` is not a 400
+            after = max(0, int((query.get("after") or ["0"])[0]))
+        except (ValueError, TypeError):
+            after = 0
+        store = Store(self.db_path)
+        try:
+            events = store.fetch_run_events(run_id, after_id=after)
+            sessions = store.sessions_for_run(run_id)
+            flags = store.run_events_open_flags(run_id)
+            actions = store.action_counts_for_run(run_id)
+        except Exception:  # noqa: BLE001 — keep DB/schema detail server-side
+            log.error("admin run activity failed", exc_info=True)
+            self._send_json(500, False, error="internal server error")
+            return
+        finally:
+            store.close()
+        # `finished` so the console's drawer can stop polling. The in-memory active run is
+        # read unfiltered (admin plane) and matched by id; otherwise fall back to the
+        # durable session rows, exactly like the org endpoint.
+        active = (self.run_manager.status(None).get("active")
+                  if self.run_manager is not None else None)
+        is_active_run = active is not None and active.get("id") == run_id
+        has_running_session = any(
+            s.get("status") == "running" or s.get("ended_at") is None for s in sessions)
+        self._send_json(200, True, data={
+            "runId": run_id,
+            "finished": not is_active_run and not has_running_session,
+            "counters": _aggregate_run_counters(sessions, actions),
+            "events": events,
+            "flags": [{"kind": f.get("kind"), "severity": f.get("severity"),
+                       "detail": f.get("detail")} for f in flags],
+            "cursor": events[-1]["id"] if events else after,
+        })
 
     def _handle_admin_fleet(self) -> None:
         # v15 Phase 5d: gated by the REAL platform-admin plane (IP-allowlist + admin
@@ -4779,6 +5461,7 @@ class PanelHandler(SimpleHTTPRequestHandler):
             result = store.nack_job(
                 job_id=job_id, worker_id=worker_id, reason=fields["reason"],
                 poison=fields["poison"], retry_after_at=fields["retryAfterAt"],
+                leads=fields.get("leads"),
                 spend=fields.get("spend"), worker_db_id=fields.get("dbId"))
         except Exception:  # noqa: BLE001
             log.error("job nack failed", exc_info=True)
@@ -4786,9 +5469,13 @@ class PanelHandler(SimpleHTTPRequestHandler):
             return
         finally:
             store.close()
+        # `leadsSynced` is echoed so the worker can tell "stored" from "silently
+        # dropped": a bridge that predates lead-on-nack omits the key entirely, and
+        # that absence is the ONLY signal a worker has that its lead sync is inert.
         self._send_json(200, True, data={
             "recorded": result["outcome"] != "ignored",
-            "outcome": result["outcome"], "retryAfterAt": result["retryAfterAt"]})
+            "outcome": result["outcome"], "retryAfterAt": result["retryAfterAt"],
+            "leadsSynced": result.get("leadsSynced", 0)})
 
     def _handle_job_credential(self, worker_id: str, job_id: str) -> None:
         """Decrypt-on-demand credential fetch (SECURITY REVIEW CRITICAL/HIGH — closes
@@ -5211,6 +5898,9 @@ class PanelHandler(SimpleHTTPRequestHandler):
         if parsed.path == ADMIN_ORGS_PATH:
             self._handle_admin_orgs()
             return
+        if parsed.path == ADMIN_RUN_ACTIVITY_PATH:
+            self._handle_admin_run_activity(parse_qs(parsed.query))
+            return
         admin_org_route = _match_admin_org_route(parsed.path)
         if admin_org_route is not None:
             self._handle_admin_org_read(admin_org_route[0], admin_org_route[1],
@@ -5439,11 +6129,18 @@ class PanelHandler(SimpleHTTPRequestHandler):
             self._send_internal_error("state build")
 
     def _serve_run_activity(self, query: str) -> None:
-        """Live activity feed for one run: aggregated counters + the narrative event
-        stream (paged on a monotonic cursor) + open flags. Same auth gate as /api/run
-        (run_campaigns). Ownership is proven in-memory by RunManager.status(org_id)
-        when available, and durably by the org-stamped DB rows otherwise (so the feed
-        survives a server restart). A foreign/unknown run is a 404 — never disclosed."""
+        """Live PROGRESS for one run, org-facing: aggregated counters, the redaction-safe
+        scalars folded out of the narrative events, `finished`, the fleet job and the open
+        health flags. Same auth gate as /api/run (run_campaigns). Ownership is proven
+        in-memory by RunManager.status(org_id) when available, and durably by the
+        org-stamped DB rows otherwise (so the feed survives a server restart). A
+        foreign/unknown run is a 404 — never disclosed.
+
+        v27: the narrative events themselves DO NOT leave this method. `events` stays in
+        the payload (always empty) so the panel's poll contract and its `after`/cursor
+        plumbing are unchanged, with `eventsRedacted` telling it why; the full feed lives
+        behind the superadmin gate at ADMIN_RUN_ACTIVITY_PATH. The open `flags` stay:
+        they drive the "fix your agent" UX and are a state, not a log."""
         user = self._current_user()
         if user is None:
             self._send_json(401, False, error="authentication required")
@@ -5479,10 +6176,24 @@ class PanelHandler(SimpleHTTPRequestHandler):
                 # unregistered (org_id NULL on its rows), so don't double-filter or the
                 # feed would read empty. Otherwise rely on org-stamped rows to gate.
                 scope = None if owned_by_manager else org_id
-                events = store.fetch_run_events(run_id, after_id=after, org_id=scope)
+                # v27: read from the START of the run, not from `after`. The events are
+                # never returned — they are folded into scalars — and every one of those
+                # aggregates is a property of the whole run, so paging them would make
+                # the numbers a function of poll timing.
+                events = store.fetch_run_events(
+                    run_id, after_id=0, org_id=scope,
+                    limit=RUN_ACTIVITY_AGGREGATE_EVENTS)
                 sessions = store.sessions_for_run(run_id, org_id=scope)
                 flags = store.run_events_open_flags(run_id, org_id=scope)
                 actions = store.action_counts_for_run(run_id, org_id=scope)
+                # The authoritative lead count once the run's rows exist (an in-process
+                # run writes them live; a fleet run only at ack). Computed before the
+                # ownership gate below purely to share this one connection — it is
+                # discarded, never emitted, when that gate 404s.
+                try:
+                    lead_rows = len(store.matches_for_run(run_id))
+                except Exception:  # noqa: BLE001 — the event estimate still stands
+                    lead_rows = 0
                 # FIX 2: fold the DB-derived fleet job into the SAME connection (one
                 # open per poll, not two). Best-effort — a read hiccup just leaves
                 # fleetJob None and never fails the feed.
@@ -5519,6 +6230,7 @@ class PanelHandler(SimpleHTTPRequestHandler):
         # panel can keep polling a silent-but-alive worker run, and resolve `finished`
         # so the poller never stalls on a dead job nor cuts off before counters land.
         fleet_job = None
+        target_leads: Optional[int] = None
         if job is not None:
             fleet_job = {
                 "jobId": job["id"],
@@ -5535,15 +6247,54 @@ class PanelHandler(SimpleHTTPRequestHandler):
                 "maxAttempts": job.get("maxAttempts"),
             }
             finished = _fleet_run_finished(fleet_job, sessions, finished)
+            # The plan-clamped target this run was dispatched with, so the panel can show
+            # "7 of 10 leads" instead of a bare count. Only a fleet job carries it durably;
+            # an in-process run's target reaches the panel in the POST /api/run response.
+            spec_target = (job.get("spec") or {}).get("target_leads")
+            if isinstance(spec_target, (int, float)) and spec_target > 0:
+                target_leads = int(spec_target)
+        counters = _aggregate_run_counters(sessions, actions)
+        progress = _aggregate_run_progress(
+            events, counters=counters, lead_rows=lead_rows, finished=finished,
+            failed=bool(fleet_job and fleet_job["status"] in ("failed", "interrupted")))
+        # Reconcile the session counters with the event-derived numbers rather than
+        # shipping both: the aggregate is a max() over the same quantities, so it is
+        # never smaller, and a payload that carried "0 reels scanned" next to
+        # "searching · 40 scanned" would just make the panel pick a side.
+        counters = {**counters, "reelsSeen": progress["itemsScanned"],
+                    "relevancePasses": progress["relevantFound"],
+                    "matches": progress["leadsFound"]}
         data = {
             "runId": run_id,
             "finished": finished,
             "fleetJob": fleet_job,
-            "counters": _aggregate_run_counters(sessions, actions),
-            "events": events,
+            "counters": counters,
+            # v27: CONSTRUCTED scalars, never an event row with keys deleted — that
+            # inverts the failure mode, and the next detail key an engine invents would
+            # ship straight to the customer. No message, no detail, no session/campaign id.
+            "phase": progress["phase"],
+            "leadsFound": progress["leadsFound"],
+            # E.5: what the run DISCOVERED and what actually REACHED the account, plus
+            # the word that reconciles them. They converge on a healthy run; a
+            # dead-lettered one never acks, so its leads are stranded on the worker and
+            # `leadsDelivered` stays 0 while `leadsFound` keeps the estimate. Rendering
+            # either number alone beside this run's (correctly banked) spend would be a
+            # lie in one direction or the other.
+            "leadsDelivered": progress["leadsDelivered"],
+            "delivery": progress["delivery"],
+            "itemsScanned": progress["itemsScanned"],
+            "relevantFound": progress["relevantFound"],
+            "lastEventAt": progress["lastEventAt"],
+            "targetLeads": target_leads,
+            # Always empty for an org caller — the key (and the cursor with it) stays so
+            # the panel's poll contract is unchanged. The real feed is superadmin-only.
+            "events": [],
+            "eventsRedacted": True,
             "flags": [{"kind": f.get("kind"), "severity": f.get("severity"),
                        "detail": f.get("detail")} for f in flags],
-            "cursor": events[-1]["id"] if events else after,
+            # Never advances: there is nothing to page. Kept so a client that echoes it
+            # back keeps working, and so `after` stays a no-op rather than a 400.
+            "cursor": after,
         }
         self._send_json(200, True, data=data)
 

@@ -18,6 +18,7 @@ from typing import Any, Optional
 
 from . import billing, rbac
 from .core.config import SUPPORTED_PLATFORMS, Campaign, Soul, parse_extract_fields
+from .core.matching import redact_extracted, redact_identity
 from .core.store import WIN_STATUS, Store
 
 # Soft warning threshold for the usage meter: at/above this fraction of the lead
@@ -35,6 +36,72 @@ PERIOD_DAYS = {"today": 1, "week": 7, "month": 30}
 SPARK_DAYS = {"today": 14, "week": 14, "month": 30}
 CPL_BARS = 8          # bars in the dashboard CPL history tile
 REPORT_DAYS = 14      # x-axis length for the report line/area charts
+
+# v27 redaction: the dashboard live ticker shows a lead's INTENT line, not the
+# commenter. A ticker row is a single glance-width line, so the cut happens here
+# rather than in the client — one server-side place decides how much of any
+# org-facing lead string travels, and the client can't widen it.
+TICKER_INTENT_CHARS = 80
+
+# ---- E.5/E.7: the two lead numbers, and the one word that reconciles them ----
+#
+# `leadsFound` is the deduped `run_events` estimate — what a run actually DISCOVERED.
+# `leadsDelivered` is the org's real `matches` rows — what actually REACHED the account.
+# On a healthy run they converge, because the rows land in the ack body.
+#
+# A dead-lettered run never acks. Leads travel ONLY in the ack body, so its harvest
+# stays in the worker's local sqlite and the cloud's row count is 0 forever, while the
+# estimate is the only record the customer will ever have of that run. Spend has the
+# OPPOSITE asymmetry — the nack body ships it (`sidecar._nack` → `_attach_spend`), so
+# the money is banked and the accounting is correct. That is how a card ends up reading
+# "$4.10 spent, 0 leads" with nothing on it to explain the pairing.
+#
+# Either number alone is a lie: `leadsFound` implies leads the customer can open, and
+# `leadsDelivered` denies work that really happened. So both travel, plus this word, and
+# every surface that puts spend next to leads renders it.
+DELIVERY_DELIVERED = "delivered"
+DELIVERY_PENDING = "pending"           # still in flight — the gap is only ack lag
+DELIVERY_NOT_DELIVERED = "not_delivered"
+
+
+def delivery_state(leads_found: Any, leads_delivered: Any, *,
+                   finished: bool) -> dict[str, Any]:
+    """The lead pair plus its reconciliation word, for ONE run or ONE campaign.
+
+    `finished` is what makes the gap mean anything: mid-flight EVERY fleet-routed run
+    reads found > delivered because the rows only land at ack, so an unfinished gap is
+    `pending`, not a fault. Only a finished run whose gap never closed is
+    `not_delivered` — and the spend beside it, which WAS banked, is spend on an
+    incomplete run and must be labelled that way rather than hidden or zeroed.
+
+    The discriminator is `leadsFound > leadsDelivered` and nothing else. In particular
+    it is NOT a dash in CPL: cost-per-lead is guarded on `won`
+    (`WIN_STATUS = {interested, closed}`), so it reads `—` on every untriaged campaign,
+    healthy or not. And no CPL is ever synthesised from `leadsFound` — a cost per lead
+    the customer cannot open is a fiction.
+
+    Pure and total: never raises, never goes negative, never renders the two numbers
+    inconsistently (the estimate can only under-count, so it is floored at the rows).
+    """
+    try:
+        found = max(0, int(leads_found or 0))
+    except (TypeError, ValueError):
+        found = 0
+    try:
+        delivered = max(0, int(leads_delivered or 0))
+    except (TypeError, ValueError):
+        delivered = 0
+    # The event estimate under-counts by design (one person, two qualifying comments on
+    # one post, dedupes to one) and the rows are authoritative once they exist, so the
+    # pair is monotonic in the only direction that can be true.
+    found = max(found, delivered)
+    if found <= delivered:
+        state = DELIVERY_DELIVERED
+    elif finished:
+        state = DELIVERY_NOT_DELIVERED
+    else:
+        state = DELIVERY_PENDING
+    return {"leadsFound": found, "leadsDelivered": delivered, "delivery": state}
 
 
 def _dt(ts: Optional[float]) -> Optional[datetime]:
@@ -174,7 +241,46 @@ def lead_uid(campaign_id: str, platform: str, comment_id: str) -> str:
                     for part in (campaign_id, platform, comment_id))
 
 
-def _build_matches(store: Store, cid: str) -> list[dict[str, Any]]:
+def _ticker_intent(intent: str) -> str:
+    """One lead's intent line cut down to a ticker row: whitespace collapsed, then
+    a word-boundary cut with an ellipsis so the tile never ends mid-word. `""`
+    stays `""` — the client renders its neutral "intent not captured" placeholder,
+    never a bare ellipsis and never a fallback to any identifier."""
+    s = " ".join((intent or "").split())
+    if len(s) <= TICKER_INTENT_CHARS:
+        return s
+    head = s[:TICKER_INTENT_CHARS].rsplit(" ", 1)[0] or s[:TICKER_INTENT_CHARS]
+    return head + "…"
+
+
+def _build_matches(store: Store, cid: str, *,
+                   include_identity: bool = False) -> list[dict[str, Any]]:
+    """Panel lead records for one campaign, newest-first.
+
+    v27 redaction: the ORG-facing record carries NO `username` and NO comment
+    `text`. A customer sees `intent` — the one-line summary of what the person
+    wants, derived at capture time by `core.matching.derive_intent` — plus the
+    classifier's reason, the grounded `extracted` fields, and the workflow state.
+    The raw identity stays in `matches` and is served ONLY through the superadmin
+    plane, which opts in with `include_identity=True`. So does `reelId`: a POINTER
+    to the identity is the identity. The post it names is public and carries both
+    the handle and the comment, so an org-facing `reelId` let anyone with devtools
+    reconstruct the whole list without touching /api/lead/reveal — an audited
+    disclosure with an unaudited side door is just an unaudited disclosure.
+
+    The flag defaults to DENY on purpose: a future org-facing caller that forgets
+    it leaks nothing, whereas a default-allow with an opt-out leaks on every
+    caller someone forgets to update.
+
+    Dropping the two KEYS is not the same as redacting the two VALUES, and the
+    difference is the whole finding behind `matching.redact_identity`: `reason`
+    and `extracted` are model-authored, no prompt has ever constrained them, and
+    a perfectly ordinary classifier reason quotes the comment and names the
+    handle. So an org-facing row has its prose scrubbed against the handle and
+    the comment the row itself carries — the boundary is the one place both
+    strings are known for certain. `include_identity=True` skips the scrub
+    entirely: the superadmin plane exists to see exactly this.
+    """
     out = []
     # Batch-fetch the per-lead audit log + notes once (avoids an N+1 across leads).
     hist_map = store.status_history_by_lead(cid)
@@ -188,19 +294,34 @@ def _build_matches(store: Store, cid: str) -> list[dict[str, Any]]:
         history = hist_map.get((platform, m["comment_id"]), [])
         notes = notes_map.get((platform, m["comment_id"]), [])
         last = history[-1] if history else None
-        out.append({
+        extracted = m["extracted"] if isinstance(m["extracted"], dict) else {}
+        intent = m.get("intent") or ""
+        reason = m["reason"] or ""
+        if not include_identity:
+            # The scrub runs on the way OUT, not at capture time, so it also
+            # covers rows written before v27 and rows synced back by a worker
+            # older than this build — neither of which can be re-derived.
+            handle, comment = m.get("username"), m.get("text")
+            intent = redact_identity(intent, username=handle, comment_text=comment)
+            reason = redact_identity(reason, username=handle, comment_text=comment)
+            extracted = redact_extracted(extracted, username=handle,
+                                         comment_text=comment)
+        row = {
             # Unique per (campaign, platform, comment) — never a bare comment_id.
             "id": lead_uid(m["campaign_id"], platform, m["comment_id"]),
             "commentId": m["comment_id"],
             "campaignId": m["campaign_id"],
             "platform": platform,
             "sessionId": m.get("session_id"),
-            "username": m["username"],
             "lang": m["lang"],
-            "text": m["text"],
+            # The ONLY lead prose an org sees (v27). `""` when nothing could be
+            # derived honestly — a pre-v27 row captured before redaction existed,
+            # or `derive_intent`'s documented last resort — and the panel shows a
+            # neutral placeholder for it. Never guessed from the raw comment.
+            "intent": intent,
             "score": round(m["score"] or 0.0, 2),
-            "reason": m["reason"] or "",
-            "extracted": m["extracted"] if isinstance(m["extracted"], dict) else {},
+            "reason": reason,
+            "extracted": extracted,
             "status": m["status"],
             "escalated": escalated,
             "escalationCost": 0,
@@ -209,7 +330,7 @@ def _build_matches(store: Store, cid: str) -> list[dict[str, Any]]:
                            # Raw epoch so the panel can sort by capture time;
                            # the labels above are display-only and not sortable.
                            "ts": float(ts) if ts else 0.0},
-            "reelId": m["reel_id"],
+            # NOTE: `reelId` is NOT here — see the `include_identity` block below.
             # Real last-changer from the audit log (None for never-changed leads).
             "statusBy": last["by"] if last else None,
             "statusAt": _date_label(last["at"]) if last else None,
@@ -221,29 +342,82 @@ def _build_matches(store: Store, cid: str) -> list[dict[str, Any]]:
                 {"id": str(n["id"]), "body": n["body"], "authorEmail": n["authorEmail"],
                  "authorId": n["authorId"], "createdAt": _date_label(n["createdAt"]),
                  "createdAtTs": float(n["createdAt"])} for n in notes],
-        })
+        }
+        if include_identity:
+            # Superadmin plane only (see the docstring). Added AFTER the shared
+            # shape so the org-facing keys are literally the same dict either way
+            # — the two payloads can't drift apart into two record shapes.
+            row["username"] = m["username"]
+            row["text"] = m["text"]
+            # `reelId` rides WITH the identity, not with the product fields, and
+            # that is the whole point of moving it here: the post it names is
+            # public, and the lead's comment — handle and words — is plainly
+            # readable on it. Shipping it org-facing meant any operator with
+            # devtools could walk the anonymized list straight to every identity
+            # without ever calling /api/lead/reveal, i.e. the reveal endpoint's
+            # audit trail was optional. The reveal response returns `reelId`
+            # itself, so the post is still one click away — one AUDITED click.
+            row["reelId"] = m["reel_id"]
+        out.append(row)
     return out
 
 
-def _build_reels(store: Store, cid: str, ttl_days: float) -> list[dict[str, Any]]:
+def _build_reels(store: Store, cid: str, ttl_days: float, *,
+                 include_identity: bool = False) -> list[dict[str, Any]]:
+    """The posts this campaign scanned — what was looked at, not who answered.
+
+    The post ITSELF is the product here (A7): its id, author and caption are how
+    an operator sees what the agent read, and a post's author is the content
+    creator, not the lead. Those stay for every caller.
+
+    What does NOT stay is the WATCHLIST join. `Store.add_to_watchlist` is called
+    from exactly one place — after a comment batch, `if found` — so a watchlist
+    row exists if and ONLY if that post produced at least one lead. Every field
+    derived from that join is therefore a mark on the lead-bearing posts:
+
+      * `newSinceLastPoll` (`w.match_count`) — 1 on the post that produced the
+        lead, 0 on the ones that did not. On a campaign whose leads came from one
+        post it is not an aggregate at all, it is a pointer.
+      * `expiresInDays` (`w.expires_at`) — the TTL is only ever stamped by
+        `add_to_watchlist`, so `10` vs `0` says the same thing just as exactly.
+        Fixing only the count and leaving this would have moved the leak, not
+        closed it.
+      * `addedAt` — `w.added_at` when watchlisted, else `first_seen`. Weaker (the
+        two coincide on a post scored the day it was first seen) but it is the
+        same join, so it falls back to `first_seen` for an org caller rather than
+        leaking a third time.
+
+    That mark is the re-join the audited reveal exists to prevent: filter for the
+    marked post, open its public URL, and read the handle and the comment for
+    every lead the campaign found — no `/api/lead/reveal` call, no audit row, and
+    it works for a `viewer`, the one role RBAC refuses `reveal_lead` outright.
+
+    So the watchlist fields ship only under `include_identity=True`, next to the
+    identity they point at. Keys are OMITTED rather than zeroed: a fake `0` is a
+    claim about the data, and `_build_matches` sets the precedent — dropping the
+    KEY is what makes a forgetful future caller leak nothing.
+    """
     out = []
     now = datetime.now(TASHKENT).timestamp()
     for r in store.reels(cid, only_relevant=True):
-        expires = r.get("expires_at")
-        exp_days = round((expires - now) / 86400) if expires else 0
-        out.append({
+        row = {
             "id": r["reel_id"],
             "author": r.get("author") or r["reel_id"],
             "authorFull": r.get("author") or r["reel_id"],
             "caption": r.get("caption") or "",
             "ocrText": r.get("ocr_text") or "",
             "thumbSeed": r["reel_id"],
-            "addedAt": _date_label(r.get("added_at") or r.get("first_seen")),
+            "addedAt": _date_label((r.get("added_at") if include_identity else None)
+                                   or r.get("first_seen")),
             "lastPoll": _date_label(r.get("last_seen")),
-            "expiresInDays": max(0, exp_days),
-            "newSinceLastPoll": r.get("match_count") or 0,
             "pollHistory": [],
-        })
+        }
+        if include_identity:
+            expires = r.get("expires_at")
+            exp_days = round((expires - now) / 86400) if expires else 0
+            row["expiresInDays"] = max(0, exp_days)
+            row["newSinceLastPoll"] = r.get("match_count") or 0
+        out.append(row)
     return out
 
 
@@ -335,10 +509,19 @@ def _build_dashboard(store: Store, cid: str, today: datetime, *,
     heat = [heat_map.get(h, 0) for h in range(24)]
     active = sum(1 for c in campaigns if c["status"] == "live")
     top = sorted(campaigns, key=lambda c: c["leads"], reverse=True)[:5]
+    # E.7: this row puts `leads` next to `cpl` — a spend-derived number — so it carries
+    # the delivery pair straight off the card it mirrors rather than recomputing it.
+    # Note the period tiles above/below deliberately do NOT: those are windowed, the
+    # found estimate is lifetime, and mixing them would invent a ratio true of neither.
     top_mini = [{"id": c["id"], "name": c["name"], "platform": c.get("platform", "instagram"),
-                 "status": c["status"], "leads": c["leads"], "cpl": c["cpl"]} for c in top]
-    ticker = [{"id": m["id"], "username": m["username"], "platform": m["platform"],
-               "score": m["score"], "capturedAt": m["capturedAt"]} for m in matches[:10]]
+                 "status": c["status"], "leads": c["leads"], "cpl": c["cpl"],
+                 "leadsFound": c.get("leadsFound", c["leads"]),
+                 "leadsDelivered": c.get("leadsDelivered", c["leads"]),
+                 "delivery": c.get("delivery", DELIVERY_DELIVERED)} for c in top]
+    # v27: the ticker names what the lead WANTS, not who they are.
+    ticker = [{"id": m["id"], "intent": _ticker_intent(m["intent"]),
+               "platform": m["platform"], "score": m["score"],
+               "capturedAt": m["capturedAt"]} for m in matches[:10]]
     # Needs-attention is current-state (not windowed) — compute once and reuse.
     attention = store.needs_attention(cid, now=today.timestamp())
 
@@ -434,8 +617,13 @@ def _build_reports(store: Store, cid: str, today: datetime, *,
         spend_by_stage = [{"name": k, "value": round(v, 4)} for k, v in sorted(stage.items())]
         ranking = [{"platform": p, "leads": n}
                    for p, n in sorted(plat_totals.items(), key=lambda kv: kv[1], reverse=True)]
+        # E.7: leads and spend on the SAME row — the report must not read "$X spent,
+        # 0 leads" for a dead-lettered run with no way to tell that from a barren one.
         per_campaign = [{"id": c["id"], "name": c["name"], "status": c["status"],
-                         "leads": c["leads"], "cpl": c["cpl"], "spend": c["spent"]}
+                         "leads": c["leads"], "cpl": c["cpl"], "spend": c["spent"],
+                         "leadsFound": c.get("leadsFound", c["leads"]),
+                         "leadsDelivered": c.get("leadsDelivered", c["leads"]),
+                         "delivery": c.get("delivery", DELIVERY_DELIVERED)}
                         for c in campaigns]
 
         out[period] = {
@@ -505,25 +693,47 @@ def _build_integrations(store: Store, campaign: Campaign, sessions: list[dict[st
     return out
 
 
+def org_campaign_count(store: Store, org_id: Optional[int]) -> int:
+    """Non-archived campaigns the org currently holds — the number the plan's
+    campaign cap (`billing.tier_campaign_cap`) is enforced against.
+
+    Counts `campaign_meta` rows, which is every campaign the panel can create.
+    Archived rows are excluded because the cap bounds the WORKING set: an org
+    sitting at its cap can archive its way forward instead of being wedged.
+    Single producer on purpose — the settings meter and the create gate in
+    `server.py` must never disagree about what "used" means, the same way both
+    read `store.get_subscription` for the lead cap."""
+    if org_id is None:
+        return 0
+    return sum(1 for m in store.list_campaign_meta(org_id)
+               if m.get("archived_at") is None)
+
+
 def _build_billing(store: Store, org_id: Optional[int]) -> dict[str, Any]:
     """Org billing summary for `/api/settings` (mirrors `_build_integrations`).
 
     Reads the single choke point `store.get_subscription` and the SAME period
     anchor (`period_since`) the run gate uses, so the UI meter can never disagree
     with enforcement. `tiers` carries the full comparison grid (prices per
-    interval) for the upgrade UI."""
+    interval, lead + campaign allowance) for the upgrade UI."""
     if org_id is None:
         sub = {"tier": "free", "interval": None, "status": "active",
                "lead_cap": billing.tier_lead_cap("free"), "current_period_end": None,
                "cancel_at_period_end": False}
         used = 0
+        reveals_used = 0
     else:
         sub = store.get_subscription(org_id)
-        used = store.count_leads_this_period(org_id, store.period_since(org_id))
+        since = store.period_since(org_id)
+        used = store.count_leads_this_period(org_id, since)
+        reveals_used = store.count_reveals_this_period(org_id, since)
     cap = sub["lead_cap"]
     usage_ratio = (used / cap) if cap else 0.0
     tiers = [
         {"tier": t, "displayName": meta["display_name"], "leadCap": meta["lead_cap"],
+         # null = unlimited, NOT "unset" — the comparison grid must print
+         # "Unlimited campaigns", never "0 campaigns".
+         "campaignCap": meta["campaign_cap"],
          "selfServe": meta["self_serve"], "prices": meta["prices"]}
         for t, meta in billing.TIERS.items()
     ]
@@ -535,6 +745,30 @@ def _build_billing(store: Store, org_id: Optional[int]) -> dict[str, Any]:
         "cancelAtPeriodEnd": bool(sub["cancel_at_period_end"]),
         "leadCap": cap,
         "leadsUsed": used,
+        # Reveal allowance (v27). Leads are anonymized by default and un-anonymized
+        # one at a time through the audited `POST /api/lead/reveal`, which is capped
+        # by the SAME period allowance — otherwise a script walking the list turns a
+        # per-lead endpoint back into the bulk export the redaction exists to stop.
+        # `revealsUsed` counts DISTINCT leads revealed this period, never calls: the
+        # drawer never caches a revealed lead, so it re-reveals on every open and a
+        # call-counting meter would spend a Free org's ten on one lead opened ten
+        # times. Same number as `leadCap` by construction — surfaced separately so
+        # the UI can show the two meters filling independently, which they do.
+        "revealCap": cap,
+        "revealsUsed": reveals_used,
+        # Campaign allowance (v27 plan limits). `campaignCap` is null on the
+        # unlimited tiers, so the client gates on `!== null` — a falsy check would
+        # read unlimited as zero and disable New Campaign for a paying org.
+        "campaignCap": billing.tier_campaign_cap(sub["tier"]),
+        "campaignsUsed": org_campaign_count(store, org_id),
+        # Largest lead target ONE run may request. There is no separate per-run
+        # allowance, so it is the period cap — read RESOLVED (`sub["lead_cap"]`,
+        # which `get_subscription` has already overlaid with any per-org
+        # `lead_cap_override`) rather than off the catalogue, because Scale's
+        # catalogue cap is a deliberate fail-closed 0 and a provisioned Scale org
+        # must not be offered a run target of zero. Identical to
+        # `billing.tier_max_run_leads(tier)` for every un-overridden tier.
+        "maxRunLeads": int(cap or 0),
         "usageRatio": round(usage_ratio, 4),
         "nearLimit": usage_ratio >= BILLING_NEAR_LIMIT_RATIO,
         "tiers": tiers,
@@ -626,25 +860,43 @@ def _brief_form_from_stored(brief: dict[str, Any]) -> dict[str, Any]:
 def _build_campaigns(store: Store, campaign: Campaign, sessions: list[dict[str, Any]],
                      matches: list[dict[str, Any]], today: datetime,
                      spend_cap_usd: float, org_id: Optional[int],
-                     include_primary: bool = True) -> tuple[list[dict[str, Any]], Optional[int]]:
+                     include_primary: bool = True,
+                     leads_found: Optional[dict[str, int]] = None,
+                     ) -> tuple[list[dict[str, Any]], Optional[int]]:
     """Markdown brief overlaid with editable campaign_meta, plus any UI-created drafts.
 
     Returns (campaigns, goal_target) — goal_target threads into the dashboard gauge.
     `include_primary=False` (empty-org state) omits the scoped/primary campaign and
     returns only the org's registered campaigns (here, none).
+
+    E.7: `leads_found` maps campaign_id -> the deduped `run_events` estimate summed over
+    that campaign's FINISHED runs — what those runs discovered, as opposed to the
+    `matches` rows they delivered. Only a dead-lettered run can make the two differ (its
+    leads never leave the worker), and the card puts the difference next to the spend it
+    really incurred instead of rendering "$X spent, 0 leads" unexplained. Omitted/absent
+    means "no evidence of an undelivered run", which is the healthy shape — the estimate
+    can only ever be floored at the delivered rows, so a missing entry degrades to
+    `delivery: "delivered"` rather than to a fabricated gap.
     """
+    found = leads_found or {}
     cid = campaign.campaign_id
     if not include_primary:
         campaigns = []
         goal_target = None
         rollup = {r["campaignId"]: r for r in store.per_campaign_rollup(org_id)}
         for m in store.list_campaign_meta(org_id):
-            campaigns.append(_draft_campaign(store, m, rollup, today, spend_cap_usd))
+            campaigns.append(_draft_campaign(store, m, rollup, today, spend_cap_usd,
+                                             leads_found=found))
         return campaigns, goal_target
     meta = store.get_campaign_meta(cid)
     spent = round(store.total_spend(cid), 4)
     leads = sum(1 for m in matches)
     won = sum(1 for m in matches if m["status"] in WIN_STATUS)
+    # CPL stays guarded on `won`, NOT on delivered leads: a freshly harvested lead is
+    # "new", so this reads `—` on every untriaged campaign, healthy or not. That is
+    # exactly why a dash here is not the not-delivered signal — `delivery` below is.
+    # It is also never synthesised from the found estimate: a cost per lead the customer
+    # cannot open is a fiction.
     cpl = round(spent / won, 2) if won else None
     spark = _fill_values(
         {r["day"]: r["n"] for r in store.matches_by_day(
@@ -671,6 +923,11 @@ def _build_campaigns(store: Store, campaign: Campaign, sessions: list[dict[str, 
         "goalTarget": goal_target,
         "briefForm": _brief_form_from_campaign(campaign),
         "spent": spent, "leads": leads, "cpl": cpl, "spark": spark,
+        # E.7: `spent` and `leads` sit side by side on this card, and they have OPPOSITE
+        # failure asymmetries — a nack banks the spend, an unacked run strands the leads.
+        # `delivery` is what keeps the pair honest; the spend is never hidden or zeroed,
+        # it is labelled as spend on an incomplete run.
+        **delivery_state(found.get(cid, leads), leads, finished=True),
         "warmth": _warmth_payload(store, cid, campaign.platform, today),
         **_lifecycle_fields(meta),
     }
@@ -680,7 +937,8 @@ def _build_campaigns(store: Store, campaign: Campaign, sessions: list[dict[str, 
     for m in store.list_campaign_meta(org_id):
         if m["campaign_id"] == cid:
             continue
-        campaigns.append(_draft_campaign(store, m, rollup, today, spend_cap_usd))
+        campaigns.append(_draft_campaign(store, m, rollup, today, spend_cap_usd,
+                                         leads_found=found))
     return campaigns, goal_target
 
 
@@ -696,8 +954,12 @@ def _warmth_payload(store: Store, campaign_id: str, platform: str,
 
 
 def _draft_campaign(store: Store, m: dict[str, Any], rollup: dict[str, Any],
-                    today: datetime, spend_cap_usd: float) -> dict[str, Any]:
-    """A campaign card for a campaign_meta row (UI-created / non-primary)."""
+                    today: datetime, spend_cap_usd: float, *,
+                    leads_found: Optional[dict[str, int]] = None) -> dict[str, Any]:
+    """A campaign card for a campaign_meta row (UI-created / non-primary).
+
+    `leads_found` is the same campaign_id -> discovered-estimate map `_build_campaigns`
+    documents; absent means "no undelivered run on record" (see E.7 there)."""
     mcid = m["campaign_id"]
     r = rollup.get(mcid, {})
     m_leads = int(r.get("leads", 0))
@@ -724,7 +986,11 @@ def _draft_campaign(store: Store, m: dict[str, Any], rollup: dict[str, Any],
         "goalTarget": m.get("goal_target"),
         "briefForm": brief_form,
         "spent": m_spent, "leads": m_leads,
+        # Guarded on `won`, like every other CPL here — never on delivered leads, and
+        # never synthesised from the found estimate (E.7).
         "cpl": round(m_spent / m_won, 2) if m_won else None,
+        # E.7: the same spend/leads pairing the primary card carries.
+        **delivery_state((leads_found or {}).get(mcid, m_leads), m_leads, finished=True),
         "spark": _fill_values(
             {r2["day"]: r2["n"] for r2 in store.matches_by_day(
                 mcid, since_ts=(today - timedelta(days=14)).timestamp())}, today, 14),
@@ -795,10 +1061,17 @@ def build_raw(store: Store, soul: Soul, campaign: Campaign, *,
               include_primary: bool = True,
               spend_cap_usd: float = 20.0, skip_threshold: float = 0.6,
               watchlist_ttl_days: float = 10.0, canary_limit: int = 5,
-              today: Optional[datetime] = None) -> dict[str, Any]:
+              today: Optional[datetime] = None,
+              leads_found: Optional[dict[str, int]] = None) -> dict[str, Any]:
     """Build the panel state for ONE campaign, scoped to `org_id` and PRUNED to what
     `role` may see (the server is the real gate; this is server-side enforcement, not
-    just UI). `org_id=None` (CLI/tests) is the unscoped full-owner view."""
+    just UI). `org_id=None` (CLI/tests) is the unscoped full-owner view.
+
+    `leads_found` (E.7) maps campaign_id -> the deduped `run_events` estimate over that
+    campaign's FINISHED runs, so every card/report row that shows spend beside leads can
+    say whether those leads were actually delivered. It is supplied by the caller rather
+    than read here because the evidence lives in `run_events`, which this module has no
+    reason to know about; omitted, every card renders the healthy `delivered` shape."""
     cid = campaign.campaign_id
     today = today or datetime.now(TASHKENT)
     sessions = _build_sessions(store, cid)
@@ -810,7 +1083,7 @@ def build_raw(store: Store, soul: Soul, campaign: Campaign, *,
     matches = _build_matches(store, cid)
     campaigns, goal_target = _build_campaigns(
         store, campaign, sessions, matches, today, spend_cap_usd, org_id,
-        include_primary=include_primary)
+        include_primary=include_primary, leads_found=leads_found)
 
     # A member is strictly leads-only: return just config + lead context (the campaign
     # stubs feed the leads switcher). No dashboard/reports/team/integrations.
@@ -858,10 +1131,11 @@ def _empty_campaign(org_id: Optional[int]) -> Campaign:
 def build_empty_raw(store: Store, soul: Soul, *, org_id: Optional[int], role: str,
                     spend_cap_usd: float = 20.0, skip_threshold: float = 0.6,
                     watchlist_ttl_days: float = 10.0, canary_limit: int = 5,
-                    today: Optional[datetime] = None) -> dict[str, Any]:
+                    today: Optional[datetime] = None,
+                    leads_found: Optional[dict[str, int]] = None) -> dict[str, Any]:
     """The panel state for an org with no campaigns yet — full key shape, all empty,
     plus the org's real team/invites. Reuses build_raw so the contract can't drift."""
     return build_raw(store, soul, _empty_campaign(org_id), org_id=org_id, role=role,
                      include_primary=False, spend_cap_usd=spend_cap_usd,
                      skip_threshold=skip_threshold, watchlist_ttl_days=watchlist_ttl_days,
-                     canary_limit=canary_limit, today=today)
+                     canary_limit=canary_limit, today=today, leads_found=leads_found)

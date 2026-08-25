@@ -65,6 +65,17 @@ export function CheckoutSuccessModal({
             <Check className="size-4 shrink-0 text-success" aria-hidden />
             You’ve used {formatNumber(billing.leadsUsed)} of {formatNumber(billing.leadCap)} this period
           </li>
+          {/* The second period allowance (v27 Section F). Omitted when the cap is null —
+              unlimited, and also what a bridge predating the reveal cap sends, neither of
+              which is worth a line that would read "up to 0". */}
+          {billing.revealCap !== null ? (
+            <li className="flex items-center gap-2 text-text">
+              <Check className="size-4 shrink-0 text-success" aria-hidden />
+              Reveal who’s behind up to{' '}
+              <span className="font-bold">{formatNumber(billing.revealCap)}</span> of them —
+              you’ve revealed {formatNumber(billing.revealsUsed)} this period
+            </li>
+          ) : null}
           <li className="flex items-center gap-2 text-text-muted">
             <Check className="size-4 shrink-0 text-success" aria-hidden />
             Manage or change your plan anytime from Billing

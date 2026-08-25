@@ -6,6 +6,13 @@ import {
 } from '@/shared/selectors/leads';
 import type { Match } from '@/shared/types/domain';
 
+/**
+ * Every exporter here builds its rows from `LEAD_EXPORT_COLUMNS` over the plain,
+ * anonymized `Match` list the page already holds. There is deliberately no path from
+ * this module to the audited per-lead reveal (Section F): revealed identity is
+ * session-local drawer state, and an export is a file that outlives the session.
+ */
+
 const REVOKE_DELAY_MS = 500;
 
 /** The export formats offered on the Leads page. */
@@ -114,7 +121,9 @@ export async function downloadLeadsPdf(
     startY: 20,
     styles: { fontSize: 8, cellPadding: 2, overflow: 'linebreak' },
     headStyles: { fillColor: PDF_HEAD_FILL, textColor: PDF_HEAD_TEXT, fontStyle: 'bold' },
-    columnStyles: { 6: { cellWidth: 90 } },
+    // Column 1 is `intent` — the only prose column now that username/text are gone
+    // (v27), so it takes the width the comment column used to.
+    columnStyles: { 1: { cellWidth: 90 } },
   });
 
   doc.save(filename);

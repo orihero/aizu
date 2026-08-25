@@ -1,8 +1,8 @@
 import { useDraggable } from '@dnd-kit/core';
 import { Maximize2 } from 'lucide-react';
-import { Avatar } from '@/shared/ui/Avatar';
 import { ScorePill } from '@/shared/ui/ScorePill';
 import { cn } from '@/shared/lib/cn';
+import { LEAD_INTENT_PLACEHOLDER, leadIntentLabel } from '@/shared/selectors/leads';
 import type { Match } from '@/shared/types/domain';
 import { PlatformChip } from '../PlatformChip';
 
@@ -30,6 +30,9 @@ export function LeadCard({ lead, threshold, onOpen, draggable }: LeadCardProps) 
   });
   const activity = lastActivity(lead);
   const noteCount = lead.notes.length;
+  // v27: the card is intent-only — no handle, no avatar, no comment, no reveal
+  // control. The reveal lives in the drawer, one lead at a time.
+  const intent = leadIntentLabel(lead);
 
   return (
     <div
@@ -43,14 +46,18 @@ export function LeadCard({ lead, threshold, onOpen, draggable }: LeadCardProps) 
       )}
     >
       <div className="flex items-start justify-between gap-2">
-        <div className="flex min-w-0 items-center gap-2">
-          <Avatar username={lead.username} />
-          <span className="min-w-0 truncate text-xs font-semibold text-text">{lead.username}</span>
-        </div>
+        <p
+          className={cn(
+            'min-w-0 line-clamp-3 text-xs font-semibold text-text',
+            intent === LEAD_INTENT_PLACEHOLDER && 'font-normal italic text-text-faint',
+          )}
+        >
+          {intent}
+        </p>
         <button
           type="button"
           // Distinct accessible name so it never collides with the draggable card.
-          aria-label={`Open lead ${lead.username}`}
+          aria-label={`Open lead: ${intent}`}
           // Stop the drag sensor from swallowing the click.
           onPointerDown={(e) => { e.stopPropagation(); }}
           onClick={() => { onOpen(lead); }}
@@ -59,8 +66,6 @@ export function LeadCard({ lead, threshold, onOpen, draggable }: LeadCardProps) 
           <Maximize2 className="size-3.5" aria-hidden />
         </button>
       </div>
-
-      <p className="mt-2 line-clamp-2 text-[11px] text-text-muted">{lead.text}</p>
 
       <div className="mt-2 flex flex-wrap items-center gap-1.5">
         <ScorePill score={lead.score} threshold={threshold} />

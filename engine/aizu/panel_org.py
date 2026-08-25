@@ -48,10 +48,16 @@ def _active_matches(matches: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return [m for m in matches if m["status"] != ARCHIVED_STATUS]
 
 # Lead-list sort keys → how to read the sortable value off a built match record.
+# v27: an org-facing row has no `username` to sort by — `intent` is the lead's
+# only prose. `username` survives for the superadmin lead table (which asks
+# `_build_matches` for identity-bearing rows), and reads through `.get` so a
+# redacted row sorts as "" instead of turning a stale `?sort=username` from a
+# cached client bundle into a KeyError 500.
 _LEAD_SORT_KEYS = {
     "capturedAt": lambda m: m["capturedAt"]["ts"],
     "score": lambda m: m["score"],
-    "username": lambda m: (m["username"] or "").lower(),
+    "intent": lambda m: (m.get("intent") or "").lower(),
+    "username": lambda m: (m.get("username") or "").lower(),
     "platform": lambda m: m["platform"],
     "status": lambda m: m["status"],
 }
@@ -199,12 +205,17 @@ def _org_campaign_ids(store: Store, campaign: Campaign, org_id: Optional[int],
     return ids
 
 
-def _org_matches(store: Store, cids: list[str]) -> list[dict[str, Any]]:
+def _org_matches(store: Store, cids: list[str], *,
+                 include_identity: bool = False) -> list[dict[str, Any]]:
     """Every campaign's matches pooled and re-sorted newest-first by capture time, so
-    the org-wide list keeps the same ordering contract as a single campaign's."""
+    the org-wide list keeps the same ordering contract as a single campaign's.
+
+    `include_identity` is threaded straight to `_build_matches` and is the ONLY way
+    a username/comment text enters one of these payloads — superadmin callers only
+    (see `build_admin_org_leads`)."""
     pooled: list[dict[str, Any]] = []
     for cid in cids:
-        pooled.extend(_build_matches(store, cid))
+        pooled.extend(_build_matches(store, cid, include_identity=include_identity))
     pooled.sort(key=lambda m: m["capturedAt"]["ts"], reverse=True)
     return pooled
 
@@ -351,11 +362,29 @@ def build_settings_org(store: Store, campaign: Optional[Campaign], *,
     return out
 
 
+def _lead_haystack(m: dict[str, Any]) -> str:
+    """Everything the free-text lead search may look at, lowercased.
+
+    v27: `username` and the comment `text` are no longer on an org-facing row, so
+    searching them would silently match nothing. The search now runs over what a
+    customer can actually SEE — the derived `intent`, the classifier's `reason`,
+    and the `extracted` field VALUES (phone, city, budget…), which is what an
+    operator hunting "Tashkent" or a phone number is really after. Identity is
+    folded in only when the row carries it, i.e. the superadmin path, which asks
+    for it explicitly; `.get` keeps this one function correct for both shapes."""
+    parts = [str(m.get("intent") or ""), str(m.get("reason") or ""),
+             str(m.get("username") or ""), str(m.get("text") or "")]
+    extracted = m.get("extracted")
+    if isinstance(extracted, dict):
+        parts.extend(str(v) for v in extracted.values() if v is not None)
+    return " ".join(parts).lower()
+
+
 def _matches_filter_sort(matches: list[dict[str, Any]], *, q: Optional[str],
                          status: Optional[str], platform: Optional[str],
                          sort: str, descending: bool) -> list[dict[str, Any]]:
-    """Apply the leads-page query: substring search (username/text), status & platform
-    facets, then sort. Pure — returns a new list, never mutates the input."""
+    """Apply the leads-page query: substring search (see `_lead_haystack`), status &
+    platform facets, then sort. Pure — returns a new list, never mutates the input."""
     out = matches
     if status:
         out = [m for m in out if m["status"] == status]
@@ -367,9 +396,7 @@ def _matches_filter_sort(matches: list[dict[str, Any]], *, q: Optional[str],
         out = [m for m in out if m["platform"] == platform]
     if q:
         needle = q.lower()
-        out = [m for m in out
-               if needle in (m["username"] or "").lower()
-               or needle in (m["text"] or "").lower()]
+        out = [m for m in out if needle in _lead_haystack(m)]
     key = _LEAD_SORT_KEYS.get(sort, _LEAD_SORT_KEYS["capturedAt"])
     return sorted(out, key=key, reverse=descending)
 
@@ -412,6 +439,7 @@ def build_leads_org(store: Store, campaign: Optional[Campaign], *,
                     status: Optional[str] = None, platform: Optional[str] = None,
                     campaign_filter: Optional[str] = None,
                     sort: str = "capturedAt", descending: bool = True,
+                    include_identity: bool = False,
                     today: Optional[datetime] = None, spend_cap_usd: float = 20.0,
                     skip_threshold: float = 0.6, canary_limit: int = 5,
                     watchlist_ttl_days: float = 10.0) -> dict[str, Any]:
@@ -422,11 +450,15 @@ def build_leads_org(store: Store, campaign: Optional[Campaign], *,
 
     `campaign_filter` SCOPES the whole page (list + tiles) to one campaign; the
     status/platform/search facets narrow within that scope. Archived leads are
-    excluded from the tiles and the default list (see `_matches_filter_sort`)."""
+    excluded from the tiles and the default list (see `_matches_filter_sort`).
+
+    `include_identity` (v27) is FALSE for every org caller — `/api/leads` carries
+    the derived `intent`, never a username or comment text. Only the superadmin
+    adapter below sets it."""
     ctx = _context(store, campaign, org_id=org_id, role=role, today=today,
                    spend_cap_usd=spend_cap_usd, skip_threshold=skip_threshold,
                    canary_limit=canary_limit, watchlist_ttl_days=watchlist_ttl_days)
-    org_matches = _org_matches(store, ctx.cids)
+    org_matches = _org_matches(store, ctx.cids, include_identity=include_identity)
     # Scope to one campaign before faceting/paginating, so the tiles reflect it too.
     scoped = ([m for m in org_matches if m["campaignId"] == campaign_filter]
               if campaign_filter else org_matches)
@@ -484,7 +516,15 @@ def build_admin_org_campaigns(store: Store, *, org_id: int) -> dict[str, Any]:
 
 def _admin_lead_row(m: dict[str, Any]) -> dict[str, Any]:
     """Flatten one org match row into the admin lead contract (numeric capturedAt,
-    boolean extracted). Pure — returns a new dict, never mutates the input."""
+    boolean extracted). Pure — returns a new dict, never mutates the input.
+
+    This is the ONE surface that still carries a lead's real identity: the
+    superadmin plane (platform_admins, IP-allowlisted) sees the handle, the raw
+    comment, AND the derived `intent` side by side — that pairing is how an
+    operator checks that redaction is summarising honestly. Indexing `username`
+    and `text` (rather than `.get`) is deliberate: if this ever gets fed redacted
+    rows it must fail loudly, not silently serve blanks that read as "no data".
+    """
     captured = m.get("capturedAt")
     return {
         "commentId": m["commentId"],
@@ -492,6 +532,9 @@ def _admin_lead_row(m: dict[str, Any]) -> dict[str, Any]:
         "platform": m["platform"],
         "username": m["username"],
         "text": m["text"],
+        # The customer-facing line, shown next to the raw text it was derived
+        # from. "" for a pre-v27 row (captured before redaction existed).
+        "intent": m.get("intent") or "",
         "capturedAt": captured.get("ts") if isinstance(captured, dict) else None,
         "status": m["status"],
         "score": m.get("score"),
@@ -510,11 +553,14 @@ def build_admin_org_leads(store: Store, *, org_id: int, page: int = 1,
                           descending: bool = True) -> dict[str, Any]:
     """`{leads:[...], page, pageSize, total}`.
 
-    Reuses `build_leads_org` for filter/sort/pagination, then flattens each row."""
+    Reuses `build_leads_org` for filter/sort/pagination, then flattens each row.
+    `include_identity=True` is what makes this the superadmin path: it is the only
+    call in the codebase that asks `_build_matches` for the username + comment
+    text, so the search here also spans the handle and the raw comment."""
     data = build_leads_org(
         store, None, org_id=org_id, role="owner", page=page, page_size=page_size,
         q=q, status=status, platform=platform, campaign_filter=campaign_filter,
-        sort=sort, descending=descending)
+        sort=sort, descending=descending, include_identity=True)
     return {
         "leads": [_admin_lead_row(m) for m in data["items"]],
         "page": data["page"],

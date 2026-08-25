@@ -5,6 +5,9 @@ import type {
   AdminOrgCampaign,
   AdminOrgLeadsPage,
   AdminOrgLeadsQuery,
+  AdminOrgRun,
+  AdminRunActivity,
+  AdminRunActivityQuery,
   AdminSession,
   AuditEntry,
   AuditVerify,
@@ -53,6 +56,8 @@ import type {
   PanelState,
   RedditConnectInput,
   ReportsPayload,
+  RevealLeadInput,
+  RevealedLead,
   RunActivity,
   RunInput,
   RunStartResult,
@@ -105,6 +110,20 @@ export interface PanelRepository {
   setMatchStatus(request: StatusWriteRequest): Promise<Result<void>>;
   // v3 write surfaces — the panel is read-write beyond match status.
   bulkSetStatus(request: BulkStatusRequest): Promise<Result<void>>;
+  /**
+   * POST /api/lead/reveal — un-redact ONE lead's handle, comment text and post id
+   * (RBAC action `reveal_lead`: owner/admin/member; a viewer is refused server-side).
+   *
+   * IMPERATIVE ON PURPOSE. Call it from the drawer's reveal button and hold the answer
+   * in component state for that drawer's lifetime — never through useQuery, never
+   * seeded into the leads cache, never into localStorage. Every call writes an audit
+   * row, so reopening the drawer SHOULD re-reveal and re-audit; a cached answer that
+   * outlived the drawer would silently turn "anonymized by default" into "anonymized
+   * until first viewed". Exports build from the anonymized list and must not read it.
+   *
+   * A lead outside the caller's org is a 404 (never a 403 — not an existence oracle).
+   */
+  revealLead(input: RevealLeadInput): Promise<Result<RevealedLead>>;
   // v6 lead notes — any lead-editor adds; only the author deletes (server-enforced).
   addLeadNote(input: AddLeadNoteInput): Promise<Result<void>>;
   deleteLeadNote(input: DeleteLeadNoteInput): Promise<Result<void>>;
@@ -205,8 +224,16 @@ export interface PanelRepository {
   fetchAdminOrgs(): Promise<Result<AdminOrg[]>>;
   /** GET /api/admin/orgs/{id}/campaigns — read-only campaign list for one org. */
   fetchAdminOrgCampaigns(orgId: number): Promise<Result<AdminOrgCampaign[]>>;
-  /** GET /api/admin/orgs/{id}/leads — read-only paginated leads for one org. */
+  /** GET /api/admin/orgs/{id}/leads — read-only paginated leads for one org. Unlike
+   * the org-facing list this one still carries `username` + `text` beside `intent`. */
   fetchAdminOrgLeads(query: AdminOrgLeadsQuery): Promise<Result<AdminOrgLeadsPage>>;
+  /** GET /api/admin/orgs/{id}/runs — that org's recent runs, newest first: the picker
+   * for the narrative feed below (v27). */
+  fetchAdminOrgRuns(orgId: number): Promise<Result<AdminOrgRun[]>>;
+  /** GET /api/admin/run/activity — one run's FULL narrative feed (messages, details,
+   * identities), the rows /api/run/activity no longer hands an org. Cross-tenant by
+   * design: no org scope, an unknown run answers an empty feed rather than 404. */
+  fetchAdminRunActivity(query: AdminRunActivityQuery): Promise<Result<AdminRunActivity>>;
   /** POST /api/admin/impersonate — start acting as an org/user (audited, reason req'd). */
   startImpersonation(input: ImpersonateInput): Promise<Result<void>>;
   /** POST /api/admin/impersonate/end — stop impersonating. */

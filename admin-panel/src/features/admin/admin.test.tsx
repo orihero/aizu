@@ -5,12 +5,18 @@ import { FakePanelRepository } from '@/test/fakePanelRepository';
 import { buildPanelState } from '@/test/fixtures';
 import {
   buildAdminOrg,
+  buildAdminOrgLead,
+  buildAdminOrgRun,
+  buildAdminRunActivity,
+  buildAdminRunEvent,
   buildAdminSession,
   buildAuditEntry,
   buildEnrolmentToken,
   buildWorker,
   renderAdmin,
 } from './adminTestUtils';
+import { EMPTY_ADMIN_RUN_ACTIVITY, mergeAdminRunActivity } from './adminHooks';
+import { formatRunDuration } from './format';
 
 function makeRepo(): FakePanelRepository {
   return new FakePanelRepository(buildPanelState());
@@ -456,5 +462,305 @@ describe('audit log', () => {
 
     await user.click(await screen.findByRole('button', { name: /verify chain/i }));
     expect(await screen.findByRole('alert')).toHaveTextContent(/tamper detected/i);
+  });
+});
+
+describe('org run log (v27 — the feed the customer app lost)', () => {
+  test('lists an org’s runs and opens one full narrative feed', async () => {
+    const user = userEvent.setup();
+    const repo = makeRepo();
+    repo.adminSession = buildAdminSession();
+    repo.adminOrgRuns = {
+      7: [buildAdminOrgRun({ runId: 'run-7a', campaignName: 'Acme sneakers', leads: 5 })],
+    };
+    repo.adminRunActivity = {
+      'run-7a': buildAdminRunActivity({
+        runId: 'run-7a',
+        events: [
+          buildAdminRunEvent({ id: 1, level: 'info', phase: 'lifecycle', message: 'Run started' }),
+          buildAdminRunEvent({ id: 2, message: 'Lead: @buyer_42 (score 0.91)' }),
+        ],
+      }),
+    };
+
+    renderAdmin(repo, '/admin/orgs/7');
+
+    await user.click(await screen.findByRole('button', { name: /Acme sneakers/ }));
+
+    // The narrative rows themselves — messages, not just counters.
+    expect(await screen.findByText('Run started')).toBeInTheDocument();
+    expect(screen.getByText('Lead: @buyer_42 (score 0.91)')).toBeInTheDocument();
+    // …plus the aggregated counters that ride alongside them.
+    expect(screen.getByText('$0.42')).toBeInTheDocument();
+  });
+
+  test('pages the feed forward on the monotonic cursor, never on seq', async () => {
+    // `seq` RESETS per session, so a batch run's second session replays 1,2,3…. Paging on
+    // the global id is what keeps the console from dropping the whole second session.
+    const user = userEvent.setup();
+    const repo = makeRepo();
+    repo.adminSession = buildAdminSession();
+    repo.adminOrgRuns = { 7: [buildAdminOrgRun({ runId: 'run-7b' })] };
+    repo.adminRunActivity = {
+      'run-7b': (after: number) =>
+        after === 0
+          ? buildAdminRunActivity({
+            runId: 'run-7b', finished: false, cursor: 40,
+            events: [buildAdminRunEvent({
+              id: 40, seq: 3, sessionId: 'sess-1', message: 'page one tail',
+            })],
+          })
+          : buildAdminRunActivity({
+            runId: 'run-7b', finished: true, cursor: 41,
+            events: [buildAdminRunEvent({
+              // seq goes BACKWARDS (new session) while the global id goes forward.
+              id: 41, seq: 1, sessionId: 'sess-2', message: 'page two head',
+            })],
+          }),
+    };
+
+    renderAdmin(repo, '/admin/orgs/7');
+    await user.click(await screen.findByRole('button', { name: /Acme sneakers/ }));
+
+    expect(await screen.findByText('page two head')).toBeInTheDocument();
+    // The first page's row is still there — pages accumulate, they do not replace.
+    expect(screen.getByText('page one tail')).toBeInTheDocument();
+    await waitFor(() => {
+      expect(repo.adminRunActivityFetches.map((q) => q.after)).toContain(40);
+    });
+  });
+
+  test('shows the raw engine detail blob on demand', async () => {
+    // The detail is exactly what the org endpoint refuses to serve: `{username, score,
+    // tier, reelId}`. Seeing it is the point of this plane.
+    const user = userEvent.setup();
+    const repo = makeRepo();
+    repo.adminSession = buildAdminSession();
+    repo.adminOrgRuns = { 7: [buildAdminOrgRun({ runId: 'run-7c' })] };
+    repo.adminRunActivity = {
+      'run-7c': buildAdminRunActivity({
+        runId: 'run-7c',
+        events: [buildAdminRunEvent({ id: 9, detail: '{"username": "buyer_42"}' })],
+      }),
+    };
+
+    renderAdmin(repo, '/admin/orgs/7');
+    await user.click(await screen.findByRole('button', { name: /Acme sneakers/ }));
+    await user.click(await screen.findByRole('button', { name: /^detail$/ }));
+
+    expect(screen.getByText(/"username": "buyer_42"/)).toBeInTheDocument();
+  });
+
+  test('an unparseable detail is shown raw rather than swallowed', async () => {
+    const user = userEvent.setup();
+    const repo = makeRepo();
+    repo.adminSession = buildAdminSession();
+    repo.adminOrgRuns = { 7: [buildAdminOrgRun({ runId: 'run-7d' })] };
+    repo.adminRunActivity = {
+      'run-7d': buildAdminRunActivity({
+        runId: 'run-7d',
+        events: [buildAdminRunEvent({ id: 9, detail: 'not json {' })],
+      }),
+    };
+
+    renderAdmin(repo, '/admin/orgs/7');
+    await user.click(await screen.findByRole('button', { name: /Acme sneakers/ }));
+    await user.click(await screen.findByRole('button', { name: /^detail$/ }));
+
+    expect(screen.getByText('not json {')).toBeInTheDocument();
+  });
+
+  test('engine-authored message text is rendered as text, never as markup', async () => {
+    // Same posture as the worker-authored preflight detail: this is a privileged surface,
+    // and the strings on it were written elsewhere.
+    const user = userEvent.setup();
+    const repo = makeRepo();
+    repo.adminSession = buildAdminSession();
+    repo.adminOrgRuns = { 7: [buildAdminOrgRun({ runId: 'run-7e' })] };
+    const payload = '<img src=x onerror=alert(1)>';
+    repo.adminRunActivity = {
+      'run-7e': buildAdminRunActivity({
+        runId: 'run-7e',
+        events: [buildAdminRunEvent({ id: 9, message: payload, detail: null })],
+      }),
+    };
+
+    renderAdmin(repo, '/admin/orgs/7');
+    await user.click(await screen.findByRole('button', { name: /Acme sneakers/ }));
+
+    expect(await screen.findByText(payload)).toBeInTheDocument();
+    expect(document.querySelector('img')).toBeNull();
+  });
+
+  test('a run with no events yet says so instead of reading as empty', async () => {
+    const user = userEvent.setup();
+    const repo = makeRepo();
+    repo.adminSession = buildAdminSession();
+    repo.adminOrgRuns = {
+      7: [buildAdminOrgRun({ runId: 'run-7f', status: 'running', finishedAt: null })],
+    };
+    // Unseeded → the fake answers an empty, unfinished feed, like a fleet run that has
+    // not heartbeated its first event.
+
+    renderAdmin(repo, '/admin/orgs/7');
+    await user.click(await screen.findByRole('button', { name: /Acme sneakers/ }));
+
+    expect(await screen.findByText(/waiting for the first event/i)).toBeInTheDocument();
+  });
+});
+
+describe('admin run activity accumulator', () => {
+  test('folds successive pages by global id and drops replayed rows', () => {
+    const first = mergeAdminRunActivity(
+      EMPTY_ADMIN_RUN_ACTIVITY,
+      buildAdminRunActivity({
+        finished: false, cursor: 2,
+        events: [buildAdminRunEvent({ id: 1 }), buildAdminRunEvent({ id: 2 })],
+      }),
+    );
+    expect(first.events.map((e) => e.id)).toEqual([1, 2]);
+    expect(first.cursor).toBe(2);
+    expect(first.draining).toBe(true);
+
+    // A page the bridge replays (same rows, cursor unmoved) adds nothing AND stops the
+    // drain — otherwise the console would re-request the same page forever.
+    const replay = mergeAdminRunActivity(
+      first,
+      buildAdminRunActivity({
+        finished: false, cursor: 2,
+        events: [buildAdminRunEvent({ id: 1 }), buildAdminRunEvent({ id: 2 })],
+      }),
+    );
+    expect(replay.events.map((e) => e.id)).toEqual([1, 2]);
+    expect(replay.draining).toBe(false);
+  });
+
+  test('a page for a different run resets the accumulator', () => {
+    const acc = mergeAdminRunActivity(
+      EMPTY_ADMIN_RUN_ACTIVITY,
+      buildAdminRunActivity({ runId: 'run-a', events: [buildAdminRunEvent({ id: 7 })] }),
+    );
+    const switched = mergeAdminRunActivity(
+      acc,
+      buildAdminRunActivity({ runId: 'run-b', events: [buildAdminRunEvent({ id: 1 })] }),
+    );
+    expect(switched.runId).toBe('run-b');
+    expect(switched.events.map((e) => e.id)).toEqual([1]);
+    expect(switched.cursor).toBe(1);
+  });
+});
+
+describe('superadmin leads table', () => {
+  test('shows the handle, the raw comment and the derived intent side by side', async () => {
+    const repo = makeRepo();
+    repo.adminSession = buildAdminSession();
+    repo.adminOrgLeads = {
+      7: {
+        leads: [buildAdminOrgLead({
+          username: 'buyer_42',
+          text: 'do you have these in size 42? dm me',
+          intent: 'Wants sneakers in size 42',
+        })],
+        page: 1, pageSize: 15, total: 1,
+      },
+    };
+
+    renderAdmin(repo, '/admin/orgs/7');
+
+    expect(await screen.findByText('@buyer_42')).toBeInTheDocument();
+    expect(screen.getByText('do you have these in size 42? dm me')).toBeInTheDocument();
+    expect(screen.getByText('Wants sneakers in size 42')).toBeInTheDocument();
+    // The surface says out loud that this is not what the customer sees.
+    expect(screen.getByText(/un-redacted/i)).toBeInTheDocument();
+  });
+
+  test('a pre-v27 row with no intent says so and never falls back to the raw text', async () => {
+    const repo = makeRepo();
+    repo.adminSession = buildAdminSession();
+    repo.adminOrgLeads = {
+      7: {
+        leads: [buildAdminOrgLead({ intent: '', text: 'ship to Tashkent?' })],
+        page: 1, pageSize: 15, total: 1,
+      },
+    };
+
+    renderAdmin(repo, '/admin/orgs/7');
+
+    expect(await screen.findByText('Intent not captured')).toBeInTheDocument();
+    // The raw comment still appears exactly once — in its own column, not doubled into
+    // the intent cell.
+    expect(screen.getAllByText('ship to Tashkent?')).toHaveLength(1);
+  });
+});
+
+describe('run duration formatting', () => {
+  test('reports a duration only when both ends are real', () => {
+    expect(formatRunDuration(1_700_000_000, 1_700_000_045)).toBe('45s');
+    expect(formatRunDuration(1_700_000_000, 1_700_000_600)).toBe('10m 0s');
+    expect(formatRunDuration(1_700_000_000, 1_700_007_800)).toBe('2h 10m');
+    // Still running: no end, so no duration — never the browser clock's guess.
+    expect(formatRunDuration(1_700_000_000, null)).toBe('—');
+    expect(formatRunDuration(null, 1_700_000_600)).toBe('—');
+  });
+});
+
+describe('dead-lettered run (contract E.5)', () => {
+  test('never renders a bare 0 leads beside a feed that shows leads being found', async () => {
+    // Measured shape: the job dead-lettered at attempt 5/5 and never acked, so the cloud
+    // has no sessions and no matches rows — counters read 0 — while the heartbeat-synced
+    // events show every lead the worker harvested. Showing the 0 alone denies real work.
+    const user = userEvent.setup();
+    const repo = makeRepo();
+    repo.adminSession = buildAdminSession();
+    repo.adminOrgRuns = { 7: [buildAdminOrgRun({ runId: 'run-dead', status: 'failed', leads: 0 })] };
+    repo.adminRunActivity = {
+      'run-dead': buildAdminRunActivity({
+        runId: 'run-dead',
+        finished: true,
+        counters: {
+          reelsSeen: 0, relevancePasses: 0, commentsScored: 0,
+          matches: 0, spendUsd: 0, likes: 0, follows: 0,
+        },
+        events: [
+          buildAdminRunEvent({ id: 1, detail: '{"username": "a", "reelId": "r-1"}' }),
+          buildAdminRunEvent({ id: 2, detail: '{"username": "b", "reelId": "r-1"}' }),
+          // Attempt 2 re-scores the same comment: same (reelId, username) → one lead, not two.
+          buildAdminRunEvent({ id: 3, detail: '{"username": "a", "reelId": "r-1"}' }),
+        ],
+      }),
+    };
+
+    renderAdmin(repo, '/admin/orgs/7');
+    await user.click(await screen.findByRole('button', { name: /Acme sneakers/ }));
+
+    expect(await screen.findByRole('status')).toHaveTextContent(
+      /2 leads discovered, 0 reached the account/,
+    );
+  });
+
+  test('stays quiet while the run is still in flight', async () => {
+    // Mid-run the session rows legitimately lag the events; flashing the warning at every
+    // healthy run would train operators to ignore it.
+    const user = userEvent.setup();
+    const repo = makeRepo();
+    repo.adminSession = buildAdminSession();
+    repo.adminOrgRuns = { 7: [buildAdminOrgRun({ runId: 'run-live', status: 'running' })] };
+    repo.adminRunActivity = {
+      'run-live': buildAdminRunActivity({
+        runId: 'run-live',
+        finished: false,
+        counters: {
+          reelsSeen: 3, relevancePasses: 1, commentsScored: 8,
+          matches: 0, spendUsd: 0, likes: 0, follows: 0,
+        },
+        events: [buildAdminRunEvent({ id: 1, detail: '{"username": "a", "reelId": "r-1"}' })],
+      }),
+    };
+
+    renderAdmin(repo, '/admin/orgs/7');
+    await user.click(await screen.findByRole('button', { name: /Acme sneakers/ }));
+
+    expect(await screen.findByText('Lead: @buyer_42 (score 0.91)')).toBeInTheDocument();
+    expect(screen.queryByText(/reached the account/)).not.toBeInTheDocument();
   });
 });

@@ -712,19 +712,31 @@
         customers, every month. The only question is how many you can handle.</p>
     </div>
 
+    <!-- Card order and every number here mirror engine/aizu/billing.py TIERS
+         (lead_cap + campaign_cap). Change one, change the other. -->
     <div class="plans-grid">
       <article class="plan">
         <h3 class="plan__name" data-i18n="plans.free.name">Free</h3>
         <p class="plan__price"><span class="plan__amount">$0</span><span class="plan__period"></span></p>
         <p class="plan__year" data-i18n="plans.free.note">no card needed</p>
         <p class="plan__leads"><strong>10</strong><span data-i18n="plans.free.leads">qualified leads a month</span></p>
+        <p class="plan__campaigns" data-i18n="plans.free.campaigns">1 campaign</p>
         <div class="plan__cta-wrap"><a href="/app/#/signup" class="btn btn--ghost" data-i18n="plans.free.cta">Start free</a></div>
+      </article>
+      <article class="plan">
+        <h3 class="plan__name" data-i18n="plans.lite.name">Lite</h3>
+        <p class="plan__price"><span class="plan__amount">$9.99</span><span class="plan__period" data-i18n="plans.period">/mo</span></p>
+        <p class="plan__year" data-i18n="plans.lite.year">$99 billed yearly</p>
+        <p class="plan__leads"><strong>50</strong><span data-i18n="plans.lite.leads">qualified leads a month</span></p>
+        <p class="plan__campaigns" data-i18n="plans.lite.campaigns">3 campaigns</p>
+        <div class="plan__cta-wrap"><a href="/app/#/signup" class="btn btn--ghost" data-i18n="plans.lite.cta">Choose Lite</a></div>
       </article>
       <article class="plan plan--featured">
         <span class="plan__badge" data-i18n="plans.badge">Most popular</span><h3 class="plan__name" data-i18n="plans.starter.name">Starter</h3>
         <p class="plan__price"><span class="plan__amount">$24.99</span><span class="plan__period" data-i18n="plans.period">/mo</span></p>
         <p class="plan__year" data-i18n="plans.starter.year">$249 billed yearly</p>
         <p class="plan__leads"><strong>250</strong><span data-i18n="plans.starter.leads">qualified leads a month</span></p>
+        <p class="plan__campaigns" data-i18n="plans.starter.campaigns">Unlimited campaigns</p>
         <div class="plan__cta-wrap"><a href="/app/#/signup" class="btn btn--coral" data-i18n="plans.starter.cta">Choose Starter</a></div>
       </article>
       <article class="plan">
@@ -732,13 +744,15 @@
         <p class="plan__price"><span class="plan__amount">$149</span><span class="plan__period" data-i18n="plans.period">/mo</span></p>
         <p class="plan__year" data-i18n="plans.pro.year">$1,490 billed yearly</p>
         <p class="plan__leads"><strong>2,000</strong><span data-i18n="plans.pro.leads">qualified leads a month</span></p>
+        <p class="plan__campaigns" data-i18n="plans.pro.campaigns">Unlimited campaigns</p>
         <div class="plan__cta-wrap"><a href="/app/#/signup" class="btn btn--ghost" data-i18n="plans.pro.cta">Choose Pro</a></div>
       </article>
       <article class="plan">
         <h3 class="plan__name" data-i18n="plans.scale.name">Scale</h3>
-        <p class="plan__price"><span class="plan__amount" data-i18n="plans.scale.amount">Custom</span><span class="plan__period"></span></p>
+        <p class="plan__price"><span class="plan__amount plan__amount--word" data-i18n="plans.scale.amount">Custom</span><span class="plan__period"></span></p>
         <p class="plan__year" data-i18n="plans.scale.year">negotiated cap</p>
         <p class="plan__leads"><strong data-i18n="plans.scale.number">Your number</strong><span data-i18n="plans.scale.leads">agreed up front</span></p>
+        <p class="plan__campaigns" data-i18n="plans.scale.campaigns">Unlimited campaigns</p>
         <!-- Sales contact, not a signup CTA: same address as the FAQ's contact line below. -->
         <div class="plan__cta-wrap"><a href="mailto:hello@aizu.uz" class="btn btn--ghost" data-i18n="plans.scale.cta">Talk to sales</a></div>
       </article>
@@ -764,7 +778,7 @@
         </details>
         <details class="faq-item">
           <summary><span data-i18n="faq.2.q">What exactly do I get with each lead?</span><span class="faq-icon" aria-hidden="true"></span></summary>
-          <p class="body faq-answer" data-i18n="faq.2.a">Each lead includes who they are, what they asked for in their own words, when they asked, and a direct way to respond. Enough to reach out the same day, with context. No guesswork, no digging.</p>
+          <p class="body faq-answer" data-i18n="faq.2.a">Each lead includes what they are looking for in plain language, when they asked, and their contact details when they shared them. Enough to reach out the same day, with context. No guesswork, no digging.</p>
         </details>
         <details class="faq-item">
           <summary><span data-i18n="faq.3.q">Is this cold outreach or a bought list?</span><span class="faq-icon" aria-hidden="true"></span></summary>
@@ -776,7 +790,7 @@
         </details>
         <details class="faq-item">
           <summary><span data-i18n="faq.5.q">How fast do I see results?</span><span class="faq-icon" aria-hidden="true"></span></summary>
-          <p class="body faq-answer" data-i18n="faq.5.a">Your first leads typically arrive within days of describing your business, and then they keep coming, week after week. Start on Free: ten qualified leads a month is enough to feel the difference before you spend a dollar.</p>
+          <p class="body faq-answer" data-i18n="faq.5.a">Your first leads typically arrive within days of describing your business, and then they keep coming, week after week. Start on Free: one campaign and ten qualified leads a month, enough to feel the difference before you spend a dollar.</p>
         </details>
         <details class="faq-item">
           <summary><span data-i18n="faq.6.q">Can I cancel anytime?</span><span class="faq-icon" aria-hidden="true"></span></summary>

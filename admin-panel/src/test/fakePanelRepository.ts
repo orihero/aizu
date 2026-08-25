@@ -6,6 +6,9 @@ import type {
   AdminOrgCampaign,
   AdminOrgLeadsPage,
   AdminOrgLeadsQuery,
+  AdminOrgRun,
+  AdminRunActivity,
+  AdminRunActivityQuery,
   AdminSession,
   AuditEntry,
   AuditVerify,
@@ -57,6 +60,8 @@ import type {
   PanelState,
   RedditConnectInput,
   ReportsPayload,
+  RevealLeadInput,
+  RevealedLead,
   RunActivity,
   RunInput,
   RunStartResult,
@@ -70,7 +75,14 @@ import type {
   UpdateRoleInput,
   WorkspaceSettingsInput,
 } from '@/shared/types/domain';
+import { can } from '@/shared/auth/roles';
 import { buildAgentReadiness, buildBilling, paginateLeads } from './fixtures';
+
+/** The zeroed counters a run that has reported nothing yet carries. */
+const EMPTY_RUN_COUNTERS: AdminRunActivity['counters'] = {
+  reelsSeen: 0, relevancePasses: 0, commentsScored: 0, matches: 0,
+  spendUsd: 0, likes: 0, follows: 0,
+};
 
 /**
  * Does a lead write address THIS lead? Mirrors the engine, which keys `matches` on
@@ -113,6 +125,29 @@ export class FakePanelRepository implements PanelRepository {
   readonly bulkWrites: BulkStatusRequest[] = [];
   readonly noteAdds: AddLeadNoteInput[] = [];
   readonly noteDeletes: DeleteLeadNoteInput[] = [];
+  // ---- lead reveal seam (v27 Section F) ----
+  /**
+   * Every reveal request, in order — INCLUDING the ones this fake refuses. The server
+   * audits a denial before it even looks the lead up, so a test asserting "a viewer's
+   * attempt is still recorded" has something to assert against.
+   */
+  readonly revealRequests: RevealLeadInput[] = [];
+  /**
+   * The raw identity a reveal hands back, keyed by lead uid (`leadUidOf` / `Match.id`).
+   * A lead with no entry still reveals — with a deterministic synthetic handle — so
+   * only a test that asserts on the exact handle or comment has to register one.
+   * Nothing here ever reaches a lead record: the answer is session-local by contract.
+   *
+   * `reelId` lives HERE and not on the lead, mirroring the wire: since v27 the post
+   * pointer exists only on the reveal answer, so a fake that read it off `Match` would
+   * be modelling a payload the bridge no longer sends.
+   */
+  readonly revealIdentities = new Map<string, { username: string; text: string; reelId?: string }>();
+  /** Forces the next reveal to fail: `'network'` for a transport error, `'plan_limit'`
+   *  for the period reveal-allowance 402. (The role/ownership refusals below are reached
+   *  by setting `currentUser` / asking for another org's lead, which is what the
+   *  drawer's error branches actually face.) */
+  revealFailure: 'network' | 'plan_limit' | null = null;
   readonly campaignCreates: CampaignInput[] = [];
   /** Every archive/un-archive request, in order. */
   readonly archiveRequests: ArchiveCampaignInput[] = [];
@@ -228,8 +263,20 @@ export class FakePanelRepository implements PanelRepository {
   adminOrgs: AdminOrg[] = [];
   /** Per-org campaign lists (orgId → campaigns). */
   adminOrgCampaigns: Record<number, AdminOrgCampaign[]> = {};
-  /** Per-org leads pages (orgId → full page). */
+  /** Per-org leads pages (orgId → full page). Superadmin rows keep `username`+`text`. */
   adminOrgLeads: Record<number, AdminOrgLeadsPage> = {};
+  /** Per-org run lists (orgId → runs, newest first) — the feed picker (v27). */
+  adminOrgRuns: Record<number, AdminOrgRun[]> = {};
+  /**
+   * Per-run FULL narrative feeds (runId → activity). A function lets a test serve
+   * successive pages keyed off the `after` cursor the console sends, exactly like
+   * `runActivity` above; a plain value returns the same page every poll.
+   */
+  adminRunActivity: Record<
+    string, AdminRunActivity | ((after: number) => AdminRunActivity)
+  > = {};
+  /** Every admin feed poll, in order — asserts the console advances its cursor. */
+  readonly adminRunActivityFetches: AdminRunActivityQuery[] = [];
   /** Audit rows fetchAudit serves. */
   auditEntries: AuditEntry[] = [];
   /** Chain-verify result verifyAudit serves. */
@@ -382,6 +429,58 @@ export class FakePanelRepository implements PanelRepository {
       ),
     };
     return Promise.resolve(ok(undefined));
+  }
+
+  /**
+   * One audited un-redaction, mirroring the endpoint's four rules (server.py):
+   * the role is checked HERE (a refusal is still recorded), a lead that is not ours is
+   * a 404 rather than a 403 — the endpoint refuses to be an existence oracle, and a
+   * fake that answered 403 would let that regress unnoticed — and the reveal is a
+   * READ: `this.state` is left untouched, so no test can accidentally depend on a
+   * reveal mutating a lead.
+   */
+  revealLead(input: RevealLeadInput): Promise<Result<RevealedLead>> {
+    this.revealRequests.push(input);
+    if (this.revealFailure === 'network') {
+      this.revealFailure = null;
+      return Promise.resolve(err(appError('network', 'bridge server unreachable')));
+    }
+    // The period reveal allowance is spent. It counts DISTINCT leads, so the server
+    // only ever answers this for a lead this org has not revealed this period — which
+    // is why it is a one-shot here too, not a mode the fake stays stuck in.
+    if (this.revealFailure === 'plan_limit') {
+      this.revealFailure = null;
+      return Promise.resolve(err(appError(
+        'http',
+        'Plan limit reached (10 lead reveals on Free). Resets Jul 1. Upgrade to reveal more leads.',
+        402,
+      )));
+    }
+    // The server is the gate; hiding the button is only UX. A fake that trusted the
+    // UI's gating would let a viewer-visible reveal pass its own test suite.
+    if (!can(this.currentUser?.role, 'reveal_lead')) {
+      return Promise.resolve(
+        err(appError('http', 'your role does not permit this action', 403)),
+      );
+    }
+    const lead = this.state.MATCHES.find(
+      (m) => targets(m, input.campaignId, input.commentId, input.platform),
+    );
+    if (!lead) return Promise.resolve(err(appError('http', 'unknown lead', 404)));
+    const identity = this.revealIdentities.get(lead.id) ?? {
+      username: `user_${lead.commentId}`,
+      text: `Original comment from ${lead.commentId}`,
+    };
+    return Promise.resolve(ok({
+      id: lead.id,
+      commentId: lead.commentId,
+      platform: lead.platform,
+      username: identity.username,
+      text: identity.text,
+      // Synthesized from the comment id, never read off the lead: the anonymized row
+      // has no post pointer to read (v27).
+      reelId: identity.reelId ?? `reel-${lead.commentId}`,
+    }));
   }
 
   addLeadNote(input: AddLeadNoteInput): Promise<Result<void>> {
@@ -754,6 +853,30 @@ export class FakePanelRepository implements PanelRepository {
     const page = this.adminOrgLeads[query.orgId]
       ?? { leads: [], page: query.page, pageSize: query.pageSize, total: 0 };
     return Promise.resolve(ok(page));
+  }
+
+  fetchAdminOrgRuns(orgId: number): Promise<Result<AdminOrgRun[]>> {
+    return this.takeAdminFailure<AdminOrgRun[]>()
+      ?? Promise.resolve(ok(this.adminOrgRuns[orgId] ?? []));
+  }
+
+  fetchAdminRunActivity(query: AdminRunActivityQuery): Promise<Result<AdminRunActivity>> {
+    this.adminRunActivityFetches.push(query);
+    const failure = this.takeAdminFailure<AdminRunActivity>();
+    if (failure) return failure;
+    const seeded = this.adminRunActivity[query.runId];
+    // An unseeded run answers an EMPTY feed, not a 404 — mirroring the endpoint, which
+    // is cross-tenant and has no tenant boundary left to protect: a fleet run that has
+    // not heartbeated yet is exactly the run an operator is trying to watch.
+    if (seeded === undefined) {
+      return Promise.resolve(ok({
+        runId: query.runId, finished: false, counters: EMPTY_RUN_COUNTERS,
+        events: [], flags: [], cursor: query.after ?? 0,
+      }));
+    }
+    return Promise.resolve(ok(
+      typeof seeded === 'function' ? seeded(query.after ?? 0) : seeded,
+    ));
   }
 
   startImpersonation(input: ImpersonateInput): Promise<Result<void>> {

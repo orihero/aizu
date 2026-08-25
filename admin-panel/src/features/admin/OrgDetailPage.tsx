@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
-import { ArrowLeft, UserCog } from 'lucide-react';
+import { ArrowLeft, EyeOff, UserCog } from 'lucide-react';
 import { PageHeader } from '@/app/layout/PageHeader';
 import { AsyncBoundary } from '@/shared/ui/AsyncBoundary';
 import { Badge } from '@/shared/ui/Badge';
@@ -8,9 +8,18 @@ import { Button } from '@/shared/ui/Button';
 import { Card, CardBody, CardHeader } from '@/shared/ui/Card';
 import { EmptyState } from '@/shared/ui/EmptyState';
 import { Modal } from '@/shared/ui/Modal';
+import { cn } from '@/shared/lib/cn';
 import { leadUidOf } from '@/shared/lib/leadId';
 import { platformLabel } from '@/shared/lib/platformLabel';
-import { useAdminOrgCampaigns, useAdminOrgLeads, useStartImpersonation } from './adminHooks';
+import type { AdminOrgRun } from '@/shared/schemas/admin';
+import { AdminRunLog } from './AdminRunLog';
+import { formatRunDuration, formatTimestamp, runStatusTone } from './format';
+import {
+  useAdminOrgCampaigns,
+  useAdminOrgLeads,
+  useAdminOrgRuns,
+  useStartImpersonation,
+} from './adminHooks';
 import { useAdminAuth } from './useAdminAuth';
 
 const LEADS_PREVIEW_SIZE = 15;
@@ -122,14 +131,123 @@ function CampaignsCard({ orgId }: { readonly orgId: number }) {
   );
 }
 
-function LeadsCard({ orgId }: { readonly orgId: number }) {
-  const leads = useAdminOrgLeads({ orgId, page: 1, pageSize: LEADS_PREVIEW_SIZE });
+/**
+ * That org's recent runs, newest first — the picker for the narrative feed.
+ *
+ * A run row is clickable in full (a `<button>`, so keyboard and screen readers get the
+ * same affordance as the mouse); the selected run's log renders below the grid, where a
+ * 500-row feed has the width to be legible.
+ */
+function RunsCard({
+  orgId,
+  selectedRunId,
+  onSelect,
+}: {
+  readonly orgId: number;
+  readonly selectedRunId: string | null;
+  readonly onSelect: (run: AdminOrgRun) => void;
+}) {
+  const runs = useAdminOrgRuns(orgId);
   return (
     <Card>
       <CardHeader
-        title="Leads"
+        title="Runs"
+        subtitle="Newest first. Open one for its full event log."
+      />
+      <CardBody className="px-0 py-0">
+        <AsyncBoundary
+          isLoading={runs.isLoading}
+          error={runs.error}
+          onRetry={() => {
+            void runs.refetch();
+          }}
+        >
+          {(runs.data ?? []).length === 0 ? (
+            <p className="px-5 py-6 text-sm text-text-muted">No runs.</p>
+          ) : (
+            <ul className="divide-y divide-border">
+              {(runs.data ?? []).map((run) => (
+                <li key={run.runId}>
+                  <button
+                    type="button"
+                    onClick={() => { onSelect(run); }}
+                    aria-pressed={run.runId === selectedRunId}
+                    className={cn(
+                      'flex w-full items-center gap-3 px-5 py-3 text-left transition hover:bg-surface-2',
+                      run.runId === selectedRunId && 'bg-surface-2',
+                    )}
+                  >
+                    <div className="min-w-0 grow">
+                      <div className="flex items-center gap-2">
+                        <span className="truncate font-semibold text-text">
+                          {run.campaignName}
+                        </span>
+                        {/* `mode` is honestly null for a run this bridge process no longer
+                            remembers — say so rather than guessing "live". */}
+                        <Badge tone="neutral">{run.mode ?? 'mode unknown'}</Badge>
+                      </div>
+                      <div className="mt-0.5 truncate text-xs text-text-muted">
+                        {run.platforms.length > 0
+                          ? run.platforms.map(platformLabel).join(', ')
+                          : 'no platform recorded'}
+                        {' · '}
+                        {formatTimestamp(run.startedAt)}
+                        {' · '}
+                        {formatRunDuration(run.startedAt, run.finishedAt)}
+                      </div>
+                      <div className="mt-0.5 font-mono text-[10px] text-text-faint">
+                        {run.runId}
+                      </div>
+                    </div>
+                    <div className="shrink-0 text-right">
+                      <Badge tone={runStatusTone(run.status)}>{run.status}</Badge>
+                      <div className="mt-1 text-xs tabular-nums text-text-muted">
+                        {run.leads} leads · {run.sessions} sessions
+                      </div>
+                    </div>
+                  </button>
+                </li>
+              ))}
+            </ul>
+          )}
+        </AsyncBoundary>
+      </CardBody>
+    </Card>
+  );
+}
+
+/**
+ * The org's leads, UN-REDACTED — the one surface in the product that still shows a lead's
+ * real handle and the words they wrote.
+ *
+ * v27 stripped `username` and `text` from every org-facing payload and gave customers the
+ * derived `intent` instead; here all three sit side by side, because the pairing is how an
+ * operator checks that the redaction is summarising honestly rather than dropping or
+ * inventing what a lead asked for. It is a full-width table for exactly that reason: two
+ * prose columns that have to be read against each other.
+ *
+ * The gate is the admin plane itself (IP allowlist + platform-admin session), which is
+ * already in front of this route — the banner is there so nobody reads a screenshot of it
+ * as a customer view.
+ */
+function LeadsCard({ orgId }: { readonly orgId: number }) {
+  const leads = useAdminOrgLeads({ orgId, page: 1, pageSize: LEADS_PREVIEW_SIZE });
+  return (
+    <Card className="mt-6">
+      <CardHeader
+        title={
+          <>
+            <span>Leads</span>
+            <Badge tone="danger">
+              <EyeOff className="size-3" aria-hidden />
+              un-redacted
+            </Badge>
+          </>
+        }
         subtitle={
-          leads.data ? `${leads.data.total} total — showing the latest` : 'Read-only.'
+          leads.data
+            ? `${leads.data.total} total — showing the latest. Handle and comment text are hidden from the customer's own panel.`
+            : "Handle and comment text are hidden from the customer's own panel."
         }
       />
       <CardBody className="px-0 py-0">
@@ -143,20 +261,54 @@ function LeadsCard({ orgId }: { readonly orgId: number }) {
           {(leads.data?.leads ?? []).length === 0 ? (
             <p className="px-5 py-6 text-sm text-text-muted">No leads.</p>
           ) : (
-            <ul className="divide-y divide-border">
-              {/* Composite key — one org's leads span campaigns and platforms, which
-                  can legitimately share a commentId. */}
-              {(leads.data?.leads ?? []).map((lead) => (
-                <li key={leadUidOf(lead)} className="px-5 py-3">
-                  <div className="flex items-center gap-2">
-                    <span className="font-semibold text-text">@{lead.username}</span>
-                    <Badge tone="neutral">{platformLabel(lead.platform)}</Badge>
-                    <Badge tone="info">{lead.status}</Badge>
-                  </div>
-                  <p className="mt-1 line-clamp-2 text-xs text-text-muted">{lead.text}</p>
-                </li>
-              ))}
-            </ul>
+            <div className="overflow-x-auto">
+              <table className="w-full min-w-[860px] text-left text-[13px]">
+                <thead>
+                  <tr className="border-b border-border text-xs font-semibold uppercase tracking-wide text-text-faint">
+                    <th className="px-5 py-2.5">Lead</th>
+                    <th className="px-5 py-2.5">Comment (raw)</th>
+                    <th className="px-5 py-2.5">Intent (what the customer sees)</th>
+                    <th className="px-5 py-2.5">Status</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {/* Composite key — one org's leads span campaigns and platforms, which
+                      can legitimately share a commentId. */}
+                  {(leads.data?.leads ?? []).map((lead) => (
+                    <tr key={leadUidOf(lead)} className="border-b border-border align-top last:border-0">
+                      <td className="px-5 py-3">
+                        <div className="font-semibold text-text">@{lead.username}</div>
+                        <div className="mt-0.5 text-xs text-text-muted">
+                          {platformLabel(lead.platform)}
+                        </div>
+                        <div className="mt-0.5 text-xs text-text-faint">
+                          {formatTimestamp(lead.capturedAt)}
+                        </div>
+                      </td>
+                      <td className="max-w-[24rem] px-5 py-3 text-text-muted">{lead.text}</td>
+                      <td className="max-w-[24rem] px-5 py-3">
+                        {/* '' is a real value: a pre-v27 row captured before intent existed.
+                            Say so — never fall back to the raw text, which is the whole
+                            thing the customer-facing column is supposed to replace. */}
+                        {lead.intent === '' ? (
+                          <span className="text-text-faint">Intent not captured</span>
+                        ) : (
+                          <span className="text-text">{lead.intent}</span>
+                        )}
+                      </td>
+                      <td className="px-5 py-3">
+                        <Badge tone="info">{lead.status}</Badge>
+                        {lead.score !== null ? (
+                          <div className="mt-1 text-xs tabular-nums text-text-muted">
+                            score {lead.score}
+                          </div>
+                        ) : null}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
           )}
         </AsyncBoundary>
       </CardBody>
@@ -169,6 +321,10 @@ export function OrgDetailPage() {
   const { orgId: orgIdParam } = useParams();
   const orgId = Number(orgIdParam);
   const [impersonating, setImpersonating] = useState(false);
+  // The whole picker row is held, not just its id: nothing in the activity feed itself
+  // carries a campaign name or a start time, so the log's metadata strip has no other
+  // source for them.
+  const [selectedRun, setSelectedRun] = useState<AdminOrgRun | null>(null);
 
   if (!Number.isInteger(orgId) || orgId < 1) {
     return (
@@ -206,8 +362,23 @@ export function OrgDetailPage() {
       />
       <div className="grid gap-6 lg:grid-cols-2">
         <CampaignsCard orgId={orgId} />
-        <LeadsCard orgId={orgId} />
+        <RunsCard
+          orgId={orgId}
+          selectedRunId={selectedRun?.runId ?? null}
+          onSelect={setSelectedRun}
+        />
       </div>
+      {selectedRun ? (
+        // Keyed by run id so switching runs remounts the log: the accumulator and its
+        // cursor start clean rather than paging one run's feed from another's cursor.
+        <AdminRunLog
+          key={selectedRun.runId}
+          runId={selectedRun.runId}
+          run={selectedRun}
+          onClose={() => { setSelectedRun(null); }}
+        />
+      ) : null}
+      <LeadsCard orgId={orgId} />
       <ImpersonateModal
         orgId={orgId}
         isOpen={impersonating}

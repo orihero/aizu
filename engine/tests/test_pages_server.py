@@ -137,7 +137,10 @@ def srv():
     for cid, comment_id, username in _A_LEADS:
         store.upsert_match(campaign_id=cid, reel_id="r", comment_id=comment_id, username=username,
                            text=f"hello from {username}", lang="uz", score=0.9, reason="x",
-                           extracted=None, tier="local")
+                           extracted=None, tier="local",
+                           # v27: this — not the handle or the text above — is what an
+                           # org-facing lead row actually shows, searches, and sorts on.
+                           intent=f"Wants a quote for order {comment_id}")
     store.upsert_match(campaign_id="camp-b", reel_id="r", comment_id="b-c1", username="bu1",
                        text="hi", lang="uz", score=0.9, reason="x", extracted=None, tier="local")
     # One org-A lead set to 'interested' so the status facet has something to find.
@@ -264,7 +267,10 @@ def test_leads_total_is_org_wide(srv):
 def test_org_b_sees_only_its_own_leads(srv):
     data = _get(srv["base"], "/api/leads", srv["b_owner"])[1]["data"]
     assert data["total"] == 1
-    assert all(m["username"] == "bu1" for m in data["items"])
+    # v27: no username on an org-facing row, so assert what "only its own" actually
+    # means (the campaign scope) — and that identity really is gone with it.
+    assert all(m["campaignId"] == "camp-b" for m in data["items"])
+    assert all("username" not in m and "text" not in m for m in data["items"])
 
 
 def test_org_b_dashboard_excludes_org_a(srv):
@@ -357,17 +363,38 @@ def test_leads_payload_lists_org_campaigns(srv):
     assert all(c.get("name") for c in data["campaigns"])
 
 
-def test_leads_query_search_matches_username(srv):
-    data = _get(srv["base"], "/api/leads?q=a2u1", srv["cookies"]["owner"])[1]["data"]
+def test_leads_query_search_matches_intent_not_identity(srv):
+    """v27: free-text search runs over what a customer can SEE — intent, reason and
+    the extracted values — because username/text are no longer in the payload."""
+    data = _get(srv["base"], "/api/leads?q=a2-c2", srv["cookies"]["owner"])[1]["data"]
     assert data["total"] == 1
-    assert data["items"][0]["username"] == "a2u1"
+    assert data["items"][0]["intent"] == "Wants a quote for order a2-c2"
+    assert "username" not in data["items"][0] and "text" not in data["items"][0]
 
 
-def test_leads_sort_by_username_ascending(srv):
-    data = _get(srv["base"], "/api/leads?sort=username&dir=asc&pageSize=200",
+def test_leads_query_no_longer_searches_the_hidden_username(srv):
+    """The handle is still in the DB. Searching it must find NOTHING — otherwise the
+    search box is an oracle that confirms which handles an org's leads belong to,
+    which is the same disclosure the payload redaction just removed."""
+    data = _get(srv["base"], "/api/leads?q=a2u1", srv["cookies"]["owner"])[1]["data"]
+    assert data["total"] == 0
+
+
+def test_leads_sort_by_intent_ascending(srv):
+    """`sort=username` went away with the field; intent is the sortable lead prose."""
+    data = _get(srv["base"], "/api/leads?sort=intent&dir=asc&pageSize=200",
                 srv["cookies"]["owner"])[1]["data"]
-    names = [m["username"] for m in data["items"]]
-    assert names == sorted(names)
+    intents = [m["intent"] for m in data["items"]]
+    assert intents == sorted(intents)
+
+
+def test_a_stale_username_sort_degrades_instead_of_500ing(srv):
+    """A panel bundle cached from before v27 still sends `?sort=username`. The key is
+    gone from the row, so a strict lookup would 500 every leads page for exactly the
+    clients that have not reloaded yet."""
+    code, resp = _get(srv["base"], "/api/leads?sort=username&dir=asc&pageSize=200",
+                      srv["cookies"]["owner"])
+    assert code == 200 and resp["data"]["total"] == _A_TOTAL
 
 
 # ----- lead identity: the composite (campaign, platform, comment) key -----

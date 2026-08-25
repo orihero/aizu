@@ -40,7 +40,8 @@ describe('LeadsPage', () => {
     setup(<LeadsPage />, { route: '/leads', path: '/leads' });
     expect(await screen.findByText('Total leads')).toBeInTheDocument();
     expect(screen.getByText('Win rate')).toBeInTheDocument();
-    expect(screen.getByText('dana_t', { exact: false })).toBeInTheDocument();
+    // v27: a lead row is named by what the person WANTS, never by who they are.
+    expect(screen.getByText('Wants pricing for the Pro plan', { exact: false })).toBeInTheDocument();
   });
 });
 

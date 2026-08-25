@@ -186,6 +186,11 @@ class Decision:
     score: float                     # 0..1 relevance/match strength
     confidence: float                # 0..1 model self-confidence
     reason: str = ""
+    # v27 lead redaction: the model's own one-line "what this commenter wants".
+    # Deliberately NOT inside `extracted` — that is the grounded field bag the
+    # panel renders as data, while this is the prose a customer reads INSTEAD of
+    # the username and comment. `matching.derive_intent` is what sanitizes it.
+    intent: str = ""
     extracted: dict[str, Any] = field(default_factory=dict)
     tier: str = "cloud"
     usd: float = 0.0
@@ -294,6 +299,9 @@ def _decision_from_payload(p: dict[str, Any], tier: str, usd: float,
         score=_f("score", 0.0),
         confidence=_f("confidence", 0.0),
         reason=str(p.get("reason", ""))[:500],
+        # v27: carried verbatim off the wire; `matching.derive_intent` is the
+        # only thing allowed to decide whether it is usable and safe to show.
+        intent=str(p.get("intent") or "")[:500],
         extracted=p.get("extracted") if isinstance(p.get("extracted"), dict) else {},
         tier=tier,
         usd=usd,

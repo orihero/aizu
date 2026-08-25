@@ -55,8 +55,11 @@ const DEFAULT_SLICE: PersistedSlice = {
   page: 1,
 };
 
+// v27: `username` is no longer a sort key (an org-facing lead has no handle), so a
+// stored/bookmarked `sort=username` now fails `isSortKey` and falls back to the
+// default — the same path any other stale value takes.
 const LEAD_SORT_KEYS: readonly LeadSortKey[] = [
-  'username',
+  'intent',
   'platform',
   'status',
   'score',

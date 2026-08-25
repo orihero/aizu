@@ -20,7 +20,7 @@ import pytest
 from aizu import billing
 from aizu.billing import (
     CanonicalBillingEvent, ParseError, PolarClient, PolarConfig,
-    BillingConfigError, tier_lead_cap,
+    BillingConfigError, tier_lead_cap, tier_campaign_cap, tier_max_run_leads,
 )
 from aizu.core.store import SCHEMA_VERSION, Store
 
@@ -88,6 +88,43 @@ def test_tiers_have_month_and_year_prices():
         assert prices["month"] is not None and prices["year"] is not None
     # No tier carries a run-allowance field (deleted by design).
     assert all("run_allowance" not in t for t in billing.TIERS.values())
+
+
+def test_every_tier_declares_a_campaign_cap():
+    # The key must exist on EVERY tier: `tier_campaign_cap` subscripts it
+    # directly, so a tier missing it would KeyError at the campaign-create gate
+    # rather than fail closed.
+    assert all("campaign_cap" in t for t in billing.TIERS.values())
+
+
+def test_campaign_caps_match_the_published_plans():
+    assert tier_campaign_cap("free") == 1
+    assert tier_campaign_cap("lite") == 3
+    # None = unlimited, NOT "unset". Assert `is None` so a future 0 (which would
+    # block every campaign) can never pass this test.
+    assert tier_campaign_cap("starter") is None
+    assert tier_campaign_cap("pro") is None
+    assert tier_campaign_cap("scale") is None
+
+
+def test_unknown_tier_gets_the_free_campaign_cap():
+    # Fail closed, mirroring tier_lead_cap: a garbled/stale tier string must
+    # never read as unlimited.
+    assert tier_campaign_cap("nonsense") == 1
+    assert tier_campaign_cap("") == 1
+
+
+def test_max_run_leads_is_the_period_lead_cap():
+    # There is no separate per-run allowance: one run may target the whole
+    # period's worth, and the run gate clamps again by what is left.
+    for tier in billing.TIERS:
+        assert tier_max_run_leads(tier) == tier_lead_cap(tier)
+    assert tier_max_run_leads("free") == 10
+    assert tier_max_run_leads("pro") == 2000
+
+
+def test_unknown_tier_gets_the_free_max_run_leads():
+    assert tier_max_run_leads("nonsense") == 10
 
 
 # ===== PolarConfig.from_env — fail-fast boundary =====

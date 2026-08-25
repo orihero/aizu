@@ -27,7 +27,7 @@ from .cascade import LinkedInCascade
 from ...core.config import Campaign
 from ...core.feed import FeedSource, Reel
 from ...core.logsetup import SUCCESS_LEVEL, get_logger
-from ...core.matching import compute_found_by
+from ...core.matching import compute_found_by, derive_intent
 from ...core.pacing import Pacer
 from ...core.router import Router
 from ...core.store import SessionCounters, Store
@@ -313,6 +313,12 @@ class LinkedInSession:
             self._emit("comments", "info", f"Scoring {len(comments)} comments",
                        {"postId": reel_id, "count": len(comments)})
         found = 0
+        # Defect A — per-batch overshoot. The caller raises `self.counters.matches`
+        # ONCE for this whole batch, so the lead-target guard at the top of the per-
+        # post walk cannot fire mid-batch and the run overshoots by up to the
+        # size of the batch. `self.counters.matches + found` is the live running total;
+        # `self.counters.matches` alone is the PRE-batch value and still overshoots.
+        stopped_early = False
         for comment in comments:
             try:
                 res = self.cascade.score_comment(comment, reel)
@@ -332,10 +338,20 @@ class LinkedInSession:
             self.counters.comments_scored += 1
             if res.is_match:
                 d = res.decision
+                # v27 redaction: `intent` is the ONLY lead text the org ever
+                # sees — username and raw comment stop at the superadmin plane
+                # from here. `getattr` because a Decision carries the model's own
+                # `intent` only when the MATCH prompt asked for one (a
+                # campaign-authored prompt never does); derive_intent composes the
+                # line from the grounded fields plus the post text when it didn't.
                 self.store.upsert_match(
                     campaign_id=cid, reel_id=reel_id, comment_id=comment.comment_id,
                     username=comment.username, text=comment.text, lang=comment.lang,
                     score=d.score, reason=d.reason, extracted=d.extracted, tier=d.tier,
+                    intent=derive_intent(getattr(d, "intent", None),
+                                         extracted=d.extracted,
+                                         post_caption=reel.caption,
+                                         comment_text=comment.text),
                     session_id=self.session_id, platform=plat,
                     found_by_models=compute_found_by(d.model, d.comparisons,
                                                      self.campaign.threshold))
@@ -344,7 +360,16 @@ class LinkedInSession:
                            f"Match: {comment.username} (score {d.score:.2f})",
                            {"username": comment.username, "score": d.score,
                             "tier": d.tier, "postId": reel_id})
-        self.store.set_cursor(cid, reel_id, new_cursor, platform=plat)
+                if (self.lead_target is not None
+                        and self.counters.matches + found >= self.lead_target):
+                    stopped_early = True
+                    break
+        if not stopped_early:
+            # A mid-batch stop leaves the TAIL of this page unscored, and `new_cursor`
+            # covers the WHOLE fetched page — advancing it would mark items we never
+            # read as consumed and lose them for good. An unread item is UNKNOWN,
+            # never "not a lead".
+            self.store.set_cursor(cid, reel_id, new_cursor, platform=plat)
         if found:
             self.store.add_to_watchlist(cid, reel_id,
                                         ttl_days=self.cfg.watchlist_ttl_days,

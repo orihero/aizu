@@ -2,6 +2,8 @@ import { describe, expect, test } from 'vitest';
 import { buildMatch } from '@/test/fixtures';
 import {
   EMPTY_LEAD_FILTERS,
+  LEAD_INTENT_PLACEHOLDER,
+  leadIntentLabel,
   leadsToCsv,
   pageCount,
   selectFilteredLeads,
@@ -12,9 +14,9 @@ import {
 } from './leads';
 
 const leads = [
-  buildMatch({ id: 'a', commentId: 'a', username: 'aziz', status: 'new', platform: 'instagram', text: 'price?' }),
-  buildMatch({ id: 'b', commentId: 'b', username: 'bek', status: 'interested', platform: 'youtube', text: 'how much' }),
-  buildMatch({ id: 'c', commentId: 'c', username: 'dilnoza', status: 'interested', platform: 'instagram', text: 'interested' }),
+  buildMatch({ id: 'a', commentId: 'a', status: 'new', platform: 'instagram', intent: 'Asks the price of the red pair', reason: 'price question' }),
+  buildMatch({ id: 'b', commentId: 'b', status: 'interested', platform: 'youtube', intent: 'Wants a demo next week', reason: 'demo request' }),
+  buildMatch({ id: 'c', commentId: 'c', status: 'interested', platform: 'instagram', intent: 'Looking for size 42 in Tashkent', reason: 'size + city given' }),
 ];
 
 describe('selectFilteredLeads', () => {
@@ -32,9 +34,14 @@ describe('selectFilteredLeads', () => {
     expect(result.map((l) => l.commentId)).toEqual(['b']);
   });
 
-  test('matches query against username and text', () => {
-    expect(selectFilteredLeads(leads, { ...EMPTY_LEAD_FILTERS, query: 'aziz' })).toHaveLength(1);
-    expect(selectFilteredLeads(leads, { ...EMPTY_LEAD_FILTERS, query: 'interested' })).toHaveLength(1);
+  // v27: there is no username and no comment text to search — `intent` and `reason`
+  // (plus the extracted blob) are the whole searchable surface, matching what the
+  // bridge's own `q` searches so a client-side filter agrees with a server-side one.
+  test('matches query against intent, reason, and extracted values', () => {
+    expect(selectFilteredLeads(leads, { ...EMPTY_LEAD_FILTERS, query: 'tashkent' })).toHaveLength(1);
+    expect(selectFilteredLeads(leads, { ...EMPTY_LEAD_FILTERS, query: 'demo request' })).toHaveLength(1);
+    // Every fixture carries the default extracted blob (phone + intent: pricing).
+    expect(selectFilteredLeads(leads, { ...EMPTY_LEAD_FILTERS, query: '4155550142' })).toHaveLength(3);
   });
 });
 
@@ -66,9 +73,9 @@ describe('selectLeadPage / pageCount', () => {
 
 describe('selectSortedLeads', () => {
   const scored = [
-    buildMatch({ commentId: 'low', username: 'cara', score: 0.2, capturedAt: { date: 'Jun 1', time: '09:00', ts: 100 } }),
-    buildMatch({ commentId: 'high', username: 'abe', score: 0.9, capturedAt: { date: 'Jun 3', time: '09:00', ts: 300 } }),
-    buildMatch({ commentId: 'mid', username: 'bob', score: 0.5, capturedAt: { date: 'Jun 2', time: '09:00', ts: 200 } }),
+    buildMatch({ commentId: 'low', intent: 'cheap shipping question', score: 0.2, capturedAt: { date: 'Jun 1', time: '09:00', ts: 100 } }),
+    buildMatch({ commentId: 'high', intent: 'asks to buy today', score: 0.9, capturedAt: { date: 'Jun 3', time: '09:00', ts: 300 } }),
+    buildMatch({ commentId: 'mid', intent: 'borrowing a catalogue', score: 0.5, capturedAt: { date: 'Jun 2', time: '09:00', ts: 200 } }),
   ];
 
   test('sorts by score descending', () => {
@@ -86,9 +93,9 @@ describe('selectSortedLeads', () => {
     expect(result.map((l) => l.commentId)).toEqual(['high', 'mid', 'low']);
   });
 
-  test('sorts by username alphabetically', () => {
-    const result = selectSortedLeads(scored, { key: 'username', dir: 'asc' });
-    expect(result.map((l) => l.username)).toEqual(['abe', 'bob', 'cara']);
+  test('sorts by intent alphabetically', () => {
+    const result = selectSortedLeads(scored, { key: 'intent', dir: 'asc' });
+    expect(result.map((l) => l.commentId)).toEqual(['high', 'mid', 'low']);
   });
 
   test('does not mutate the input array', () => {
@@ -100,20 +107,20 @@ describe('selectSortedLeads', () => {
 
 describe('selectLeadById', () => {
   test('finds by the composite lead id or returns null', () => {
-    expect(selectLeadById(leads, 'b')?.username).toBe('bek');
+    expect(selectLeadById(leads, 'b')?.intent).toBe('Wants a demo next week');
     expect(selectLeadById(leads, 'zzz')).toBeNull();
   });
 
   test('two campaigns sharing a commentId resolve to their own records', () => {
     // A bare commentId is NOT unique: matching on it returned whichever copy came
     // first, so the drawer opened (and wrote status to) the wrong campaign's lead.
-    const a = buildMatch({ commentId: 'dup', campaignId: 'cmp-a', username: 'alice' });
-    const b = buildMatch({ commentId: 'dup', campaignId: 'cmp-b', username: 'bob' });
-    const x = buildMatch({ commentId: 'dup', campaignId: 'cmp-a', platform: 'x', username: 'carol' });
+    const a = buildMatch({ commentId: 'dup', campaignId: 'cmp-a', intent: 'intent A' });
+    const b = buildMatch({ commentId: 'dup', campaignId: 'cmp-b', intent: 'intent B' });
+    const x = buildMatch({ commentId: 'dup', campaignId: 'cmp-a', platform: 'x', intent: 'intent X' });
     const all = [a, b, x];
-    expect(selectLeadById(all, a.id)?.username).toBe('alice');
-    expect(selectLeadById(all, b.id)?.username).toBe('bob');
-    expect(selectLeadById(all, x.id)?.username).toBe('carol');
+    expect(selectLeadById(all, a.id)?.intent).toBe('intent A');
+    expect(selectLeadById(all, b.id)?.intent).toBe('intent B');
+    expect(selectLeadById(all, x.id)?.intent).toBe('intent X');
     // The raw comment id resolves to nothing — it is not an identity.
     expect(selectLeadById(all, 'dup')).toBeNull();
   });
@@ -121,11 +128,26 @@ describe('selectLeadById', () => {
 
 describe('leadsToCsv', () => {
   test('emits a header plus one row per lead and escapes quotes', () => {
-    const csv = leadsToCsv([buildMatch({ commentId: 'x', username: 'q"uote', text: 'hi' })]);
+    const csv = leadsToCsv([buildMatch({ commentId: 'x', intent: 'says q"uote' })]);
     const lines = csv.split('\n');
-    expect(lines[0]).toContain('username');
+    expect(lines[0]).toContain('intent');
     expect(lines).toHaveLength(2);
-    expect(lines[1]).toContain('"q""uote"');
+    expect(lines[1]).toContain('"says q""uote"');
+  });
+});
+
+describe('leadIntentLabel', () => {
+  test('returns the intent when the engine derived one', () => {
+    expect(leadIntentLabel(buildMatch({ intent: 'Wants a demo' }))).toBe('Wants a demo');
+  });
+
+  test('an empty or whitespace intent gets the neutral placeholder', () => {
+    // '' is a REAL value (a pre-v27 lead, or nothing derivable honestly). It renders as
+    // a placeholder and NEVER falls back to an identifier — that fallback is the whole
+    // leak the redaction closed.
+    expect(leadIntentLabel(buildMatch({ intent: '' }))).toBe(LEAD_INTENT_PLACEHOLDER);
+    expect(leadIntentLabel(buildMatch({ intent: '   ' }))).toBe(LEAD_INTENT_PLACEHOLDER);
+    expect(LEAD_INTENT_PLACEHOLDER).not.toContain('c1');
   });
 });
 

@@ -1,17 +1,17 @@
-import { useEffect, useRef } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { usePanelRepository } from '@/shared/api/repositoryContext';
 import { queryKeys } from '@/shared/api/queryKeys';
 import { unwrap } from '@/shared/lib/result';
-import {
-  EMPTY_RUN_ACTIVITY,
-  mergeRunActivity,
-  type RunActivityState,
-} from '@/shared/lib/runActivity';
+import { snapshotRunActivity, type RunActivityState } from '@/shared/lib/runActivity';
 
-// A live run emits events every few seconds; 2s keeps the feed lively without
+// A live run's scalars move every few seconds; 2s keeps the progress lively without
 // hammering the bridge. Polling stops once the run reports `finished`.
 const POLL_INTERVAL_MS = 2_000;
+
+// The org-facing feed has nothing to page — `events` is always empty and `cursor` never
+// advances (Section E) — so `after` is a constant. Kept in the call because the endpoint
+// still accepts it and a pre-v27 bridge would otherwise re-send the whole log every poll.
+const NO_CURSOR = 0;
 
 export interface UseRunActivityResult {
   readonly activity: RunActivityState | null;
@@ -20,25 +20,17 @@ export interface UseRunActivityResult {
 }
 
 /**
- * Poll one run's live activity feed while it is in flight, accumulating paged
- * events into a single growing snapshot. Pass `null` when no run is active (e.g.
- * the drawer is closed) to disable polling entirely.
+ * Poll one run's live progress while it is in flight. Pass `null` when no run is active
+ * (e.g. the drawer is closed) to disable polling entirely.
  *
- * The cursor is held in a ref (not query state) because each poll must send the
- * `after` of the page we already have; the accumulator advances it as pages fold
- * in. Polling halts when the run finishes — React Query keeps the final snapshot.
+ * v27: this no longer accumulates anything. Each poll is a complete, monotonic snapshot
+ * of the run's scalars, so there is no cursor ref and no cross-poll state — a page
+ * simply replaces the last one, and switching runs can no longer leak the previous
+ * run's rows into the new one because there are no rows. Polling halts when the run
+ * finishes; React Query keeps the final snapshot so the drawer still shows the outcome.
  */
 export function useRunActivity(runId: string | null): UseRunActivityResult {
   const repository = usePanelRepository();
-  const accumulator = useRef<RunActivityState>(EMPTY_RUN_ACTIVITY);
-
-  // Drop the accumulated feed once no run is active (drawer closed / run cleared),
-  // so reopening for a different run starts clean. Safe here — the query is
-  // disabled when runId is null, so no in-flight queryFn races this reset. (The
-  // in-queryFn run-id guard still covers an in-place run switch.)
-  useEffect(() => {
-    if (runId === null) accumulator.current = EMPTY_RUN_ACTIVITY;
-  }, [runId]);
 
   const query = useQuery({
     queryKey: queryKeys.runActivity(runId ?? '∅'),
@@ -47,14 +39,8 @@ export function useRunActivity(runId: string | null): UseRunActivityResult {
     gcTime: 0,
     retry: false,
     refetchInterval: (q) => (q.state.data?.finished ? false : POLL_INTERVAL_MS),
-    queryFn: async () => {
-      // After cursor resets to 0 whenever the run id changes (a new run opened).
-      const after = accumulator.current.runId === runId ? accumulator.current.cursor : 0;
-      const page = unwrap(await repository.fetchRunActivity(runId as string, after));
-      const next = mergeRunActivity(accumulator.current, page);
-      accumulator.current = next;
-      return next;
-    },
+    queryFn: async () =>
+      snapshotRunActivity(unwrap(await repository.fetchRunActivity(runId as string, NO_CURSOR))),
   });
 
   return { activity: query.data ?? null, isError: query.isError, error: query.error };

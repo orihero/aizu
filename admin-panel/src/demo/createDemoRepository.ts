@@ -14,7 +14,9 @@ import type {
   Campaign, CampaignInput, GenerateCampaignInput, GeneratedCampaignDraft, InterviewRequest,
   InterviewResponse, RunActivity, RunCounters, RunInput, RunStartResult,
 } from '@/shared/types/domain';
+import type { DemoRunTick } from './demoFixtures';
 import {
+  DEMO_BILLING,
   DEMO_CAMPAIGN_ID,
   DEMO_GENERATED_DRAFT,
   DEMO_INTERVIEW_ROUND1,
@@ -22,10 +24,11 @@ import {
   DEMO_RUN_ID,
   DEMO_RUN_SCRIPT,
   DEMO_RUN_STARTED_AT,
+  DEMO_RUN_TARGET_LEADS,
   DEMO_USER,
 } from './demoFixtures';
 
-/** How many scripted run events are revealed on each `fetchRunActivity` poll —
+/** How many scripted run ticks are advanced on each `fetchRunActivity` poll —
  * keyed off poll COUNT (react-query's ~2s interval), never wall-clock, so the
  * replay is deterministic across captures regardless of machine speed. */
 const RELEASE_PER_POLL = 2;
@@ -135,12 +138,30 @@ export class DemoPanelRepository extends FakePanelRepository {
   constructor() {
     super(DEMO_PANEL_STATE);
     this.currentUser = DEMO_USER;
+    // A Lite plan with room left in both caps — see DEMO_BILLING for why the numbers
+    // are what they are (the plan affordances have to be visible AND usable on camera).
+    this.billing = DEMO_BILLING;
     // One interview round (a `platforms` question, all six pre-suggested); the
     // queue then empties, so round 2 falls through to the base class's default
     // done:true reply and the wizard proceeds straight to synthesis.
     this.interviewResults = [DEMO_INTERVIEW_ROUND1];
     this.generatedDraft = DEMO_GENERATED_DRAFT;
+    // The bounds the bridge echoes back from a clamped run start (v27), so the drawer
+    // reports what it actually started rather than what was asked for.
+    this.nextRunStart = {
+      runId: null,
+      backend: null,
+      targetLeads: DEMO_RUN_TARGET_LEADS,
+      maxRunLeads: DEMO_BILLING.maxRunLeads,
+      leadsRemaining: DEMO_BILLING.leadCap - DEMO_BILLING.leadsUsed,
+    };
   }
+
+  // `revealLead` is deliberately NOT overridden. The demo tenant carries no handles
+  // and no comment bodies anywhere — that is the point of the fixture — so a reveal
+  // falls through to the base fake's obviously-synthetic identity. A capture that
+  // needs a plausible handle on screen should register one in `revealIdentities` at
+  // capture time rather than parking fabricated people in the shipped fixture.
 
   /** Demo pacing: hold the synthesize call in flight long enough for the
    * staged progress copy to play through on camera (capture 03 / beat 03). */
@@ -210,11 +231,18 @@ export class DemoPanelRepository extends FakePanelRepository {
     return Promise.resolve(ok(this.nextRunStart));
   }
 
-  /** Progressive replay of the scripted run: reveals `RELEASE_PER_POLL` more
-   * events each time this is called (poll COUNT, not wall-clock), with
-   * counters ticking up monotonically. Once the whole script has played, the
-   * run is retired into RUN.recent — same transition the real bridge makes
-   * once a run exits — so the card/drawer fall back to idle on the next sync. */
+  /**
+   * Progressive replay of the scripted run: advances `RELEASE_PER_POLL` ticks each
+   * time this is called (poll COUNT, not wall-clock), every scalar rising
+   * monotonically. Once the whole script has played, the run is retired into
+   * RUN.recent — same transition the real bridge makes once a run exits — so the
+   * card/drawer fall back to idle on the next sync.
+   *
+   * v27: this answers as the bridge answers an ORG caller — `events: []`,
+   * `eventsRedacted: true`, progress carried entirely by the Section E scalars. The
+   * `afterSeq` the poller sends is still recorded (the plumbing is unchanged) but has
+   * nothing left to page, which is exactly why `cursor` never advances.
+   */
   override fetchRunActivity(runId: string, afterSeq = 0): Promise<Result<RunActivity>> {
     this.runActivityFetches.push({ runId, afterSeq });
     if (runId !== DEMO_RUN_ID) {
@@ -223,11 +251,11 @@ export class DemoPanelRepository extends FakePanelRepository {
     const polls = (this.pollCounts.get(runId) ?? 0) + 1;
     this.pollCounts.set(runId, polls);
     const releaseCount = Math.min(DEMO_RUN_SCRIPT.length, polls * RELEASE_PER_POLL);
-    const released = DEMO_RUN_SCRIPT.slice(0, releaseCount);
-    const events = released.map((s) => s.event).filter((e) => e.id > afterSeq);
     const finished = releaseCount >= DEMO_RUN_SCRIPT.length;
-    const last = released.at(-1);
-    const counters = last ? last.counters : EMPTY_COUNTERS;
+    // `undefined` only before the first tick is released; a run that has reported
+    // nothing yet is "starting", never "nothing found".
+    const tick: DemoRunTick | undefined = DEMO_RUN_SCRIPT[releaseCount - 1];
+    const counters = tick?.counters ?? EMPTY_COUNTERS;
 
     if (finished && this.state.RUN.active !== null) {
       const active = this.state.RUN.active;
@@ -253,8 +281,26 @@ export class DemoPanelRepository extends FakePanelRepository {
       };
     }
 
+    const leadsFound = tick?.leadsFound ?? 0;
     return Promise.resolve(ok({
-      runId, finished, counters, events, flags: [], cursor: releaseCount, fleetJob: null,
+      runId,
+      finished,
+      counters,
+      events: [],
+      eventsRedacted: true,
+      phase: finished ? 'done' : (tick?.phase ?? 'starting'),
+      leadsFound,
+      // An in-process run writes its rows as it goes, so found and delivered never
+      // diverge here — the honest `delivered` verdict, not a staged warning.
+      leadsDelivered: leadsFound,
+      delivery: 'delivered',
+      itemsScanned: tick?.itemsScanned ?? 0,
+      relevantFound: tick?.relevantFound ?? 0,
+      lastEventAt: tick?.lastEventAt ?? null,
+      targetLeads: DEMO_RUN_TARGET_LEADS,
+      flags: [],
+      cursor: 0,
+      fleetJob: null,
     }));
   }
 }

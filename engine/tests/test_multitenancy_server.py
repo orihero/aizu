@@ -741,7 +741,29 @@ def test_settings_billing_present_for_owner(mt):
     billing_block = resp["BILLING"]
     assert billing_block["tier"] == "free"
     assert billing_block["leadCap"] == 10
+    # v27 plan limits, so the panel can show "1 of 1 campaigns used" and bound the
+    # run target itself instead of discovering both as a server 402.
+    assert billing_block["campaignCap"] == 1
+    assert billing_block["maxRunLeads"] == 10
+    # Counted, not hardcoded: this module shares one DB and other tests add campaigns,
+    # so the meter is compared against the org's real non-archived working set — which
+    # is the same count the 402 gate enforces on.
+    store = Store(mt["db"])
+    try:
+        expected = sum(1 for r in store.list_campaign_meta(mt["org_a"])
+                       if r.get("archived_at") is None)
+    finally:
+        store.close()
+    assert billing_block["campaignsUsed"] == expected >= 1
     assert "tiers" in billing_block and len(billing_block["tiers"]) == 5
+    by_tier = {t["tier"]: t for t in billing_block["tiers"]}
+    assert by_tier["free"]["campaignCap"] == 1
+    assert by_tier["lite"]["campaignCap"] == 3
+    # `is None`, never a falsy check: a future 0 would read as "blocked" and wedge
+    # every create on exactly the plans that are meant to be unlimited.
+    assert by_tier["starter"]["campaignCap"] is None
+    assert by_tier["pro"]["campaignCap"] is None
+    assert by_tier["scale"]["campaignCap"] is None
 
 
 def test_settings_unreachable_for_member(mt):

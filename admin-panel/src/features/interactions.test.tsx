@@ -7,9 +7,9 @@ import {
   buildIntegration,
   buildMatch,
   buildPanelState,
+  buildBilling,
   buildRunActivity,
   buildRunBlock,
-  buildRunEvent,
   buildRunRecord,
 } from '@/test/fixtures';
 import { FakePanelRepository } from '@/test/fakePanelRepository';
@@ -81,8 +81,8 @@ describe('Leads filters', () => {
     const repo = new FakePanelRepository(
       buildPanelState({
         MATCHES: [
-          buildMatch({ id: 'a', commentId: 'a', campaignId: 'camp-a', username: 'alphalead' }),
-          buildMatch({ id: 'b', commentId: 'b', campaignId: 'camp-b', username: 'bravolead' }),
+          buildMatch({ id: 'a', commentId: 'a', campaignId: 'camp-a', intent: 'alphalead' }),
+          buildMatch({ id: 'b', commentId: 'b', campaignId: 'camp-b', intent: 'bravolead' }),
         ],
       }),
     );
@@ -104,8 +104,8 @@ describe('Leads filters', () => {
     const repo = new FakePanelRepository(
       buildPanelState({
         MATCHES: [
-          buildMatch({ id: 'live', commentId: 'live', username: 'activelead', status: 'new' }),
-          buildMatch({ id: 'gone', commentId: 'gone', username: 'archivedlead', status: 'archived' }),
+          buildMatch({ id: 'live', commentId: 'live', intent: 'activelead', status: 'new' }),
+          buildMatch({ id: 'gone', commentId: 'gone', intent: 'archivedlead', status: 'archived' }),
         ],
       }),
     );
@@ -129,24 +129,24 @@ describe('Lead identity is the composite (campaign, platform, comment) key', () 
   // copy happened to be first in the list.
   const IG_A = buildMatch({
     commentId: 'dup-1', campaignId: 'cmp-a', platform: 'instagram',
-    username: 'alice_a', text: 'A-side lead', status: 'new',
+    intent: 'A-side lead', status: 'new',
   });
   const IG_B = buildMatch({
     commentId: 'dup-1', campaignId: 'cmp-b', platform: 'instagram',
-    username: 'bob_b', text: 'B-side lead', status: 'new',
+    intent: 'B-side lead', status: 'new',
   });
   const X_A = buildMatch({
     commentId: 'dup-1', campaignId: 'cmp-a', platform: 'x',
-    username: 'carol_x', text: 'X-side lead', status: 'new',
+    intent: 'X-side lead', status: 'new',
   });
 
   test('all three leads render as distinct rows', async () => {
     const repo = new FakePanelRepository(buildPanelState({ MATCHES: [IG_A, IG_B, X_A] }));
     renderWithProviders(<LeadsPage />, { repository: repo, route: '/leads', path: '/leads' });
 
-    expect(await screen.findByText('alice_a')).toBeInTheDocument();
-    expect(screen.getByText('bob_b')).toBeInTheDocument();
-    expect(screen.getByText('carol_x')).toBeInTheDocument();
+    expect(await screen.findByText('A-side lead')).toBeInTheDocument();
+    expect(screen.getByText('B-side lead')).toBeInTheDocument();
+    expect(screen.getByText('X-side lead')).toBeInTheDocument();
     // ...on three distinct identities (also the React key for each row).
     expect(new Set([IG_A.id, IG_B.id, X_A.id]).size).toBe(3);
   });
@@ -159,7 +159,7 @@ describe('Lead identity is the composite (campaign, platform, comment) key', () 
       repository: repo, route: '/leads', path: '/leads/:leadId?',
     });
 
-    await user.click(await screen.findByText('bob_b'));
+    await user.click(await screen.findByText('B-side lead'));
 
     // The drawer's Source block names the campaign the open lead really belongs to.
     const drawer = within(await screen.findByRole('dialog'));
@@ -206,15 +206,26 @@ describe('Lead identity is the composite (campaign, platform, comment) key', () 
   });
 });
 
-describe('Lead drawer reel link', () => {
-  test('links out to the source reel on its platform', async () => {
-    const lead = buildMatch({ commentId: 'c1', platform: 'instagram', reelId: 'DXOML7vjQhn' });
+describe('Lead drawer reel link (revealed leads only)', () => {
+  test('links out to the source reel on its platform after an audited reveal', async () => {
+    const user = userEvent.setup();
+    const lead = buildMatch({ commentId: 'c1', platform: 'instagram' });
     const repo = new FakePanelRepository(buildPanelState({ MATCHES: [lead] }));
+    // The reel id is registered on the REVEAL answer, not on the lead: since v27 the
+    // anonymized row carries no post pointer, so this is the only place one exists.
+    repo.revealIdentities.set(lead.id, { username: 'dana_t', text: 'how much?', reelId: 'DXOML7vjQhn' });
     renderWithProviders(<LeadsPage />, {
       repository: repo,
       route: leadRoute(lead.id),
       path: '/leads/:leadId',
     });
+
+    // v27: no post link until the lead is revealed — the handle and the comment are
+    // visible ON that post, so the link is the redaction undone in one click.
+    expect(await screen.findByRole('button', { name: /Reveal source/ })).toBeInTheDocument();
+    expect(screen.queryByRole('link', { name: /DXOML7vjQhn/ })).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole('button', { name: /Reveal source/ }));
 
     const link = await screen.findByRole('link', { name: /DXOML7vjQhn/ });
     expect(link).toHaveAttribute('href', 'https://www.instagram.com/reel/DXOML7vjQhn/');
@@ -222,13 +233,17 @@ describe('Lead drawer reel link', () => {
   });
 
   test('shows the plain reel id when the platform has no derivable URL', async () => {
-    const lead = buildMatch({ commentId: 'c1', platform: 'telegram', reelId: 'tg-42' });
+    const user = userEvent.setup();
+    const lead = buildMatch({ commentId: 'c1', platform: 'telegram' });
     const repo = new FakePanelRepository(buildPanelState({ MATCHES: [lead] }));
+    repo.revealIdentities.set(lead.id, { username: 'dana_t', text: 'how much?', reelId: 'tg-42' });
     renderWithProviders(<LeadsPage />, {
       repository: repo,
       route: leadRoute(lead.id),
       path: '/leads/:leadId',
     });
+
+    await user.click(await screen.findByRole('button', { name: /Reveal source/ }));
 
     expect(await screen.findByText('tg-42')).toBeInTheDocument();
     expect(screen.queryByRole('link', { name: /tg-42/ })).not.toBeInTheDocument();
@@ -661,6 +676,10 @@ describe('Campaign run', () => {
     const repo = new FakePanelRepository(
       buildPanelState({ CAMPAIGNS: [runnableCampaign({ id: 'cmp-001', goalTarget: null })] }),
     );
+    // v27: the default Free fixture caps a run at 10 leads (7 remaining). This test is
+    // about the target the drawer SENDS, not about the clamp, so put the org on a plan
+    // roomy enough that no clamp fires.
+    repo.billing = buildBilling({ tier: 'pro', leadCap: 2000, leadsUsed: 0, maxRunLeads: 2000, campaignCap: null, campaignsUsed: 1 });
     renderWithProviders(<CampaignsPage />, { repository: repo });
 
     await user.click(await screen.findByRole('button', { name: 'Run' }));
@@ -678,6 +697,10 @@ describe('Campaign run', () => {
     const repo = new FakePanelRepository(
       buildPanelState({ CAMPAIGNS: [runnableCampaign({ id: 'cmp-001', goalTarget: null })] }),
     );
+    // v27: the default Free fixture caps a run at 10 leads (7 remaining). This test is
+    // about the target the drawer SENDS, not about the clamp, so put the org on a plan
+    // roomy enough that no clamp fires.
+    repo.billing = buildBilling({ tier: 'pro', leadCap: 2000, leadsUsed: 0, maxRunLeads: 2000, campaignCap: null, campaignsUsed: 1 });
     renderWithProviders(<CampaignsPage />, { repository: repo });
 
     await user.click(await screen.findByRole('button', { name: 'Run' }));
@@ -701,6 +724,10 @@ describe('Campaign run', () => {
     const repo = new FakePanelRepository(
       buildPanelState({ CAMPAIGNS: [runnableCampaign({ id: 'cmp-001', goalTarget: 200 })] }),
     );
+    // v27: the default Free fixture caps a run at 10 leads (7 remaining). This test is
+    // about the target the drawer SENDS, not about the clamp, so put the org on a plan
+    // roomy enough that no clamp fires.
+    repo.billing = buildBilling({ tier: 'pro', leadCap: 2000, leadsUsed: 0, maxRunLeads: 2000, campaignCap: null, campaignsUsed: 1 });
     renderWithProviders(<CampaignsPage />, { repository: repo });
 
     await user.click(await screen.findByRole('button', { name: 'Run' }));
@@ -741,16 +768,16 @@ describe('Campaign run', () => {
       }),
     );
     repo.runActivity = buildRunActivity({
-      runId: 'run-001',
-      events: [buildRunEvent({ id: 1, message: 'Scanning #projectmanagement reels' })],
+      runId: 'run-001', phase: 'searching', leadsFound: 2, targetLeads: 10,
     });
     renderWithProviders(<CampaignsPage />, { repository: repo });
 
     await user.click(await screen.findByRole('button', { name: 'Running…' }));
 
-    // The narrative event renders from the polled feed, proving it's wired into
-    // the running drawer (counter rendering is covered in RunActivityFeed.test).
-    expect(await screen.findByText('Scanning #projectmanagement reels')).toBeInTheDocument();
+    // v27: the progress SCALARS render from the polled feed, proving it's wired into the
+    // running drawer. The narrative log is a superadmin surface now (B3).
+    expect(await screen.findByText('of 10 leads')).toBeInTheDocument();
+    expect(screen.getByText('Searching for posts')).toBeInTheDocument();
     expect(repo.runActivityFetches[0]).toEqual({ runId: 'run-001', afterSeq: 0 });
   });
 
@@ -763,15 +790,14 @@ describe('Campaign run', () => {
     );
     repo.nextRunStart = { runId: 'run-fleet-1', backend: 'distributed' };
     repo.runActivity = buildRunActivity({
-      runId: 'run-fleet-1',
-      events: [buildRunEvent({ id: 1, message: 'Worker scanning reels' })],
+      runId: 'run-fleet-1', phase: 'searching', leadsFound: 1, targetLeads: 10,
     });
     renderWithProviders(<CampaignsPage />, { repository: repo });
 
     await user.click(await screen.findByRole('button', { name: 'Run' }));
     await user.click(screen.getByRole('button', { name: 'Start run' }));
 
-    expect(await screen.findByText('Worker scanning reels')).toBeInTheDocument();
+    expect(await screen.findByText('of 10 leads')).toBeInTheDocument();
     // FIX 2: a live fleet run now renders in the live view (not the idle "last run"
     // block) — its activity reports finished=false, so the drawer treats it as in
     // flight and shows the fleet-managed hint instead of Stop/Pause controls.
@@ -837,14 +863,14 @@ describe('Campaign run', () => {
     repo.runActivity = buildRunActivity({
       runId: 'run-009',
       finished: true,
-      events: [buildRunEvent({ id: 5, message: 'Run completed — 2 match(es)' })],
+      phase: 'done', leadsFound: 2, leadsDelivered: 2, delivery: 'delivered', targetLeads: 10,
     });
     renderWithProviders(<CampaignsPage />, { repository: repo });
 
     // The card is idle → button says "Run"; opening it still surfaces the last run.
     await user.click(await screen.findByRole('button', { name: 'Run' }));
 
-    expect(await screen.findByText('Run completed — 2 match(es)')).toBeInTheDocument();
+    expect(await screen.findByText('of 10 leads')).toBeInTheDocument();
     expect(screen.getByText('Last run')).toBeInTheDocument();
     expect(repo.runActivityFetches[0]).toEqual({ runId: 'run-009', afterSeq: 0 });
   });

@@ -3,8 +3,8 @@
  * `engine/aizu/rbac.py`. Keep the two in lockstep: the matrices MUST match.
  * The server is the real gate; this drives UX (hiding/disabling controls) only.
  *
- * The four roles are NOT a linear rank: a `member` can edit leads (a `viewer`
- * cannot) yet cannot view campaigns/reports (a `viewer` can). Permission is an
+ * The four roles are NOT a linear rank: a `member` can edit and reveal leads (a
+ * `viewer` cannot) yet cannot view campaigns/reports (a `viewer` can). Permission is an
  * explicit action → allowed-roles matrix, never a `>=` comparison.
  */
 
@@ -26,6 +26,7 @@ export type Action =
   | 'run_campaigns'
   | 'edit_leads'
   | 'bulk_edit_leads'
+  | 'reveal_lead'
   | 'edit_settings'
   | 'toggle_integration'
   | 'manage_billing'
@@ -48,6 +49,12 @@ export const PERMISSIONS: Record<Action, readonly Role[]> = {
   run_campaigns: ['owner', 'admin'],
   edit_leads: ['owner', 'admin', 'member'],
   bulk_edit_leads: ['owner', 'admin'],
+  // v27 reveal-on-demand: un-redact ONE lead's handle + comment (POST /api/lead/reveal).
+  // Every lead is anonymized by default; this is the explicit, audited un-redaction.
+  // It is a WRITE-shaped permission even though the request itself only reads, because
+  // what it grants is disclosure, not access to a page. `viewer` is deliberately
+  // excluded: it is the read-only role, and the anonymized list is what it may read.
+  reveal_lead: ['owner', 'admin', 'member'],
   edit_settings: ['owner', 'admin'],
   toggle_integration: ['owner', 'admin'],
   manage_billing: ['owner', 'admin'],

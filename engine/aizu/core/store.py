@@ -34,12 +34,25 @@ if TYPE_CHECKING:
 
 logger = get_logger(__name__)
 
-SCHEMA_VERSION = 26  # v2: platform dimension; v3: panel ops tables; v4: campaign_briefs; v5: auth; v6: lead Kanban (status set + audit log + notes); v7: multi-tenancy (organizations + memberships role + invites; per-org settings/integrations); v8: encrypted per-(org, platform) integration secrets; v9: security audit log; v10: run_events live activity feed; v11: account warming (accounts + state_changes + campaign_accounts + account_secrets; sessions.engine_mode/account_id, health_flags.account_id, actions.account_id); v12: campaign lifecycle controls (campaign_meta.archived_at/paused_reason + fixed-cadence schedule cols: schedule_enabled/kind/dow/hour/minute/tz, next_run_at, last_scheduled_run_at, schedule_target_leads, schedule_duration_minutes); v13: billing subscriptions (Polar + provider-agnostic, soft run-cap); v14: distributed workers pool (token-based registry + presence; status DERIVED not stored); v15: superadmin plane (platform_admins + platform_admin_sessions with impersonation principal + hash-chained admin_audit_log + DB-backed admin_login_throttle); v16: platform_settings (superadmin execution_backend switch — route runs to in-process RunManager vs distributed worker fleet); v17: model comparison (superadmin-switchable LLM fan-out — matches.found_by_models + model_comparison_log; platform_settings.model_comparison_enabled); v18: Uzbek-only local STT transcript (seen_reels.transcript/transcript_lang/transcript_ms; sessions.transcriptions); v19: video-analysis tier (seen_reels.video_analyzed/video_analysis_summary; sessions.video_analyses); v20: session liveness heartbeat (sessions.last_activity_at/pid) so SessionWatchdog can detect a wedged-but-never-excepting session; v21: self-healing anti-bot cooldown (session_cooldowns: per-(campaign_id, platform) attempt counter + exponential-backoff cooldown_until for a SOFT halt, gap #1); v22: per-worker enrolment tokens (worker_enrolment_tokens: single-use, admin-minted, server-assigned org/pool scope for worker enrolment, closing gap B8 — shared bootstrap token could self-declare pool-wide capability); v23: worker launch preflight (workers.preflight_json — the box's own self-check summary, carried on register/heartbeat and surfaced in the fleet console so a box that is online-but-cannot-work says WHY, ledger F9/F10/F12); v24: Campaign Lab per-source attribution (source_stats: one row per (campaign, platform, seed) carrying navigations/yield/redirect/dead verdicts + park/ban lifecycle; seen_reels.source and matches.source so "which seed produced this lead" is finally answerable — Remedy Sheet #1/D); v25: Campaign Lab seed mining (seen_reels.author_id — the author's STABLE, seed-shaped id (YouTube UC-id, LinkedIn canonical profile URL, Telegram @channel) alongside the display name, so mining our own leads yields actionable seeds rather than strings that break on a rename — Remedy Sheet #2/A); v26: Campaign Lab negative capture (eval_candidates — a sampled, labellable record of comments the match gate REJECTED, which the engine paid a model call for and then threw away; plus matches.confidence/raw. Without it a gold set cannot be built at all: the DB held 2 accepted comments and zero rejects — Remedy Sheet #3/E)
+SCHEMA_VERSION = 27  # v2: platform dimension; v3: panel ops tables; v4: campaign_briefs; v5: auth; v6: lead Kanban (status set + audit log + notes); v7: multi-tenancy (organizations + memberships role + invites; per-org settings/integrations); v8: encrypted per-(org, platform) integration secrets; v9: security audit log; v10: run_events live activity feed; v11: account warming (accounts + state_changes + campaign_accounts + account_secrets; sessions.engine_mode/account_id, health_flags.account_id, actions.account_id); v12: campaign lifecycle controls (campaign_meta.archived_at/paused_reason + fixed-cadence schedule cols: schedule_enabled/kind/dow/hour/minute/tz, next_run_at, last_scheduled_run_at, schedule_target_leads, schedule_duration_minutes); v13: billing subscriptions (Polar + provider-agnostic, soft run-cap); v14: distributed workers pool (token-based registry + presence; status DERIVED not stored); v15: superadmin plane (platform_admins + platform_admin_sessions with impersonation principal + hash-chained admin_audit_log + DB-backed admin_login_throttle); v16: platform_settings (superadmin execution_backend switch — route runs to in-process RunManager vs distributed worker fleet); v17: model comparison (superadmin-switchable LLM fan-out — matches.found_by_models + model_comparison_log; platform_settings.model_comparison_enabled); v18: Uzbek-only local STT transcript (seen_reels.transcript/transcript_lang/transcript_ms; sessions.transcriptions); v19: video-analysis tier (seen_reels.video_analyzed/video_analysis_summary; sessions.video_analyses); v20: session liveness heartbeat (sessions.last_activity_at/pid) so SessionWatchdog can detect a wedged-but-never-excepting session; v21: self-healing anti-bot cooldown (session_cooldowns: per-(campaign_id, platform) attempt counter + exponential-backoff cooldown_until for a SOFT halt, gap #1); v22: per-worker enrolment tokens (worker_enrolment_tokens: single-use, admin-minted, server-assigned org/pool scope for worker enrolment, closing gap B8 — shared bootstrap token could self-declare pool-wide capability); v23: worker launch preflight (workers.preflight_json — the box's own self-check summary, carried on register/heartbeat and surfaced in the fleet console so a box that is online-but-cannot-work says WHY, ledger F9/F10/F12); v24: Campaign Lab per-source attribution (source_stats: one row per (campaign, platform, seed) carrying navigations/yield/redirect/dead verdicts + park/ban lifecycle; seen_reels.source and matches.source so "which seed produced this lead" is finally answerable — Remedy Sheet #1/D); v25: Campaign Lab seed mining (seen_reels.author_id — the author's STABLE, seed-shaped id (YouTube UC-id, LinkedIn canonical profile URL, Telegram @channel) alongside the display name, so mining our own leads yields actionable seeds rather than strings that break on a rename — Remedy Sheet #2/A); v26: Campaign Lab negative capture (eval_candidates — a sampled, labellable record of comments the match gate REJECTED, which the engine paid a model call for and then threw away; plus matches.confidence/raw. Without it a gold set cannot be built at all: the DB held 2 accepted comments and zero rejects — Remedy Sheet #3/E); v27: lead-intent redaction (matches.intent — the customer-facing one-line summary of what the commenter wants, so the panel can hide username/comment)
 
 
 def _now_iso() -> str:
     """UTC ISO-8601 timestamp — matches runner._now_iso for human-readable trails."""
     return datetime.now(timezone.utc).isoformat()
+
+
+def _iso_from_epoch(ts: float) -> str:
+    """Epoch seconds → the SAME UTC ISO-8601 shape `_now_iso` writes.
+
+    Every other time column in this schema is a REAL epoch; `audit_log.created_at`
+    is TEXT because that trail is meant to be readable without a converter. So a
+    range query over it needs its bound in that text shape — and it has to come
+    from this one place, because a bound built any other way (a naive datetime, a
+    `Z` suffix, a different microsecond convention) would compare lexicographically
+    against a different alphabet and silently select the wrong window.
+    """
+    return datetime.fromtimestamp(ts, timezone.utc).isoformat()
 
 # The lead Kanban pipeline (v6). Engine snake_case keys; the panel maps to labels
 # New / In Progress / Interested / Closed / Couldn't Connect / Archived.
@@ -150,6 +163,7 @@ CREATE TABLE IF NOT EXISTS matches (
     captured_at REAL NOT NULL,
     updated_at  REAL NOT NULL,
     source      TEXT,                       -- v24: seed term whose page produced this lead
+    intent      TEXT,                       -- v27: customer-facing intent summary
     PRIMARY KEY (campaign_id, platform, comment_id)
 );
 CREATE INDEX IF NOT EXISTS idx_matches_reel   ON matches(campaign_id, platform, reel_id);
@@ -484,6 +498,13 @@ CREATE TABLE IF NOT EXISTS audit_log (
     created_at    TEXT NOT NULL                  -- ISO-8601 UTC (human-readable trail)
 );
 CREATE INDEX IF NOT EXISTS idx_audit_log_org ON audit_log(org_id, id);
+-- v27: the reveal METER reads this table on every /api/lead/reveal call
+-- (COUNT(DISTINCT target) for one org's `reveal_lead` rows inside the billing
+-- period), so give that predicate its own index instead of walking the org's whole
+-- history. `target` rides along to keep the count covering. No schema bump needed:
+-- CREATE INDEX IF NOT EXISTS runs on every open, so an existing DB gains it there.
+CREATE INDEX IF NOT EXISTS idx_audit_log_action
+    ON audit_log(org_id, action, created_at, target);
 -- NOTE: org_id indexes on users/matches/campaign_meta are created in _init_schema
 -- AFTER the v7 migration, because on an upgrading DB those columns are added by
 -- ADD COLUMN (which runs after this executescript) — see _init_schema tail.
@@ -1079,6 +1100,16 @@ ADMIN_AUDIT_GENESIS_HASH = "0" * 64
 # so the concatenation is unambiguous even if the hash format ever changes.
 _ADMIN_AUDIT_SEP = "\x1e"
 
+# ----- v27 reveal metering (audit_log doubles as the meter) -----
+# The audit trail is not just a record here, it is the ENFORCEMENT SOURCE for the
+# per-period reveal allowance: `POST /api/lead/reveal` may not hand out more DISTINCT
+# leads per billing period than the plan's lead cap. Counting audit rows rather than
+# adding a counter table keeps one truth — you cannot spend allowance without leaving
+# the row an operator would go looking for, and you cannot delete the row to get the
+# allowance back (audit_log is insert-only by contract).
+REVEAL_ACTION = "reveal_lead"
+REVEAL_RESULT_REVEALED = "revealed"   # the ONLY outcome that consumes allowance
+
 
 def default_lease_ttl_sec() -> float:
     """The lease window granted on lease + each heartbeat extension (BUILD-PLAN §Phase
@@ -1454,6 +1485,12 @@ class Store:
             # unparsed reply, sampled.
             self._add_column_if_missing(c, "matches", "confidence REAL")
             self._add_column_if_missing(c, "matches", "raw TEXT")
+            # v27: the customer-facing intent line (lead-identity redaction). Additive
+            # — existing rows take NULL, which every org-facing reader renders as a
+            # neutral placeholder, NOT as a guess derived from the raw comment. Rows
+            # captured before v27 keep username/text in the DB for the superadmin
+            # plane; they simply have no intent until they are re-polled.
+            self._add_column_if_missing(c, "matches", "intent TEXT")
             # org_id indexes — created now (not in SCHEMA) because the columns may be
             # added by the v7 migration above, after executescript ran. The v24
             # source indexes are here for the same reason.
@@ -2334,6 +2371,7 @@ class Store:
                      captured_at: Optional[float] = None,
                      found_by_models: Optional[list[str]] = None,
                      source: Optional[str] = None,
+                     intent: Optional[str] = None,
                      initial_status: str = "new") -> None:
         """Insert a match, or refresh its scored fields on re-poll.
 
@@ -2346,6 +2384,12 @@ class Store:
         `found_by_models` (model-comparison fan-out, empty/None when the feature is
         off) DOES refresh on every re-poll — unlike `status`, it reflects the latest
         verdict, not a human decision.
+        `intent` (v27) is the customer-facing one-line summary of what this
+        commenter wants — the only lead text an org ever sees, since username/comment
+        are superadmin-only now. It refreshes on re-poll but COALESCEs: a re-poll that
+        derives nothing (a truncated caption, a model reply without the key) must never
+        blank an intent we already had, so a lead cannot silently lose its whole
+        customer-visible description.
         `initial_status` (gap #4's corroboration gate; default `"new"`, the
         pre-existing behaviour) is the FIRST-INSERT-ONLY status — same rule as
         `status` above, it is never applied on a re-poll of an existing row. Must
@@ -2359,7 +2403,7 @@ class Store:
                 username=username, text=text, lang=lang, score=score, reason=reason,
                 extracted=extracted, tier=tier, session_id=session_id,
                 platform=platform, captured_at=captured_at,
-                found_by_models=found_by_models, source=source,
+                found_by_models=found_by_models, source=source, intent=intent,
                 initial_status=initial_status)
         logger.debug("DB upsert_match · campaign=%s comment=%s score=%.2f tier=%s",
                      campaign_id, comment_id, score, tier)
@@ -2372,6 +2416,7 @@ class Store:
                           captured_at: Optional[float],
                           found_by_models: Optional[list[str]] = None,
                           source: Optional[str] = None,
+                          intent: Optional[str] = None,
                           initial_status: str = "new") -> None:
         """Run the match upsert on the caller's cursor `c` — the caller owns the
         transaction. Extracted from `upsert_match` so the distributed-worker ack can
@@ -2402,8 +2447,8 @@ class Store:
             """INSERT INTO matches
                  (campaign_id, org_id, platform, reel_id, comment_id, session_id,
                   username, text, lang, score, reason, extracted, status, tier,
-                  found_by_models, source, captured_at, updated_at)
-               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                  found_by_models, source, intent, captured_at, updated_at)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
                ON CONFLICT(campaign_id, platform, comment_id) DO UPDATE SET
                  org_id=COALESCE(matches.org_id, excluded.org_id),
                  reel_id=excluded.reel_id,
@@ -2416,10 +2461,11 @@ class Store:
                  tier=excluded.tier,
                  found_by_models=excluded.found_by_models,
                  source=COALESCE(matches.source, excluded.source),
+                 intent=COALESCE(excluded.intent, matches.intent),
                  updated_at=excluded.updated_at""",
             (campaign_id, org_id, platform, reel_id, comment_id, session_id, username,
              text, lang, score, reason, blob, initial_status, tier, found_by_blob,
-             (source or None), cap, now),
+             (source or None), ((intent or "").strip() or None), cap, now),
         )
 
     def matches_for_run(self, run_id: str) -> list[dict[str, Any]]:
@@ -4781,6 +4827,9 @@ class Store:
                 lang=_lead_str(lead.get("lang")),
                 score=_lead_float(lead.get("score"), 0.0) or 0.0,
                 reason=_lead_str(lead.get("reason")) or "",
+                # v27: an OLDER worker omits the key entirely — `_upsert_match_row`
+                # COALESCEs a None, so it never blanks an intent already stored.
+                intent=_lead_str(lead.get("intent")),
                 extracted=extracted,
                 tier=_lead_str(lead.get("tier")) or "local",
                 session_id=_lead_str(lead.get("sessionId") or lead.get("session_id")),
@@ -5030,6 +5079,47 @@ class Store:
             logger.warning("ack session mirror failed for job session %s",
                            session_id, exc_info=True)
 
+    def _mirror_nacked_sessions(self, job, run_id: Optional[str],
+                                leads: Optional[list[dict]]) -> None:
+        """Cloud-side session rows for leads that arrived on a NACK, so those leads are
+        actually COUNTABLE.
+
+        A fleet job's sessions live in the worker's local DB; the cloud only ever learns
+        of one through `_mirror_acked_session`, which runs on the ACK path alone. Leads
+        synced from a nack therefore carry a `session_id` with no matching cloud row —
+        and every customer-facing count (`lead_counts_by_run`, `matches_for_run`) JOINs
+        matches->sessions. Without this the leads are stored, correct, BOLA-forced, and
+        completely invisible: the campaign card still reads "0 leads" beside a real
+        spend figure. Storing a lead nobody can count is not a fix.
+
+        Best-effort and per-session isolated, exactly like the ack mirror: this is
+        observational data and a failure here must never undo a nack that is already
+        recorded. Sessions are stamped `halted` because that is what they are — the
+        attempt ended without an ack — and an existing row is left alone so a later ack
+        mirror can overwrite it with the real summary counters."""
+        if job is None or not run_id or not leads:
+            return
+        seen: list[str] = []
+        for lead in leads:
+            if not isinstance(lead, dict):
+                continue
+            sid = lead.get("sessionId") or lead.get("session_id")
+            if isinstance(sid, str) and sid and sid not in seen:
+                seen.append(sid)
+        for sid in seen:
+            try:
+                exists = self._conn.execute(
+                    "SELECT 1 FROM sessions WHERE session_id=?", (sid,)).fetchone()
+                if exists:
+                    continue
+                self.start_session(sid, job["campaign_id"], job["platform"],
+                                   run_id=run_id, org_id=job["org_id"])
+                self.end_session(sid, status="halted",
+                                 halt_reason="attempt ended without an ack")
+            except Exception:  # noqa: BLE001 — mirror is observational; never fail a nack
+                logger.warning("nack session mirror failed for session %s",
+                               sid, exc_info=True)
+
     def _close_sessions_for_run(self, c: sqlite3.Cursor, run_id: Optional[str], *,
                                 halt_reason: str, now: float) -> int:
         """Close (status='halted') every session of `run_id` still stuck 'running'
@@ -5054,6 +5144,7 @@ class Store:
     def nack_job(self, *, job_id: str, worker_id: str, reason: str,
                  retry_after_at: Optional[float] = None,
                  poison: bool = False,
+                 leads: Optional[list[dict]] = None,
                  spend: Optional[list[dict]] = None,
                  worker_db_id: Optional[str] = None,
                  now: Optional[float] = None) -> dict[str, Any]:
@@ -5068,7 +5159,21 @@ class Store:
         the local spend rows nor any cloud record of them), so the nack path must roll
         spend up exactly like the ack path or up to DEFAULT_JOB_MAX_ATTEMPTS attempts'
         worth of spend goes unaccounted. Nothing is recorded on the 'ignored' outcome —
-        that row is not this worker's to write against."""
+        that row is not this worker's to write against.
+
+        `leads` is spend's sibling and lands here for the SAME argument, which was
+        simply never made for leads: a job that exhausts its attempts NEVER acks, and
+        the ack body was the only place leads travelled — so a dead-lettered run shipped
+        its spend and stranded its whole harvest on the worker's disk. Not an edge case:
+        a run that hits its wall-clock cap before its lead target dead-letters BY
+        DESIGN, so the ordinary outcome billed the customer and delivered nothing.
+        Written in the SAME transaction as the jobs mutation (an interrupted nack leaves
+        neither), FORCED under the job's own campaign by `_sync_acked_leads` (BOLA), and
+        idempotent via the matches PK — a run that nacks with leads and later acks with
+        the same leads upserts rather than duplicating, and a human-set `status`
+        survives because it is written on first insert only. Recorded on 'requeued' and
+        'dead_lettered', NEVER on 'ignored' — a late nack from a superseded attempt must
+        not write leads into a run that already finished."""
         now_v = now if now is not None else time.time()
         # See ack_job: warm the local database identity outside the transaction.
         if spend and worker_db_id:
@@ -5104,30 +5209,43 @@ class Store:
                 self._close_sessions_for_run(
                     c, run_id, now=now_v,
                     halt_reason="job dead-lettered: worker never closed session")
+                self._sync_acked_leads(c, row, leads)
                 self._sync_acked_spend(c, row, spend, worker_db_id=worker_db_id)
-                return {"outcome": "dead_lettered", "attempts": attempts,
-                        "retryAfterAt": None}
-            ra = retry_after_at if retry_after_at is not None \
-                else now_v + nack_backoff_sec(attempts)
-            # Persist the reason on the REQUEUE branch too (B6): without it a job that
-            # fails its CDP probe leaves no record of why anywhere but the worker box's
-            # local log, and the panel renders a blank "Finished on the fleet". `result`
-            # is diagnostic only — `status`/`dead_lettered_at` remain the sole terminal
-            # signal, and a later ack_job overwrites this blob with the run summary.
-            c.execute(
-                """UPDATE jobs
-                      SET status='queued', attempts=?, retry_after_at=?, result=?,
-                          leased_by=NULL, lease_expires_at=NULL, updated_at=?
-                    WHERE id=?""",
-                (attempts, ra,
-                 json.dumps({"reason": reason, "poison": poison, "requeued": True}),
-                 now_v, job_id),
-            )
-            self._close_sessions_for_run(
-                c, run_id, now=now_v,
-                halt_reason="job requeued: prior attempt session abandoned")
-            self._sync_acked_spend(c, row, spend, worker_db_id=worker_db_id)
-            return {"outcome": "requeued", "attempts": attempts, "retryAfterAt": ra}
+                outcome = {"outcome": "dead_lettered", "attempts": attempts,
+                           "retryAfterAt": None,
+                           "leadsSynced": len(leads or [])}
+            else:
+                ra = retry_after_at if retry_after_at is not None \
+                    else now_v + nack_backoff_sec(attempts)
+                # Persist the reason on the REQUEUE branch too (B6): without it a job that
+                # fails its CDP probe leaves no record of why anywhere but the worker box's
+                # local log, and the panel renders a blank "Finished on the fleet". `result`
+                # is diagnostic only — `status`/`dead_lettered_at` remain the sole terminal
+                # signal, and a later ack_job overwrites this blob with the run summary.
+                c.execute(
+                    """UPDATE jobs
+                          SET status='queued', attempts=?, retry_after_at=?, result=?,
+                              leased_by=NULL, lease_expires_at=NULL, updated_at=?
+                        WHERE id=?""",
+                    (attempts, ra,
+                     json.dumps({"reason": reason, "poison": poison, "requeued": True}),
+                     now_v, job_id),
+                )
+                self._close_sessions_for_run(
+                    c, run_id, now=now_v,
+                    halt_reason="job requeued: prior attempt session abandoned")
+                self._sync_acked_leads(c, row, leads)
+                self._sync_acked_spend(c, row, spend, worker_db_id=worker_db_id)
+                outcome = {"outcome": "requeued", "attempts": attempts,
+                           "retryAfterAt": ra, "leadsSynced": len(leads or [])}
+        # OUTSIDE the tx, exactly like ack_job's mirror. Without a cloud `sessions` row
+        # the leads we just wrote are invisible: `lead_counts_by_run` and
+        # `matches_for_run` both JOIN matches->sessions on session_id, so a nack-synced
+        # lead with no mirrored session would store fine and still render "0 leads" on
+        # the campaign card — the exact symptom this change exists to remove.
+        # Observational: a mirror failure must never undo a recorded nack.
+        self._mirror_nacked_sessions(row, run_id, leads)
+        return outcome
 
     def get_job(self, job_id: str) -> Optional[dict[str, Any]]:
         """Read one job by id (read-only). Returns the decoded row or None."""
@@ -6192,6 +6310,74 @@ class Store:
                  "action": r["action"], "target": r["target"], "detail": r["detail"],
                  "createdAt": r["created_at"]} for r in rows]
 
+    # ----- v27 reveal metering (reads of the same insert-only audit_log) -----
+    @staticmethod
+    def reveal_audit_detail(campaign_id: str, platform: str, result: str) -> str:
+        """The `detail` blob for one `reveal_lead` audit row.
+
+        The WRITER and the meter's READER are the same line of code on purpose. The
+        outcome lives inside a JSON TEXT column, so the count below has to match on
+        it with LIKE; deriving the needle from this very `json.dumps` call is what
+        stops a formatting change here (separators, key order) from silently turning
+        the meter into a no-op that lets every org reveal without limit.
+        """
+        return json.dumps({"campaignId": campaign_id, "platform": platform,
+                           "result": result})
+
+    @staticmethod
+    def _revealed_needle() -> str:
+        """The LIKE pattern matching a `revealed` outcome inside a detail blob.
+
+        `json.dumps({...})[1:-1]` is the encoded `"result": "revealed"` pair with the
+        braces stripped, so it is literally a substring of every row this method must
+        count. Safe against a forged campaign id: JSON escapes an embedded quote as
+        `\\"`, so an attacker-controlled string can never produce the UNESCAPED quote
+        this needle starts with, and only the real key position can match.
+        """
+        return "%" + json.dumps({"result": REVEAL_RESULT_REVEALED})[1:-1] + "%"
+
+    def count_reveals_this_period(self, org_id: int, since: float) -> int:
+        """DISTINCT leads this org has revealed since the period anchor.
+
+        DISTINCT on `target` (the composite lead uid) — NEVER the number of calls.
+        Revealed data is session-local and never cached client-side (that is what
+        keeps "anonymized by default" from decaying into "anonymized until first
+        viewed"), so a drawer re-reveals every time it is reopened. Metering calls
+        would burn a Free org's ten-lead allowance on ONE lead opened ten times.
+
+        Only `revealed` rows count: a denial, a 404 and a refusal at the cap are all
+        audited too, and none of them handed out an identity.
+
+        `created_at` is ISO-8601 UTC TEXT (see `_now_iso`), so the period anchor is
+        formatted the same way and compared lexicographically — which is exactly
+        chronological for a fixed-offset ISO string.
+        """
+        row = self._conn.execute(
+            """SELECT COUNT(DISTINCT target) FROM audit_log
+                WHERE org_id=? AND action=? AND created_at>=? AND detail LIKE ?""",
+            (org_id, REVEAL_ACTION, _iso_from_epoch(since),
+             self._revealed_needle())).fetchone()
+        return int(row[0]) if row else 0
+
+    def lead_revealed_this_period(self, org_id: int, target: str,
+                                  since: float) -> bool:
+        """Has THIS lead already been revealed in the current period?
+
+        The free-re-reveal check, and the reason the cap counts distinct leads at all:
+        a lead whose identity this org has already been given costs nothing to hand
+        over again — the disclosure already happened, and refusing the second look
+        would only punish an operator for closing a drawer. Same predicate as
+        `count_reveals_this_period`, narrowed to one target, so the two can never
+        disagree about what "already revealed" means.
+        """
+        row = self._conn.execute(
+            """SELECT 1 FROM audit_log
+                WHERE org_id=? AND action=? AND created_at>=? AND target=?
+                  AND detail LIKE ? LIMIT 1""",
+            (org_id, REVEAL_ACTION, _iso_from_epoch(since), target,
+             self._revealed_needle())).fetchone()
+        return row is not None
+
     # ----- v10 run activity feed -----
     def emit_run_event(self, run_id: str, seq: int, phase: str, level: str,
                        message: str, *, campaign_id: Optional[str] = None,
@@ -6301,6 +6487,92 @@ class Store:
             args.append(org_id)
         q += " ORDER BY started_at DESC"
         return [dict(r) for r in self._conn.execute(q, args).fetchall()]
+
+    # ----- v27: per-run lead numbers for a LIST of runs (the superadmin picker) -----
+    # The activity endpoint answers "how many leads did THIS run find/deliver" for one
+    # run at a time, out of two sources that disagree on purpose (see server.py's
+    # _aggregate_run_progress). The picker needs the same pair for up to fifty runs at
+    # once, so both are answered here in ONE query each rather than as a per-run N+1.
+
+    def match_event_details_by_run(
+            self, org_id: int, run_ids: Sequence[str]) -> dict[str, list[str]]:
+        """run_id -> the raw `detail` blobs of that run's per-match events.
+
+        The narrow slice `phase='comments' AND level='success'` is the only one the
+        lead estimate reads, and the blobs come back UNDECODED: this is a store read,
+        and the dedupe rule that turns them into a number lives in exactly one place
+        in server.py. Returning parsed numbers here would be a second copy of it.
+
+        `org_id` is a BOLA guard on the event's OWN column, never a joined one. Empty
+        `run_ids` short-circuits — SQLite would otherwise see `IN ()`, a syntax error.
+        """
+        ids = [r for r in run_ids if r]
+        if not ids:
+            return {}
+        out: dict[str, list[str]] = {}
+        # Chunked so a long picker page can never blow SQLITE_MAX_VARIABLE_NUMBER
+        # (999 on older builds) — the org id costs one of the slots in each chunk.
+        for start in range(0, len(ids), 500):
+            chunk = ids[start:start + 500]
+            placeholders = ",".join("?" * len(chunk))
+            rows = self._conn.execute(
+                f"""SELECT run_id, detail FROM run_events
+                     WHERE org_id=? AND run_id IN ({placeholders})
+                       AND phase='comments' AND level='success'""",
+                [org_id, *chunk]).fetchall()
+            for r in rows:
+                out.setdefault(r["run_id"], []).append(r["detail"])
+        return out
+
+    def run_event_runs(self, org_id: int, limit: int = 50) -> list[dict[str, Any]]:
+        """The org's runs as the EVENT feed knows them, newest activity first.
+
+        Sessions are the durable record of a run — but a fleet run mirrors its sessions
+        into the cloud at ACK, and a job that dead-lettered never acked. Its events are
+        here (they land on the ~45s heartbeat) while it has no session row at all, so a
+        picker built only from `sessions` cannot list the very run whose log is the only
+        surviving account of what it did.
+
+        `campaignId` is MAX() rather than a group key because a batch run spans several
+        campaigns and aggregates skip NULLs, so this prefers a real id over the NULL an
+        unregistered campaign's events carry. `sessions` counts DISTINCT session ids for
+        the same reason the run folder does: one run id spans many.
+        """
+        rows = self._conn.execute(
+            """SELECT run_id AS run_id,
+                      MAX(campaign_id) AS campaign_id,
+                      MIN(created_at) AS first_at,
+                      MAX(created_at) AS last_at,
+                      COUNT(DISTINCT session_id) AS sessions
+                 FROM run_events
+                WHERE org_id=?
+                GROUP BY run_id
+                ORDER BY last_at DESC
+                LIMIT ?""",
+            (org_id, limit)).fetchall()
+        return [{"runId": r["run_id"], "campaignId": r["campaign_id"],
+                 "firstAt": r["first_at"], "lastAt": r["last_at"],
+                 "sessions": int(r["sessions"] or 0)} for r in rows]
+
+    def lead_counts_by_run(self, org_id: int) -> dict[str, int]:
+        """run_id -> how many `matches` rows the org actually HOLDS for that run.
+
+        `leadsDelivered`, in bulk. Counts real rows joined through `sessions` exactly
+        the way `matches_for_run` does — deliberately NOT `sessions.matches`, which is
+        a per-session progress counter that overshoots (it increments once per POST
+        after a whole comment batch) and is therefore not a row count at all.
+
+        A run whose job dead-lettered never acked, so its harvest is still in the
+        WORKER's sqlite and it simply has no rows here: absent from this map, which
+        the caller reads as the 0 it truly is.
+        """
+        rows = self._conn.execute(
+            """SELECT s.run_id AS run_id, COUNT(*) AS n
+                 FROM matches m JOIN sessions s ON m.session_id = s.session_id
+                WHERE s.org_id=? AND s.run_id IS NOT NULL
+                GROUP BY s.run_id""",
+            (org_id,)).fetchall()
+        return {r["run_id"]: int(r["n"]) for r in rows}
 
     def run_events_open_flags(self, run_id: str,
                               org_id: Optional[int] = None) -> list[dict[str, Any]]:

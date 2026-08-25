@@ -1,5 +1,6 @@
 import { Radio } from 'lucide-react';
 import type { TickerEntry } from '@/shared/types/domain';
+import { LEAD_INTENT_PLACEHOLDER } from '@/shared/selectors/leads';
 import { CardBody, CardHeader } from '@/shared/ui/Card';
 import { cn } from '@/shared/lib/cn';
 import { formatScore } from '@/shared/lib/formatters';
@@ -15,7 +16,14 @@ interface LiveTickerTileProps {
 /** Number of rows before the list auto-scrolls as a marquee. */
 const MARQUEE_THRESHOLD = 5;
 
-/** Most-recent captured leads, newest first — username, platform, score, time. */
+/**
+ * Most-recent captured leads, newest first — intent, platform, score, time.
+ *
+ * v27: the ticker is a customer-facing surface, so it names a lead by what the person
+ * WANTS, never by who they are. A `TickerEntry` is not a `Match`, so it cannot use
+ * `leadIntentLabel`; it shares the placeholder constant so the copy is identical to
+ * the table, the board card and the drawer.
+ */
 export function LiveTickerTile({ entries, isLive = false }: LiveTickerTileProps) {
   const reduced = usePrefersReducedMotion();
   const marquee = !reduced && entries.length >= MARQUEE_THRESHOLD;
@@ -54,7 +62,15 @@ export function LiveTickerTile({ entries, isLive = false }: LiveTickerTileProps)
                     aria-hidden
                   />
                   <div className="min-w-0 flex-1">
-                    <div className="truncate text-[13px] font-medium text-text">@{entry.username}</div>
+                    <div
+                      className={cn(
+                        'truncate text-[13px] font-medium text-text',
+                        entry.intent.trim() === '' && 'font-normal italic text-text-faint',
+                      )}
+                      title={entry.intent.trim() === '' ? undefined : entry.intent}
+                    >
+                      {entry.intent.trim() === '' ? LEAD_INTENT_PLACEHOLDER : entry.intent}
+                    </div>
                     <div className="text-[11px] text-text-faint">
                       {entry.platform} · {entry.capturedAt.time}
                     </div>

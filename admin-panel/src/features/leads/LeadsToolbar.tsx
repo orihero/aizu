@@ -45,7 +45,9 @@ export function LeadsToolbar({
           type="search"
           value={filters.query}
           onChange={(event) => { onQueryChange(event.target.value); }}
-          placeholder="Search name, comment, or details…"
+          // v27: there is no name and no comment to search — the bridge's `q` looks at
+          // intent + reason + the extracted details, and the copy says so.
+          placeholder="Search intent, reason, or details…"
           className="w-full min-w-40 bg-transparent text-xs outline-none placeholder:text-text-faint"
         />
       </label>

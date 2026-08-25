@@ -13,8 +13,9 @@ Capability summary (see the approved plan):
   - owner  : everything; the only role that may edit/remove admins or transfer ownership.
   - admin  : campaigns + leads + team + settings; may invite anyone (incl. admins) but
              may NOT edit/remove existing admins.
-  - member : leads only (view + edit), nothing else.
-  - viewer : read-only — dashboard, campaigns, leads, reports. No writes, no settings.
+  - member : leads only (view + edit + reveal), nothing else.
+  - viewer : read-only — dashboard, campaigns, leads, reports. No writes, no settings,
+             and no lead reveal (it sees the anonymized list, never the raw identity).
 """
 from __future__ import annotations
 
@@ -45,6 +46,12 @@ PERMISSIONS: dict[str, frozenset[str]] = {
     "run_campaigns":      frozenset({OWNER, ADMIN}),
     "edit_leads":         frozenset({OWNER, ADMIN, MEMBER}),  # single-lead status change + notes
     "bulk_edit_leads":    frozenset({OWNER, ADMIN}),           # bulk status change (incl. archive) — owner/admin only
+    # v27 reveal-on-demand: un-redact ONE lead's handle + comment (POST /api/lead/reveal).
+    # Every lead is anonymized by default; this is the explicit, audited un-redaction.
+    # It is a WRITE-shaped permission even though the request itself only reads, because
+    # what it grants is disclosure, not access to a page. `viewer` is deliberately
+    # excluded: it is the read-only role, and the anonymized list is what it may read.
+    "reveal_lead":        frozenset({OWNER, ADMIN, MEMBER}),
     "edit_settings":      frozenset({OWNER, ADMIN}),
     "toggle_integration": frozenset({OWNER, ADMIN}),
     "manage_billing":     frozenset({OWNER, ADMIN}),  # start checkout / open billing portal

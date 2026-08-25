@@ -17,6 +17,7 @@ EXPECTED = {
     "run_campaigns":      {"owner", "admin"},
     "edit_leads":         {"owner", "admin", "member"},
     "bulk_edit_leads":    {"owner", "admin"},
+    "reveal_lead":        {"owner", "admin", "member"},
     "edit_settings":      {"owner", "admin"},
     "toggle_integration": {"owner", "admin"},
     "manage_billing":     {"owner", "admin"},
@@ -43,7 +44,7 @@ def test_unknown_role_or_action_denied():
 
 
 def test_member_is_strictly_leads_only():
-    leads = {"view_leads", "edit_leads"}
+    leads = {"view_leads", "edit_leads", "reveal_lead"}
     for action in rbac.ACTIONS:
         assert rbac.can("member", action) is (action in leads)
 

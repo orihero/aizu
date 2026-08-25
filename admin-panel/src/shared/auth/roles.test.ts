@@ -24,6 +24,7 @@ const EXPECTED: Record<Action, Role[]> = {
   run_campaigns: ['owner', 'admin'],
   edit_leads: ['owner', 'admin', 'member'],
   bulk_edit_leads: ['owner', 'admin'],
+  reveal_lead: ['owner', 'admin', 'member'],
   edit_settings: ['owner', 'admin'],
   toggle_integration: ['owner', 'admin'],
   manage_billing: ['owner', 'admin'],
@@ -49,10 +50,22 @@ describe('can() matrix', () => {
   });
 
   test('member is strictly leads-only', () => {
+    const MEMBER_ACTIONS: Action[] = ['view_leads', 'edit_leads', 'reveal_lead'];
     (Object.keys(EXPECTED) as Action[]).forEach((action) => {
-      const leadsOnly = action === 'view_leads' || action === 'edit_leads';
-      expect(can('member', action)).toBe(leadsOnly);
+      expect(can('member', action)).toBe(MEMBER_ACTIONS.includes(action));
     });
+  });
+
+  // v27 reveal-on-demand: the redaction's whole point is that identity is disclosed
+  // only by an explicit, audited action — and `viewer` is the role that may read the
+  // anonymized list but never un-redact it. The server refuses regardless (UI gating
+  // is UX only), but this mirror must not drift from engine/aizu/rbac.py.
+  test('viewer may read leads but never reveal one', () => {
+    expect(can('viewer', 'view_leads')).toBe(true);
+    expect(can('viewer', 'reveal_lead')).toBe(false);
+    expect(can('member', 'reveal_lead')).toBe(true);
+    expect(can('owner', 'reveal_lead')).toBe(true);
+    expect(can('admin', 'reveal_lead')).toBe(true);
   });
 
   test('viewer can read but never write or see settings/team', () => {

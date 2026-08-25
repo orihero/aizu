@@ -4,6 +4,10 @@ import { AppProviders } from '@/app/providers';
 import type { FakePanelRepository } from '@/test/fakePanelRepository';
 import type {
   AdminOrg,
+  AdminOrgLead,
+  AdminOrgRun,
+  AdminRunActivity,
+  AdminRunEvent,
   AdminSession,
   AuditEntry,
   ControlFlag,
@@ -150,6 +154,76 @@ export function buildAuditEntry(overrides: Partial<AuditEntry> = {}): AuditEntry
     reason: 'support ticket 91',
     impersonationStart: 1_700_000_300,
     impersonationEnd: null,
+    ...overrides,
+  };
+}
+
+export function buildAdminOrgRun(overrides: Partial<AdminOrgRun> = {}): AdminOrgRun {
+  return {
+    runId: 'run-abc',
+    campaignId: 'c-acme',
+    campaignName: 'Acme sneakers',
+    mode: 'live',
+    status: 'done',
+    platforms: ['instagram'],
+    startedAt: 1_700_000_000,
+    finishedAt: 1_700_000_600,
+    sessions: 2,
+    leads: 5,
+    ...overrides,
+  };
+}
+
+export function buildAdminRunEvent(overrides: Partial<AdminRunEvent> = {}): AdminRunEvent {
+  return {
+    id: 1,
+    seq: 1,
+    campaignId: 'c-acme',
+    sessionId: 'sess-1',
+    phase: 'comments',
+    level: 'success',
+    message: 'Lead: @buyer_42 (score 0.91)',
+    detail: '{"username": "buyer_42", "score": 0.91, "tier": "hot", "reelId": "r-1"}',
+    createdAt: 1_700_000_100,
+    platform: 'instagram',
+    ...overrides,
+  };
+}
+
+export function buildAdminRunActivity(
+  overrides: Partial<AdminRunActivity> = {},
+): AdminRunActivity {
+  const events = overrides.events ?? [buildAdminRunEvent()];
+  return {
+    runId: 'run-abc',
+    finished: true,
+    counters: {
+      reelsSeen: 12, relevancePasses: 5, commentsScored: 40,
+      matches: 3, spendUsd: 0.42, likes: 2, follows: 1,
+    },
+    flags: [],
+    // Default the cursor to the last event's id, which is what the bridge echoes back —
+    // a fixture whose cursor lags its own rows would make the drain loop re-request them.
+    cursor: events.at(-1)?.id ?? 0,
+    ...overrides,
+    events,
+  };
+}
+
+export function buildAdminOrgLead(overrides: Partial<AdminOrgLead> = {}): AdminOrgLead {
+  return {
+    commentId: 'cm-1',
+    campaignId: 'c-acme',
+    platform: 'instagram',
+    username: 'buyer_42',
+    text: 'do you have these in size 42? dm me',
+    intent: 'Wants red sneakers in size 42, asking on a running-shoes post',
+    capturedAt: 1_700_000_100,
+    status: 'new',
+    score: 0.91,
+    reason: 'explicit purchase intent',
+    extracted: true,
+    tier: 'hot',
     ...overrides,
   };
 }

@@ -40,6 +40,8 @@ import type {
   runEventLevelSchema,
   runEventSchema,
   runFlagSchema,
+  runPhaseSchema,
+  deliverySchema,
   fleetJobSchema,
   runModeSchema,
   runRecordSchema,
@@ -102,6 +104,13 @@ export type ChannelEntry = z.infer<typeof channelEntrySchema>;
 export type Session = z.infer<typeof sessionSchema>;
 export type Reel = z.infer<typeof reelSchema>;
 export type Match = z.infer<typeof matchSchema>;
+/**
+ * How a run's harvest reconciled with what reached the account (E.5/E.7). Read this,
+ * not a `leadsFound > leadsDelivered` comparison you re-derive: the bridge computes it
+ * in one place so a run drawer and a campaign card cannot disagree. `pending` is ack
+ * lag on a live fleet run, NOT a fault; only `not_delivered` is the honest-bad state.
+ */
+export type Delivery = z.infer<typeof deliverySchema>;
 export type EscalationEntry = z.infer<typeof escalationEntrySchema>;
 export type Alert = z.infer<typeof alertSchema>;
 export type Health = z.infer<typeof healthSchema>;
@@ -177,7 +186,10 @@ export interface LeadsQuery {
   readonly platform?: string;
   /** A campaign id to scope the whole page to, or absent for all campaigns. */
   readonly campaign?: string;
-  readonly sort?: 'capturedAt' | 'score' | 'username' | 'platform' | 'status';
+  // v27: `username` is gone as a sort key — an org-facing lead has no handle to sort
+  // on. `intent` replaces it (the server's `_LEAD_SORT_KEYS` sorts on the same field
+  // the column now shows). `q` searches intent + reason + extracted values.
+  readonly sort?: 'capturedAt' | 'score' | 'intent' | 'platform' | 'status';
   readonly dir?: 'asc' | 'desc';
 }
 
@@ -194,6 +206,8 @@ export type RunEvent = z.infer<typeof runEventSchema>;
 export type RunCounters = z.infer<typeof runCountersSchema>;
 export type RunFlag = z.infer<typeof runFlagSchema>;
 export type FleetJob = z.infer<typeof fleetJobSchema>;
+/** The customer-safe word for what a run is doing (v27: no narrative log). */
+export type RunPhase = z.infer<typeof runPhaseSchema>;
 export type RunActivity = z.infer<typeof runActivitySchema>;
 
 export type DashboardPeriodKey = 'today' | 'week' | 'month';
@@ -238,6 +252,42 @@ export interface StatusWriteRequest {
   // Reason note — required by the server when moving into a terminal status
   // (closed/couldnt_connect/archived); recorded on the status-change audit row.
   readonly note?: string;
+}
+
+/* ---- v27 reveal-on-demand (POST /api/lead/reveal) ---- */
+
+/**
+ * Identifies the ONE lead to un-redact. There is deliberately no bulk shape and no
+ * list variant: a bulk path would quietly restore the export leak the redaction closed.
+ * The org is resolved server-side from the session, never from this body (BOLA) — an
+ * unowned lead is a 404, not a 403, so it is not an existence oracle.
+ */
+export interface RevealLeadInput {
+  readonly campaignId: string;
+  readonly platform: string;
+  readonly commentId: string;
+}
+
+/**
+ * One lead's raw identity, returned by the audited reveal. `text` (the comment) rides
+ * along on purpose: it is already visible on the post the reveal unlocks, and handing
+ * back a handle while withholding the words the person wrote is incoherent, not safer.
+ *
+ * SESSION-LOCAL AND NEVER PERSISTED. Do not fold this into a lead record, a React Query
+ * cache, an export row, or localStorage: reopening the drawer must re-reveal (and
+ * re-audit), or "anonymized by default" decays into "anonymized until first viewed".
+ */
+export interface RevealedLead {
+  /** The composite lead uid the server resolved, echoed back with `commentId` and
+   *  `platform` so the drawer can check the answer is for the lead it asked about
+   *  before painting a handle onto the screen. */
+  readonly id: string;
+  readonly commentId: string;
+  readonly platform: string;
+  readonly username: string;
+  readonly text: string;
+  /** The post/reel the comment sits on — the deep link only a revealed lead gets. */
+  readonly reelId: string;
 }
 
 /* ---- v6 lead-note write shapes (POST /api/lead/note) ---- */
@@ -407,10 +457,21 @@ export interface RunInput {
 
 /** What POST /api/run returns once accepted. `runId` is set for a fleet-routed live run
  * (so the drawer can poll its live activity feed); in-process runs surface via the RUN
- * block instead and leave it null. */
+ * block instead and leave it null.
+ *
+ * v27 plan bounds: the server clamps the requested lead target and echoes the resolved
+ * numbers back, so the drawer can say what it actually started rather than what was
+ * asked for. Optional because a pre-v27 bridge omits them — and because `targetLeads`
+ * is a SOFT bound (E.6): the run can overshoot it, so never render it as a guarantee. */
 export interface RunStartResult {
   readonly runId: string | null;
   readonly backend: string | null;
+  /** The clamped target this run actually started with. */
+  readonly targetLeads?: number | null;
+  /** The largest target this plan allows on one run (the resolved period cap). */
+  readonly maxRunLeads?: number | null;
+  /** Leads still inside the period allowance at start time. */
+  readonly leadsRemaining?: number | null;
 }
 
 export interface WorkspaceSettingsInput {

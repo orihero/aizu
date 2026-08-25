@@ -1,3 +1,4 @@
+import json
 import os
 import sqlite3
 import tempfile
@@ -902,3 +903,220 @@ def test_find_stalled_sessions_ignores_non_running_rows():
         c.execute("UPDATE sessions SET last_activity_at=? WHERE session_id=?",
                   (now - 1000, "s1"))
     assert store.find_stalled_sessions(stall_timeout_s=180, now=now) == []
+
+
+# ----- v27: matches.intent ------------------------------------------------------
+
+def test_upsert_match_intent_survives_a_repoll_that_derives_nothing():
+    """Since v27 the intent is the ONLY lead prose an org sees, so a re-poll that
+    derives nothing must never blank it — unlike `reason`, which always takes the
+    latest verdict. `derive_intent`'s documented last resort is `""`, and SQL `''`
+    is NOT NULL, so a bare COALESCE would happily overwrite a good stored line:
+    empty/whitespace has to bind as NULL for the COALESCE to actually protect it."""
+    store, _ = fresh_store()
+    kw = dict(campaign_id="c1", reel_id="r1", comment_id="m1", username="u",
+              text="t", lang="en", extracted=None, tier="local")
+    store.upsert_match(score=0.9, reason="first",
+                       intent="Wants red sneakers, size 42", **kw)
+    assert store.matches("c1")[0]["intent"] == "Wants red sneakers, size 42"
+
+    # A re-poll with no intent at all: the intent survives, the reason refreshes.
+    store.upsert_match(score=0.5, reason="second", **kw)
+    row = store.matches("c1")[0]
+    assert row["intent"] == "Wants red sneakers, size 42"
+    assert row["reason"] == "second"
+
+    # derive_intent's last-resort "" (and a whitespace-only line) must not clobber.
+    store.upsert_match(score=0.5, reason="third", intent="", **kw)
+    assert store.matches("c1")[0]["intent"] == "Wants red sneakers, size 42"
+    store.upsert_match(score=0.5, reason="fourth", intent="   ", **kw)
+    assert store.matches("c1")[0]["intent"] == "Wants red sneakers, size 42"
+
+    # A fresh, non-empty intent DOES win — the rule is "never blank", not "never change".
+    store.upsert_match(score=0.5, reason="fifth", intent="Wants size 43", **kw)
+    assert store.matches("c1")[0]["intent"] == "Wants size 43"
+
+
+def test_v27_intent_column_is_added_to_a_legacy_db():
+    """A pre-v27 DB gains `matches.intent` on open and its existing rows take NULL,
+    which org-facing readers render as a neutral placeholder rather than a guess
+    derived from the raw comment."""
+    store, path = fresh_store()
+    # Seed the row through the normal path first, so it carries every default a real
+    # pre-v27 row has (captured_at, status, ...) rather than a hand-built stub.
+    store.upsert_match(campaign_id="c1", reel_id="r1", comment_id="old-1",
+                       username="u", text="t", lang="en", score=0.9, reason="x",
+                       extracted=None, tier="local", platform="instagram")
+    store.close()
+    conn = sqlite3.connect(path)
+    # Simulate a v26 database: drop the column and wind the recorded version back.
+    conn.execute("ALTER TABLE matches DROP COLUMN intent")
+    conn.execute("UPDATE meta SET value='26' WHERE key='schema_version'")
+    conn.commit()
+    conn.close()
+
+    store = Store(path)
+    try:
+        cols = {r[1] for r in store._conn.execute("PRAGMA table_info(matches)")}
+        assert "intent" in cols
+        assert store._conn.execute(
+            "SELECT value FROM meta WHERE key='schema_version'").fetchone()[0] \
+            == str(SCHEMA_VERSION)
+        # The legacy row survives the migration and reads as "not captured".
+        legacy = store.matches("c1")[0]
+        assert legacy["comment_id"] == "old-1" and legacy["intent"] is None
+        # ...and it can take an intent on the next re-poll.
+        store.upsert_match(campaign_id="c1", reel_id="r1", comment_id="old-1",
+                           username="u", text="t", lang="en", score=0.9, reason="x",
+                           extracted=None, tier="local", platform="instagram",
+                           intent="Wants a quote")
+        assert store.matches("c1")[0]["intent"] == "Wants a quote"
+    finally:
+        store.close()
+
+
+# --- v27 reveal metering (the audit trail IS the meter) ----------------------
+
+def _reveal_row(store, org_id, campaign_id, platform, comment_id, result,
+                *, actor=1):
+    """One `reveal_lead` audit row, written exactly the way the endpoint writes it."""
+    store.record_audit(org_id, actor, "reveal_lead",
+                       target=f"{campaign_id}|{platform}|{comment_id}",
+                       detail=Store.reveal_audit_detail(campaign_id, platform, result))
+
+
+def test_reveal_meter_counts_distinct_leads_not_calls():
+    """The drawer never caches a revealed lead, so it re-reveals on every open. A
+    call-counting meter would spend a Free org's ten-lead month on one lead."""
+    store, _ = fresh_store()
+    try:
+        for _ in range(5):
+            _reveal_row(store, 1, "c1", "instagram", "cm1", "revealed")
+        _reveal_row(store, 1, "c1", "instagram", "cm2", "revealed")
+        assert store.count_reveals_this_period(1, 0.0) == 2
+    finally:
+        store.close()
+
+
+def test_reveal_meter_ignores_every_outcome_but_revealed():
+    """A denial, a 404 and a refusal at the cap are all audited — and none of them
+    handed out an identity, so none may cost allowance. Otherwise anyone could burn
+    an org's month with noise, and the cap would meter its own refusals."""
+    store, _ = fresh_store()
+    try:
+        for result in ("denied", "not_found", "capped"):
+            _reveal_row(store, 1, "c1", "instagram", f"cm-{result}", result)
+        assert store.count_reveals_this_period(1, 0.0) == 0
+        assert store.lead_revealed_this_period(1, "c1|instagram|cm-denied", 0.0) is False
+    finally:
+        store.close()
+
+
+def test_reveal_meter_is_org_scoped_and_period_scoped():
+    store, _ = fresh_store()
+    try:
+        _reveal_row(store, 1, "c1", "instagram", "cm1", "revealed")
+        _reveal_row(store, 2, "c9", "instagram", "cm9", "revealed")
+        assert store.count_reveals_this_period(1, 0.0) == 1     # not the other org's
+        # A window that starts in the future contains nothing: the period anchor is
+        # what makes the allowance renew rather than accumulate forever.
+        assert store.count_reveals_this_period(1, time.time() + 3600) == 0
+    finally:
+        store.close()
+
+
+def test_a_forged_campaign_id_cannot_fake_a_revealed_outcome():
+    """The outcome lives inside a JSON TEXT column, so the meter matches it with LIKE
+    — and the campaign id in the same blob is attacker-controlled. JSON escapes an
+    embedded quote, so a value that spells out the needle still cannot produce the
+    UNESCAPED quote it starts with."""
+    store, _ = fresh_store()
+    try:
+        forged = 'x", "result": "revealed'
+        _reveal_row(store, 1, forged, "instagram", "cm1", "denied")
+        assert store.count_reveals_this_period(1, 0.0) == 0
+    finally:
+        store.close()
+
+
+def test_lead_revealed_this_period_is_the_free_re_reveal_check():
+    store, _ = fresh_store()
+    try:
+        _reveal_row(store, 1, "c1", "instagram", "cm1", "revealed")
+        assert store.lead_revealed_this_period(1, "c1|instagram|cm1", 0.0) is True
+        assert store.lead_revealed_this_period(1, "c1|instagram|cm2", 0.0) is False
+        # Same predicate as the counter, so the two can never disagree about a lead.
+        assert store.lead_revealed_this_period(2, "c1|instagram|cm1", 0.0) is False
+    finally:
+        store.close()
+
+
+# --- v27 per-run lead numbers in bulk (the superadmin run picker) ------------
+
+def test_lead_counts_by_run_counts_rows_not_session_counters():
+    """`sessions.matches` is a progress counter that overshoots (it increments once
+    per POST after a whole comment batch), so the delivered number has to be a real
+    row count — the same join `matches_for_run` uses."""
+    store, _ = fresh_store()
+    try:
+        store.upsert_campaign_meta("c1", org_id=1)
+        store.start_session("s1", "c1", "instagram", run_id="run-1")
+        for i in range(3):
+            store.upsert_match(campaign_id="c1", reel_id="r1", comment_id=f"cm{i}",
+                               username=f"u{i}", text="t", lang="en", score=0.9,
+                               reason="x", extracted=None, tier="local",
+                               platform="instagram", session_id="s1")
+        store.update_counters("s1", SessionCounters(matches=99))   # a lying counter
+        assert store.lead_counts_by_run(1) == {"run-1": 3}
+        # A run with no rows is simply absent — the caller reads that as the 0 it is.
+        assert store.lead_counts_by_run(1).get("run-never") is None
+    finally:
+        store.close()
+
+
+def test_match_event_details_by_run_returns_only_the_match_events():
+    store, _ = fresh_store()
+    try:
+        store.upsert_campaign_meta("c1", org_id=1)
+        store.emit_run_event("run-1", 1, "comments", "success", "Match: @a",
+                             campaign_id="c1", org_id=1,
+                             detail=json.dumps({"username": "a", "reelId": "r1"}))
+        store.emit_run_event("run-1", 2, "feed_walk", "info", "walking",
+                             campaign_id="c1", org_id=1,
+                             detail=json.dumps({"reelsSeen": 4}))
+        store.emit_run_event("run-1", 3, "comments", "info", "Scoring 3 comments",
+                             campaign_id="c1", org_id=1, detail=None)
+        store.emit_run_event("run-2", 1, "comments", "success", "Match: @b",
+                             campaign_id="c1", org_id=1,
+                             detail=json.dumps({"username": "b", "reelId": "r2"}))
+        out = store.match_event_details_by_run(1, ["run-1", "run-2"])
+        assert list(out) == ["run-1", "run-2"]
+        assert len(out["run-1"]) == 1 and "a" in out["run-1"][0]
+        # Another org's id never resolves, and an empty list is not a SQL syntax error.
+        assert store.match_event_details_by_run(2, ["run-1"]) == {}
+        assert store.match_event_details_by_run(1, []) == {}
+    finally:
+        store.close()
+
+
+def test_run_event_runs_lists_a_run_that_has_no_session_row():
+    """The picker's third source. A fleet job mirrors its sessions at ACK, so a run
+    that dead-lettered has none — but its events landed on the heartbeat, and without
+    this the picker would hide the very run whose log is all that survived it."""
+    store, _ = fresh_store()
+    try:
+        store.upsert_campaign_meta("c1", org_id=1)
+        store.emit_run_event("run-dead", 1, "comments", "success", "Match: @a",
+                             campaign_id="c1", org_id=1, session_id="w-1",
+                             detail=json.dumps({"username": "a", "reelId": "r1"}))
+        store.emit_run_event("run-dead", 2, "comments", "success", "Match: @b",
+                             campaign_id="c1", org_id=1, session_id="w-2",
+                             detail=json.dumps({"username": "b", "reelId": "r1"}))
+        rows = store.run_event_runs(1)
+    finally:
+        store.close()
+    assert len(rows) == 1
+    row = rows[0]
+    assert row["runId"] == "run-dead" and row["campaignId"] == "c1"
+    assert row["sessions"] == 2                      # one run id spans many sessions
+    assert row["firstAt"] <= row["lastAt"]

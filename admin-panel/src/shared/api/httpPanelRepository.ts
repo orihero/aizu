@@ -9,6 +9,7 @@ import {
   generateCampaignResponseSchema,
   interviewResponseSchema,
   panelStateSchema,
+  revealLeadResponseSchema,
   runActivityResponseSchema,
   statusWriteResponseSchema,
   telegramLoginStartResponseSchema,
@@ -33,7 +34,9 @@ import {
   adminLoginResponseSchema,
   adminOrgCampaignsResponseSchema,
   adminOrgLeadsResponseSchema,
+  adminOrgRunsResponseSchema,
   adminOrgsResponseSchema,
+  adminRunActivityResponseSchema,
   adminWhoamiResponseSchema,
   auditResponseSchema,
   auditVerifyResponseSchema,
@@ -52,6 +55,9 @@ import {
   type AdminOrgCampaign,
   type AdminOrgLeadsPage,
   type AdminOrgLeadsQuery,
+  type AdminOrgRun,
+  type AdminRunActivity,
+  type AdminRunActivityQuery,
   type AdminSession,
   type AuditEntry,
   type AuditVerify,
@@ -100,6 +106,8 @@ import type {
   PanelState,
   RedditConnectInput,
   ReportsPayload,
+  RevealLeadInput,
+  RevealedLead,
   RunActivity,
   RunInput,
   RunStartResult,
@@ -123,6 +131,7 @@ const REPORTS_ENDPOINT = '/api/reports';
 const STATUS_ENDPOINT = '/api/status';
 const STATUS_BULK_ENDPOINT = '/api/status/bulk';
 const LEAD_NOTE_ENDPOINT = '/api/lead/note';
+const LEAD_REVEAL_ENDPOINT = '/api/lead/reveal';
 const CAMPAIGN_ENDPOINT = '/api/campaign';
 const CAMPAIGN_GENERATE_ENDPOINT = '/api/campaign/generate';
 const CAMPAIGN_INTERVIEW_ENDPOINT = '/api/campaign/interview';
@@ -164,6 +173,7 @@ const ADMIN_AUDIT_VERIFY_ENDPOINT = '/api/admin/audit/verify';
 const ADMIN_EXECUTION_BACKEND_ENDPOINT = '/api/admin/execution-backend';
 const ADMIN_MODEL_COMPARISON_ENDPOINT = '/api/admin/model-comparison';
 const ADMIN_MODEL_COMPARISON_STATS_ENDPOINT = '/api/admin/model-comparison/stats';
+const ADMIN_RUN_ACTIVITY_ENDPOINT = '/api/admin/run/activity';
 
 // The session lives in an HttpOnly cookie. The panel and bridge are same-origin
 // (prod) or proxied same-origin (vite dev), so 'same-origin' sends the cookie
@@ -384,6 +394,19 @@ export class HttpPanelRepository implements PanelRepository {
 
   bulkSetStatus(request: BulkStatusRequest): Promise<Result<void>> {
     return this.write(STATUS_BULK_ENDPOINT, request);
+  }
+
+  /**
+   * One audited un-redaction. A plain POST that RESOLVES a value — never a cached
+   * query: the answer is session-local, so it belongs in the calling component's
+   * state and nowhere else (see `PanelRepository.revealLead`). Every call is a fresh
+   * request on purpose, because every call is a fresh audit row.
+   *
+   * 403 (viewer) and 404 (unknown/foreign lead) come back as typed http errors with
+   * their status, so the drawer can distinguish "you may not" from "it is gone".
+   */
+  revealLead(input: RevealLeadInput): Promise<Result<RevealedLead>> {
+    return this.postForData<RevealedLead>(LEAD_REVEAL_ENDPOINT, input, revealLeadResponseSchema);
   }
 
   addLeadNote(input: AddLeadNoteInput): Promise<Result<void>> {
@@ -706,6 +729,22 @@ export class HttpPanelRepository implements PanelRepository {
       `${ADMIN_ORGS_ENDPOINT}/${encodeURIComponent(String(query.orgId))}/leads` +
       `?${adminLeadsQueryString(query)}`;
     return this.adminGet<AdminOrgLeadsPage>(path, adminOrgLeadsResponseSchema, 'admin-org-leads');
+  }
+
+  async fetchAdminOrgRuns(orgId: number): Promise<Result<AdminOrgRun[]>> {
+    const path = `${ADMIN_ORGS_ENDPOINT}/${encodeURIComponent(String(orgId))}/runs`;
+    const result = await this.adminGet<{ runs: AdminOrgRun[] }>(
+      path, adminOrgRunsResponseSchema, 'admin-org-runs');
+    return result.ok ? ok(result.value.runs) : result;
+  }
+
+  fetchAdminRunActivity(query: AdminRunActivityQuery): Promise<Result<AdminRunActivity>> {
+    // `after` is the global event-id cursor (0 = from the start of the run), not a seq.
+    const path =
+      `${ADMIN_RUN_ACTIVITY_ENDPOINT}?runId=${encodeURIComponent(query.runId)}` +
+      `&after=${encodeURIComponent(String(query.after ?? 0))}`;
+    return this.adminGet<AdminRunActivity>(
+      path, adminRunActivityResponseSchema, 'admin-run-activity');
   }
 
   startImpersonation(input: ImpersonateInput): Promise<Result<void>> {

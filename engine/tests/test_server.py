@@ -142,6 +142,7 @@ def panel():
     # and seed its matches (so the owner's org owns the campaign data).
     _SESSION_COOKIE = _signup_cookie(base, "panel-tester@aizu.test", "test-password-123")
     _register_and_seed(db_path)
+    _lift_campaign_cap(db_path, _owner_org_id({"db": db_path}))
     yield {"base": base, "db": db_path, "spawner": spawner, "cookie": _SESSION_COOKIE}
     _SESSION_COOKIE = None
     httpd.shutdown()
@@ -194,6 +195,19 @@ def _owner_org_id(panel) -> int:
     try:
         return int(store._conn.execute(
             "SELECT id FROM organizations ORDER BY id LIMIT 1").fetchone()[0])
+    finally:
+        store.close()
+
+
+def _lift_campaign_cap(db_path: str, org_id: int) -> None:
+    """v27: campaign creation is plan-limited (free = 1). The tests in this file
+    build several campaigns per org to exercise the brief/channel round-trips, so
+    put the org on an unlimited tier — the cap itself is the subject of
+    tests/test_run_redaction_server.py, not of these."""
+    store = Store(db_path)
+    try:
+        store.upsert_subscription(org_id, last_event_ts=1.0, tier="pro",
+                                  status="active")
     finally:
         store.close()
 
@@ -1615,12 +1629,18 @@ def _seed_run_activity(db_path: str, run_id: str = "run-seed") -> None:
     cid = _campaign_id()
     try:
         store.start_session("sess-seed", cid, "instagram", run_id=run_id)
-        steps = [("lifecycle", "info", "Run started — campaign x (instagram)"),
-                 ("relevance", "success", "Relevant ✓ — @acme.io"),
-                 ("comments", "success", "Match: @aziz (score 0.82)")]
-        for i, (phase, level, msg) in enumerate(steps, start=1):
+        # The detail blobs are what the engines really attach, and since v27 they are
+        # the ONLY input to the org-facing `leadsFound`/`itemsScanned` scalars — an
+        # event with a bare message now folds into nothing at all.
+        steps = [("lifecycle", "info", "Run started — campaign x (instagram)", None),
+                 ("relevance", "success", "Relevant ✓ — @acme.io",
+                  {"reelId": "r1", "author": "acme.io"}),
+                 ("comments", "success", "Match: @aziz (score 0.82)",
+                  {"username": "aziz", "score": 0.82, "reelId": "r1"})]
+        for i, (phase, level, msg, detail) in enumerate(steps, start=1):
             store.emit_run_event(run_id, i, phase, level, msg,
-                                 campaign_id=cid, session_id="sess-seed")
+                                 campaign_id=cid, session_id="sess-seed",
+                                 detail=json.dumps(detail) if detail else None)
         store.update_counters("sess-seed", SessionCounters(
             reels_seen=5, relevance_passes=2, comments_scored=10, matches=1, spend_usd=0.02))
         store.log_action(cid, "like", reel_id="r1", target="r1",
@@ -1651,28 +1671,30 @@ def test_run_activity_unknown_run_is_404(panel):
     assert resp["ok"] is False
 
 
-def test_run_activity_returns_events_and_counters(panel):
+def test_run_activity_returns_counters_but_no_narrative_events(panel):
+    """v27: the narrative log left the customer app — an org caller gets scalars,
+    not lines. The counters/finished half of the old contract is unchanged, because
+    a run must still be legible while it runs."""
     _seed_run_activity(panel["db"], run_id="run-act")
     code, resp = _activity(panel, "?runId=run-act")
     assert code == 200 and resp["ok"] is True
     data = resp["data"]
     assert data["runId"] == "run-act"
     assert data["finished"] is True            # session ended → not live
-    msgs = [e["message"] for e in data["events"]]
-    assert any(m.startswith("Run started") for m in msgs)
-    assert any(m.startswith("Match: @") for m in msgs)
-    # Each event carries the global id (cursor/key) and the per-session seq.
-    assert all("id" in e and "seq" in e for e in data["events"])
-    # C7: each event is tagged with its session's platform (LEFT JOIN, no DDL).
-    assert all(e["platform"] == "instagram" for e in data["events"])
+    assert data["events"] == [] and data["eventsRedacted"] is True
+    # The events are FOLDED INTO NUMBERS rather than filtered — nothing that was in
+    # a message or a detail blob survives anywhere in the payload.
+    assert "Match:" not in json.dumps(data)
+    assert data["leadsFound"] == 1
     c = data["counters"]
     assert c["reelsSeen"] == 5 and c["matches"] == 1 and c["likes"] == 1
-    assert data["cursor"] == data["events"][-1]["id"]
 
 
-def test_run_activity_multi_platform_events_carry_correct_platform(panel):
-    """A multi-platform run tags each event with its own session's platform — so the
-    activity feed can show which channel produced each line (C7)."""
+def test_run_activity_multi_platform_run_still_aggregates_across_sessions(panel):
+    """The per-event `platform` tag (C7) is now a SUPERADMIN-only field — see
+    tests/test_run_redaction_server.py for the wire assertion on that feed. What the
+    org caller must still get right is the cross-session roll-up: one run id spans
+    many sessions, and none of their identities may reach the payload."""
     from aizu.core.store import Store
     cid = _campaign_id()
     store = Store(panel["db"])
@@ -1689,19 +1711,30 @@ def test_run_activity_multi_platform_events_carry_correct_platform(panel):
         store.close()
     code, resp = _activity(panel, "?runId=run-multi")
     assert code == 200
-    by_msg = {e["message"]: e["platform"] for e in resp["data"]["events"]}
-    assert by_msg["ig start"] == "instagram"
-    assert by_msg["yt start"] == "youtube"
+    data = resp["data"]
+    assert data["events"] == [] and data["eventsRedacted"] is True
+    body = json.dumps(data)
+    assert "sess-ig" not in body and "sess-yt" not in body and "start" not in body
+    # The store still tags each row with its session's platform — that is what the
+    # admin feed serves; it simply no longer travels to an org.
+    store = Store(panel["db"])
+    try:
+        rows = store.fetch_run_events("run-multi", after_id=0)
+    finally:
+        store.close()
+    assert {r["message"]: r["platform"] for r in rows} == {
+        "ig start": "instagram", "yt start": "youtube"}
 
 
-def test_run_activity_after_cursor_returns_only_newer(panel):
+def test_run_activity_after_cursor_pages_nothing_for_an_org(panel):
+    """`after` stays accepted and echoed so the panel's poll plumbing is unchanged,
+    but with no events there is nothing left for it to page into view."""
     _seed_run_activity(panel["db"], run_id="run-cur")
     code, resp = _activity(panel, "?runId=run-cur")
-    assert code == 200
-    first_id = resp["data"]["events"][0]["id"]
-    code2, resp2 = _activity(panel, f"?runId=run-cur&after={first_id}")
-    ids = [e["id"] for e in resp2["data"]["events"]]
-    assert ids and all(i > first_id for i in ids)
+    assert code == 200 and resp["data"]["events"] == []
+    code2, resp2 = _activity(panel, "?runId=run-cur&after=1")
+    assert code2 == 200
+    assert resp2["data"]["events"] == [] and resp2["data"]["cursor"] == 1
 
 
 # ----- FIX 2: fleet-run lifecycle exposed to the panel ---------------------------
@@ -2647,6 +2680,7 @@ def _second_org(panel, email: str) -> tuple[str, int]:
             "SELECT org_id FROM users WHERE email=?", (email,)).fetchone()
     finally:
         store.close()
+    _lift_campaign_cap(panel["db"], row[0])
     return cookie, row[0]
 
 

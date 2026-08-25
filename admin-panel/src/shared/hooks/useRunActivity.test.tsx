@@ -13,19 +13,48 @@ function wrapperFor(repository: FakePanelRepository) {
 }
 
 describe('useRunActivity', () => {
-  test('loads the first page and exposes accumulated events + counters', async () => {
+  test('exposes the polled progress scalars', async () => {
     const repo = new FakePanelRepository(buildPanelState());
     repo.runActivity = buildRunActivity({
-      events: [buildRunEvent({ id: 1 }), buildRunEvent({ id: 2 })],
-      cursor: 2,
+      phase: 'qualifying',
+      leadsFound: 7,
+      leadsDelivered: 7,
+      delivery: 'delivered',
+      itemsScanned: 40,
+      targetLeads: 10,
     });
 
     const { result } = renderHook(() => useRunActivity('run-001'), { wrapper: wrapperFor(repo) });
 
     await waitFor(() => { expect(result.current.activity).not.toBeNull(); });
-    expect(result.current.activity?.events.map((e) => e.id)).toEqual([1, 2]);
-    expect(result.current.activity?.counters?.matches).toBe(3);
+    expect(result.current.activity?.phase).toBe('qualifying');
+    expect(result.current.activity?.leadsFound).toBe(7);
+    expect(result.current.activity?.targetLeads).toBe(10);
     expect(repo.runActivityFetches[0]).toEqual({ runId: 'run-001', afterSeq: 0 });
+  });
+
+  test('never pages events into the customer app', async () => {
+    // v27/B3: even if a bridge sent rows, the hook's projection drops them — the
+    // customer app has no path to a run event, filtered or otherwise.
+    const repo = new FakePanelRepository(buildPanelState());
+    repo.runActivity = buildRunActivity({ events: [buildRunEvent({ id: 1 })] });
+
+    const { result } = renderHook(() => useRunActivity('run-001'), { wrapper: wrapperFor(repo) });
+
+    await waitFor(() => { expect(result.current.activity).not.toBeNull(); });
+    expect(result.current.activity).not.toHaveProperty('events');
+  });
+
+  test('always polls from cursor 0 — there is nothing to page', async () => {
+    const repo = new FakePanelRepository(buildPanelState());
+    repo.runActivity = buildRunActivity({ cursor: 99 });
+
+    const { result } = renderHook(() => useRunActivity('run-001'), { wrapper: wrapperFor(repo) });
+
+    await waitFor(() => { expect(result.current.activity).not.toBeNull(); });
+    // Even a bridge echoing a non-zero cursor must not make the next poll skip ahead:
+    // each page is a whole snapshot, so `after` stays a constant no-op.
+    expect(repo.runActivityFetches.every((f) => f.afterSeq === 0)).toBe(true);
   });
 
   test('does not poll when no run is active (runId null)', async () => {

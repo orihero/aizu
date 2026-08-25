@@ -129,4 +129,29 @@ describe('BillingPanel', () => {
     render(buildBilling({ tier: 'lite', leadCap: 50, leadsUsed: 50, usageRatio: 1 }));
     expect(screen.getByText(/Plan limit reached/)).toBeInTheDocument();
   });
+
+  /**
+   * The reveal allowance (v27 Section F) is the SECOND thing a period meters, and it is
+   * metered here for the same reason the lead cap is: finding out about a plan limit
+   * from a 402 in the lead drawer is the failure this panel exists to prevent.
+   */
+  describe('reveal allowance meter', () => {
+    test('shows leads revealed this period next to leads used', () => {
+      render(buildBilling({ tier: 'lite', leadCap: 50, leadsUsed: 40, revealCap: 50, revealsUsed: 12 }));
+      expect(screen.getByText('Leads revealed this period')).toBeInTheDocument();
+      expect(screen.getByText(/12 \/ 50/)).toBeInTheDocument();
+    });
+
+    test('at cap it says already-revealed leads still open — the cap counts distinct leads', () => {
+      render(buildBilling({ tier: 'free', revealCap: 10, revealsUsed: 10 }));
+      expect(screen.getByText(/already revealed/)).toBeInTheDocument();
+    });
+
+    test('an unlimited (or pre-v27) cap renders no meter rather than "0 / 0"', () => {
+      // `null` is both "unlimited" and what a bridge without the reveal cap sends. A
+      // bar either way would read as an org locked out of its own leads.
+      render(buildBilling({ tier: 'pro', revealCap: null, revealsUsed: 0 }));
+      expect(screen.queryByText('Leads revealed this period')).not.toBeInTheDocument();
+    });
+  });
 });

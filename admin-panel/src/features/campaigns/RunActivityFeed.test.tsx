@@ -1,9 +1,11 @@
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 import { render, screen } from '@testing-library/react';
-import { buildFleetJob, buildRunEvent } from '@/test/fixtures';
+import { buildFleetJob } from '@/test/fixtures';
 import { EMPTY_RUN_ACTIVITY, type RunActivityState } from '@/shared/lib/runActivity';
 import type { FleetJob } from '@/shared/types/domain';
 import { FleetJobBanner, RunActivityFeed } from './RunActivityFeed';
+
+const NOW_SEC = 1_718_800_000;
 
 function activityWith(overrides: Partial<RunActivityState>): RunActivityState {
   return {
@@ -13,46 +15,161 @@ function activityWith(overrides: Partial<RunActivityState>): RunActivityState {
       reelsSeen: 12, relevancePasses: 5, commentsScored: 40,
       matches: 3, spendUsd: 0.0123, likes: 2, follows: 1,
     },
+    phase: 'searching',
+    leadsFound: 3,
+    leadsDelivered: 3,
+    itemsScanned: 12,
+    relevantFound: 5,
+    lastEventAt: NOW_SEC,
+    targetLeads: 10,
     ...overrides,
   };
 }
 
 describe('RunActivityFeed', () => {
-  test('renders the live counters', () => {
+  // Pin "now" so the liveness line ("last activity Ns ago") is deterministic.
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.setSystemTime((NOW_SEC + 8) * 1000);
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  test('leads found against the target is the primary progress', () => {
     render(<RunActivityFeed activity={activityWith({})} isError={false} />);
 
-    expect(screen.getByText('Reels')).toBeInTheDocument();
-    expect(screen.getByText('12')).toBeInTheDocument();   // reelsSeen
-    expect(screen.getByText('Leads')).toBeInTheDocument();
-    expect(screen.getByText('3')).toBeInTheDocument();    // matches
+    expect(screen.getByText('3')).toBeInTheDocument();
+    expect(screen.getByText('of 10 leads')).toBeInTheDocument();
+    expect(screen.getByText('Searching for posts')).toBeInTheDocument();
   });
 
-  test('lists event messages newest-first', () => {
-    const activity = activityWith({
-      events: [
-        buildRunEvent({ id: 1, message: 'first event' }),
-        buildRunEvent({ id: 2, message: 'second event' }),
-      ],
-    });
+  test('a run with no known target still shows what it found', () => {
+    render(<RunActivityFeed activity={activityWith({ targetLeads: null })} isError={false} />);
 
-    render(<RunActivityFeed activity={activity} isError={false} />);
-
-    const rows = screen.getAllByRole('listitem');
-    expect(rows[0]).toHaveTextContent('second event'); // newest on top
-    expect(rows[1]).toHaveTextContent('first event');
+    expect(screen.getByText('leads found')).toBeInTheDocument();
   });
 
-  test('shows a waiting state before any event arrives on a live run', () => {
-    render(<RunActivityFeed activity={activityWith({ events: [], finished: false })} isError={false} />);
+  test('falls back to the start response’s target for an in-process run', () => {
+    // /api/run/activity only knows a FLEET job's target; an in-process run's reaches the
+    // panel in the POST /api/run body. Without the hint the block has no denominator.
+    render(
+      <RunActivityFeed activity={activityWith({ targetLeads: null })} isError={false} targetLeadsHint={25} />,
+    );
 
-    expect(screen.getByText(/waiting for the first event/i)).toBeInTheDocument();
+    expect(screen.getByText('of 25 leads')).toBeInTheDocument();
   });
 
-  test('a finished run with no events reads as recorded-none, not waiting', () => {
-    render(<RunActivityFeed activity={activityWith({ events: [], finished: true })} isError={false} />);
+  test('shows a liveness beat from lastEventAt', () => {
+    render(<RunActivityFeed activity={activityWith({})} isError={false} />);
 
-    expect(screen.getByText(/no activity was recorded/i)).toBeInTheDocument();
-    expect(screen.queryByText(/waiting for the first event/i)).not.toBeInTheDocument();
+    expect(screen.getByText('Last activity 8s ago')).toBeInTheDocument();
+  });
+
+  test('a run that has emitted nothing says so rather than "0s ago"', () => {
+    render(<RunActivityFeed activity={activityWith({ lastEventAt: null })} isError={false} />);
+
+    expect(screen.getByText('No activity yet')).toBeInTheDocument();
+  });
+
+  test('renders NO narrative run events — the log left the customer app', () => {
+    // B3. The component no longer accepts events at all, so the strongest assertion
+    // available is that nothing list-shaped is rendered where the log used to be.
+    render(<RunActivityFeed activity={activityWith({})} isError={false} />);
+
+    expect(screen.queryByRole('list')).not.toBeInTheDocument();
+    expect(screen.queryByRole('listitem')).not.toBeInTheDocument();
+  });
+
+  test('subordinate counters degrade to "—" instead of a fabricated zero', () => {
+    render(
+      <RunActivityFeed
+        activity={activityWith({ itemsScanned: 0, relevantFound: 0, counters: null })}
+        isError={false}
+      />,
+    );
+
+    expect(screen.getByText('Posts seen')).toBeInTheDocument();
+    expect(screen.getAllByText('—').length).toBeGreaterThanOrEqual(3);
+    // The PRIMARY count is event-derived and therefore live, so a real 0 is honest there.
+    expect(screen.getByText('3')).toBeInTheDocument();
+  });
+
+  test('a live FLEET run shows real progress while every session counter reads 0', () => {
+    // E.1, the case this whole progress block exists for. A fleet job's session counters
+    // (and its `matches` rows) travel in the ACK body, so mid-run the cloud aggregates
+    // them all as 0 — while `run_events` land on the ~45s heartbeat. Driving the primary
+    // number off the session counters is therefore a DEAD SCREEN for the entire run:
+    // "0 of 10 leads, 0 posts seen" on a run that is working. `leadsFound` is
+    // event-derived, so it is the one number that moves.
+    render(
+      <RunActivityFeed
+        activity={activityWith({
+          leadsFound: 4,
+          targetLeads: 10,
+          leadsDelivered: 0,
+          delivery: 'pending',
+          finished: false,
+          itemsScanned: 0,
+          relevantFound: 0,
+          counters: {
+            reelsSeen: 0, relevancePasses: 0, commentsScored: 0,
+            matches: 0, spendUsd: 0, likes: 0, follows: 0,
+          },
+        })}
+        isError={false}
+      />,
+    );
+
+    expect(screen.getByText('4')).toBeInTheDocument();
+    expect(screen.getByText('of 10 leads')).toBeInTheDocument();
+    expect(screen.getByText('Last activity 8s ago')).toBeInTheDocument();
+    // The zeroed session counters are shown as unknown, not as a contradicting "0 posts
+    // seen" beside a run that has already found four leads.
+    expect(screen.getAllByText('—').length).toBeGreaterThanOrEqual(2);
+    // And an unacked live run is NOT accused of losing leads: 4 found / 0 delivered is
+    // ack lag on every healthy fleet run, so `pending` must produce no warning.
+    expect(screen.queryByText(/reached your account/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/incomplete run/i)).not.toBeInTheDocument();
+  });
+
+  test('a not-delivered run shows found AND delivered, and labels its spend', () => {
+    // E.5/E.7: the measured prod case — 15 harvested, 0 delivered, spend banked.
+    render(
+      <RunActivityFeed
+        activity={activityWith({
+          finished: true, phase: 'failed', delivery: 'not_delivered',
+          leadsFound: 15, leadsDelivered: 0,
+        })}
+        isError={false}
+      />,
+    );
+
+    expect(screen.getByText(/found 15/i)).toBeInTheDocument();
+    expect(screen.getByText(/0 reached your account/i)).toBeInTheDocument();
+    expect(screen.getByText('Spend (incomplete run)')).toBeInTheDocument();
+    // The spend itself is never hidden or zeroed — only labelled.
+    expect(screen.getByText('$0.01')).toBeInTheDocument();
+  });
+
+  test('a delivered run carries no not-delivered warning', () => {
+    render(<RunActivityFeed activity={activityWith({ finished: true, phase: 'done' })} isError={false} />);
+
+    expect(screen.queryByText(/reached your account/i)).not.toBeInTheDocument();
+    expect(screen.getByText('Spend')).toBeInTheDocument();
+  });
+
+  test('a live fleet run with a pending gap is NOT warned about', () => {
+    // Every in-flight fleet run reads `pending` (rows land at ack); warning would stamp
+    // an alarm on every healthy run.
+    render(
+      <RunActivityFeed
+        activity={activityWith({ delivery: 'pending', leadsFound: 9, leadsDelivered: 0 })}
+        isError={false}
+      />,
+    );
+
+    expect(screen.queryByText(/reached your account/i)).not.toBeInTheDocument();
   });
 
   test('surfaces open flags', () => {
@@ -68,10 +185,10 @@ describe('RunActivityFeed', () => {
   test('renders an error state without crashing', () => {
     render(<RunActivityFeed activity={null} isError />);
 
-    expect(screen.getByText(/couldn’t load live activity/i)).toBeInTheDocument();
+    expect(screen.getByText(/couldn’t load live progress/i)).toBeInTheDocument();
   });
 
-  test('renders the fleet banner above the counters for a fleet run', () => {
+  test('renders the fleet banner above the progress block for a fleet run', () => {
     render(
       <RunActivityFeed activity={activityWith({ fleetJob: buildFleetJob({ status: 'queued' }) })} isError={false} />,
     );

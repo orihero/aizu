@@ -219,6 +219,27 @@ export const warmthSchema = z
   })
   .catch(warmthNeutral);
 
+/**
+ * E.5/E.7 — how a run's harvest reconciles with what actually reached the account.
+ * The bridge computes it in ONE place (`panel.delivery_state`) so a run drawer and a
+ * campaign card can never disagree about what "not delivered" means:
+ *   - `delivered`      leadsFound <= leadsDelivered. Nothing to explain.
+ *   - `pending`        a gap on a run still in flight. NOT a fault: a fleet run's rows
+ *                      only land at ack, so every live fleet run reads this way.
+ *   - `not_delivered`  a FINISHED run whose gap never closed — it found leads that
+ *                      never reached the customer (the dead-letter path). Show the two
+ *                      numbers as what they are, and label the spend beside them as
+ *                      spend on an incomplete run. Never hide or zero that spend, and
+ *                      never synthesise a CPL from `leadsFound` — a cost per lead the
+ *                      customer cannot open is a fiction.
+ *
+ * `.catch('delivered')` for a pre-v27 bridge: one that cannot report a gap cannot have
+ * one to report, and defaulting the other way would stamp the warning on every run.
+ */
+export const deliverySchema = z
+  .enum(['delivered', 'pending', 'not_delivered'])
+  .catch('delivered');
+
 export const campaignSchema = z.object({
   id: z.string(),
   name: z.string(),
@@ -245,6 +266,13 @@ export const campaignSchema = z.object({
   spent: z.number().catch(0),
   leads: z.number().catch(0),
   cpl: cplSchema,
+  // E.7: `spent` and `leads` sit on the same card and have OPPOSITE failure
+  // asymmetries — a nacked run banks its spend but strands its leads. This trio keeps
+  // the pair honest. `null` on either number means a pre-v27 bridge did not report it,
+  // so fall back to `leads` (`c.leadsFound ?? c.leads`) rather than rendering 0.
+  leadsFound: z.number().nullable().catch(null),
+  leadsDelivered: z.number().nullable().catch(null),
+  delivery: deliverySchema,
   spark: z.array(z.number()).catch([]),
   // Account warmth (warming PRD §7.2). Missing on pre-warmth payloads → neutral.
   warmth: warmthSchema,
@@ -303,8 +331,18 @@ export const reelSchema = z.object({
   thumbSeed: z.string(),
   addedAt: z.string(),
   lastPoll: z.string(),
-  expiresInDays: z.number(),
-  newSinceLastPoll: z.number(),
+  // v27: BOTH are watchlist-derived, and the engine only ever writes a watchlist
+  // row for a post that produced a lead — so `expiresInDays: 10` and
+  // `newSinceLastPoll: 1` each mark WHICH scanned post a lead came from, which is
+  // the re-join the audited reveal exists to prevent. `panel._build_reels` now
+  // omits them for every org caller and ships them only to the superadmin plane.
+  // Optional, not `.catch(0)`: a defaulted 0 would be indistinguishable from a
+  // real "no new matches" and would quietly re-open the question for any future
+  // reader. Absent means NOT DISCLOSED. (Required until v27, so an older bridge
+  // still parses — and the whole array is `.catch([])`, which without this would
+  // have blanked REELS wholesale the moment the engine dropped the keys.)
+  expiresInDays: z.number().optional(),
+  newSinceLastPoll: z.number().optional(),
   pollHistory: z.array(z.number()),
 });
 
@@ -335,6 +373,20 @@ export const leadNoteSchema = z.object({
  * the whole app leans on: one id ⇔ one lead record. `commentId` stays on the record as
  * the raw platform comment id (display, export, and the write payload); it is NOT
  * unique on its own, so never key a lookup, a React key, or a selection on it.
+ *
+ * v27 redaction: there is NO `username`, NO comment `text` and NO `reelId` on an
+ * org-facing lead — the bridge stopped sending all three (`panel._build_matches`), and
+ * this schema stripping them is the second line: `z.object` drops unknown keys, so an
+ * older/rogue payload that still carries them cannot reach a component through this
+ * boundary. The customer-facing prose is `intent`.
+ *
+ * `reelId` left with the handle for the same reason it existed: it is the POST POINTER.
+ * `reelUrl(platform, reelId)` turns it into a public URL where the comment and the
+ * handle are both on screen, so a lead row carrying one is the redaction undone in a
+ * single click — by a component, by an export, or by anyone reading the network tab.
+ * The only post pointer in the customer plane now arrives on `RevealedLead`, from the
+ * audited per-lead reveal (`PanelRepository.revealLead`), which is deliberately NOT
+ * part of this type — see Section F.
  */
 export const matchSchema = z.object({
   id: z.string(),
@@ -343,9 +395,13 @@ export const matchSchema = z.object({
   // Source platform of the comment. Older payloads omit it → default instagram.
   platform: z.string().catch('instagram'),
   sessionId: z.string().nullable(),
-  username: z.string(),
+  // The one-line summary of what this person wants, derived at capture time by the
+  // engine's `derive_intent`. `''` is a REAL value the server sends (a pre-v27 lead,
+  // or nothing derivable honestly) — the UI renders a neutral placeholder for it and
+  // never falls back to an identifier. `.catch('')` also covers a bridge older than
+  // v27 that omits the key entirely, so a lagging server degrades the cell, not the page.
+  intent: z.string().catch(''),
   lang: z.string().nullable(),
-  text: z.string(),
   score: z.number(),
   reason: z.string(),
   extracted: z.record(z.unknown()),
@@ -354,7 +410,6 @@ export const matchSchema = z.object({
   escalationCost: z.number(),
   // `ts` is the raw capture epoch for sorting; older payloads omit it → 0.
   capturedAt: z.object({ date: z.string(), time: z.string(), ts: z.number().catch(0) }),
-  reelId: z.string(),
   statusBy: z.string().nullable(),
   statusAt: z.string().nullable(),
   // v6 Kanban: audit trail + free-form notes. Default-empty so older/lagging
@@ -432,6 +487,10 @@ export const funnelSchema = z.object({
   matches: z.number(),
 });
 
+/** One row of the dashboard's top-campaign mini list. It puts `leads` next to `cpl`
+ * (a spend-derived number), so it carries the delivery trio off the card it mirrors —
+ * see `deliverySchema`. The period TILES deliberately do not: those are windowed while
+ * the found estimate is lifetime, and mixing them would invent a ratio true of neither. */
 export const topCampaignSchema = z.object({
   id: z.string(),
   name: z.string(),
@@ -439,11 +498,16 @@ export const topCampaignSchema = z.object({
   status: z.string(),
   leads: z.number(),
   cpl: cplSchema,
+  leadsFound: z.number().nullable().catch(null),
+  leadsDelivered: z.number().nullable().catch(null),
+  delivery: deliverySchema,
 });
 
+/** One dashboard live-ticker row. v27: the ticker names what the lead WANTS, not who
+ * they are — the server already truncates `intent` to a glance-width line. */
 export const tickerEntrySchema = z.object({
   id: z.string(),
-  username: z.string(),
+  intent: z.string().catch(''),
   platform: z.string(),
   score: z.number(),
   capturedAt: z.object({ date: z.string(), time: z.string() }),
@@ -493,6 +557,8 @@ export const reportsPeriodSchema = z.object({
   cplTrend: z.array(z.number()),
   spendByStage: z.array(z.object({ name: z.string(), value: z.number() })),
   platformRanking: z.array(z.object({ platform: z.string(), leads: z.number() })),
+  // E.7: leads and spend on the SAME row, so the report must not read "$X spent,
+  // 0 leads" for a dead-lettered run with no way to tell that from a barren campaign.
   perCampaign: z.array(
     z.object({
       id: z.string(),
@@ -501,6 +567,9 @@ export const reportsPeriodSchema = z.object({
       leads: z.number(),
       cpl: cplSchema,
       spend: z.number(),
+      leadsFound: z.number().nullable().catch(null),
+      leadsDelivered: z.number().nullable().catch(null),
+      delivery: deliverySchema,
     }),
   ),
 });
@@ -565,6 +634,11 @@ export const billingTierSchema = z.object({
   tier: z.string(),
   displayName: z.string(),
   leadCap: z.number(),
+  // v27 plan limits: how many non-archived campaigns this tier allows. `null` means
+  // UNLIMITED, not "unset" — the grid must print "Unlimited campaigns", never "0".
+  // `.catch(null)` reads a pre-v27 bridge's omission as unlimited on purpose: this is
+  // display copy for OTHER tiers, and the real gate is the server's 402.
+  campaignCap: z.number().nullable().catch(null),
   selfServe: z.boolean(),
   prices: z.object({
     month: z.number().nullable(),
@@ -583,6 +657,28 @@ export const billingSchema = z.object({
   cancelAtPeriodEnd: z.boolean(),
   leadCap: z.number(),
   leadsUsed: z.number(),
+  // v27 plan limits. `campaignCap` null = unlimited, so every gate reads
+  // `campaignCap !== null && campaignsUsed >= campaignCap` — a falsy check would read
+  // unlimited as zero and disable New Campaign for a paying org. Both default the way
+  // a pre-v27 bridge behaved (uncapped, nothing used) rather than locking the page.
+  campaignCap: z.number().nullable().catch(null),
+  campaignsUsed: z.number().catch(0),
+  // v27 reveal allowance: how many DISTINCT leads this org may un-redact per billing
+  // period, and how many it already has. `null` = unlimited, exactly like
+  // `campaignCap` — and it is also what a bridge that predates the reveal cap sends
+  // (nothing), which is why the meter is hidden rather than drawn as "0 / 0". Read
+  // `revealCap !== null` before gating; a falsy check would read unlimited as zero.
+  //
+  // DISTINCT leads, not reveal calls: reopening a drawer on a lead this period already
+  // revealed does not move `revealsUsed` and never trips the cap. The counter is the
+  // server's; the panel only renders it.
+  revealCap: z.number().nullable().catch(null),
+  revealsUsed: z.number().catch(0),
+  // Largest lead target ONE run may request — the resolved period cap (incl. any
+  // per-org override), which is why it is read here and not off the `tiers` grid.
+  // A SOFT bound: the engine's stop condition is per-session, so a run can overshoot
+  // (E.6). Copy it as "up to N leads per run", never "exactly N".
+  maxRunLeads: z.number().catch(0),
   usageRatio: z.number(),
   nearLimit: z.boolean(),
   tiers: z.array(billingTierSchema).catch([]),
@@ -702,10 +798,27 @@ export const fleetJobSchema = z.object({
 });
 
 /**
- * The activity snapshot for one poll. `events` are oldest-first and only those
- * with id > the `after` we sent; `cursor` is the max event id in this page (or
- * the `after` echoed back when empty). Both `after` and `cursor` are event
- * `id` values (global), not `seq`. Flags/cursor degrade to safe defaults.
+ * The customer-safe word for what a run is doing right now, folded out of the latest
+ * event's internal `phase` by the server's explicit allow-list (`_ORG_RUN_PHASES`).
+ * An unknown/absent phase degrades to 'working' — never to a raw internal string, and
+ * never to 'done', which would stop the poller on a live run.
+ */
+export const runPhaseSchema = z
+  .enum(['starting', 'searching', 'qualifying', 'stopped', 'done', 'failed', 'working'])
+  .catch('working');
+
+/**
+ * The activity snapshot for one poll.
+ *
+ * v27: for an ORG caller `events` is ALWAYS `[]` and `eventsRedacted` is true — the
+ * narrative feed is a superadmin surface now (`adminRunActivitySchema`). The key and
+ * the `after`/`cursor` plumbing stay so the poll contract is unchanged; `cursor` simply
+ * never advances. What replaces the log is the block of SCALARS below, which the bridge
+ * folds out of the events server-side (Section E) — never an event row with keys
+ * deleted, so a future engine's new detail key cannot ride along to a customer.
+ *
+ * Every scalar is a max/sum over the whole run, so all of them are monotonic: a
+ * customer must never watch a progress number fall back down mid-run.
  *
  * `finished` already reflects the fleet override on the server: a fleet job that
  * is queued/leased/running reports finished=false (keep polling even when silent),
@@ -717,6 +830,36 @@ export const runActivitySchema = z.object({
   finished: z.boolean(),
   counters: runCountersSchema,
   events: z.array(runEventSchema),
+  // v27. `false` when absent, which is the honest reading of a PRE-v27 bridge: it
+  // really is still sending events. It is a "why is this empty" marker for the UI,
+  // never the thing that decides whether events may be rendered — the customer app
+  // simply does not render them (B3).
+  eventsRedacted: z.boolean().catch(false),
+  // ---- Section E progress scalars (org-facing; no message/detail/session id) ----
+  phase: runPhaseSchema,
+  /** What the run DISCOVERED: the deduped event estimate, reconciled upward against
+   *  the org's real `matches` rows once the job acks. */
+  leadsFound: z.number().catch(0),
+  /**
+   * What actually REACHED the account: the org's real `matches` row count. `null` is
+   * UNKNOWN — a bridge that predates E.5 and never reported it — and is NOT zero: a
+   * signal the server did not report must never read as "nothing was delivered".
+   * Read `delivery` for the verdict; only render this number when it is non-null.
+   */
+  leadsDelivered: z.number().nullable().catch(null),
+  /** The reconciliation of the pair above — see `deliverySchema`. A finished run at
+   *  `not_delivered` found leads that never reached the customer; show both numbers
+   *  and label its spend as spend on an incomplete run. */
+  delivery: deliverySchema,
+  itemsScanned: z.number().catch(0),
+  relevantFound: z.number().catch(0),
+  /** Epoch SECONDS of the newest event, or null when the run has emitted nothing.
+   *  A timestamp is not a log — it is the liveness beat behind the stall banner. */
+  lastEventAt: z.number().nullable().catch(null),
+  /** The run's plan-clamped lead target, for "7 of 10 leads". Null when it is not
+   *  durably known (an in-process run carries it in the POST /api/run response
+   *  instead). A TARGET, not a ceiling — runs can overshoot it (E.6). */
+  targetLeads: z.number().nullable().catch(null),
   flags: z.array(runFlagSchema).catch([]),
   cursor: z.number().catch(0),
   fleetJob: fleetJobSchema.nullable().catch(null),
@@ -762,6 +905,34 @@ export const panelStateSchema = z.object({
 export const statusWriteResponseSchema = z.object({
   ok: z.boolean(),
   data: z.object({ commentId: z.string(), status: matchStatusSchema }).nullable(),
+  error: z.string().nullable(),
+});
+
+/**
+ * POST /api/lead/reveal → ONE lead's raw identity (v27 reveal-on-demand).
+ *
+ * No `.catch()` fallbacks here on purpose: unlike every other boundary in this file,
+ * a degraded value would be a LIE about a person — a blank handle reading as "no
+ * handle" rather than "the reveal did not work". A malformed body must fail the parse
+ * and surface as an error the drawer can show, so the redaction is never quietly
+ * reported as an empty identity.
+ */
+export const revealedLeadSchema = z.object({
+  // The server echoes the lead's identity back (`id` is the composite lead uid) so the
+  // drawer can prove the answer belongs to the lead it asked about before rendering it
+  // — a late response landing on a reopened drawer must not paint another person's
+  // handle onto this lead.
+  id: z.string(),
+  commentId: z.string(),
+  platform: z.string(),
+  username: z.string(),
+  text: z.string(),
+  reelId: z.string(),
+});
+
+export const revealLeadResponseSchema = z.object({
+  ok: z.boolean(),
+  data: revealedLeadSchema.nullable(),
   error: z.string().nullable(),
 });
 

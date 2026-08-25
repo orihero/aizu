@@ -14,6 +14,11 @@ import type { Billing, BillingInterval, BillingTier } from '@/shared/types/domai
  * change without hunting through JSX. */
 const SALES_EMAIL = 'sales@aizu.uz';
 
+/** When a meter starts warning. Mirrors the bridge's `BILLING_NEAR_LIMIT_RATIO`, which
+ * is what the lead meter's server-sent `nearLimit` flag uses — the reveal allowance has
+ * no such flag, so the threshold is restated here rather than invented. */
+const NEAR_LIMIT_RATIO = 0.8;
+
 /** Subscription status → badge tone. Fails to neutral for any unrecognized status
  * (mirrors the server's closed-set allow-list philosophy — unknown ≠ healthy). */
 const STATUS_TONE: Readonly<Record<string, BadgeTone>> = {
@@ -84,6 +89,50 @@ function UsageMeter({ billing }: { readonly billing: Billing }) {
   );
 }
 
+/**
+ * Lead-reveals-used-this-period bar (v27 Section F). Sits beside the lead meter because
+ * they are the two period allowances a customer spends, and finding out about the
+ * second one from a 402 in the drawer is exactly what this is here to prevent.
+ *
+ * DISTINCT leads, not reveal calls: reopening a lead already revealed this period costs
+ * nothing, so the label says "leads revealed" and never "reveals".
+ *
+ * A `null` cap is unlimited — which is also what a bridge that predates the reveal cap
+ * sends — so the meter renders nothing at all rather than a bar that would read "0 / 0"
+ * and look like an org locked out of its own leads.
+ */
+function RevealMeter({ billing }: { readonly billing: Billing }) {
+  const { revealsUsed, revealCap } = billing;
+  if (revealCap === null) return null;
+  const ratio = revealCap > 0 ? Math.min(1, revealsUsed / revealCap) : 1;
+  const atLimit = revealsUsed >= revealCap;
+  const nearLimit = !atLimit && ratio >= NEAR_LIMIT_RATIO;
+  const barTone = atLimit ? 'bg-danger' : nearLimit ? 'bg-warn' : 'bg-accent';
+  return (
+    <div className="flex flex-col gap-1.5">
+      <div className="flex items-baseline justify-between text-xs">
+        <span className="font-semibold text-text-muted">Leads revealed this period</span>
+        <span className="tabular text-text">
+          {formatNumber(revealsUsed)} / {formatNumber(revealCap)}{' '}
+          <span className="text-text-faint">({formatPercent(ratio)})</span>
+        </span>
+      </div>
+      <div className="h-2 overflow-hidden rounded-full bg-surface-2">
+        <div
+          className={cn('h-full rounded-full transition-all', barTone)}
+          style={{ width: `${String(Math.round(ratio * 100))}%` }}
+        />
+      </div>
+      {atLimit ? (
+        <p className="text-[11px] font-medium text-danger">
+          Plan limit reached — you can still open leads you’ve already revealed, but no new
+          ones until the period resets or you upgrade.
+        </p>
+      ) : null}
+    </div>
+  );
+}
+
 /** Current plan + status + renewal + usage + Manage-billing. */
 function PlanSummaryCard({ billing }: { readonly billing: Billing }) {
   const portal = useOpenBillingPortal();
@@ -129,6 +178,7 @@ function PlanSummaryCard({ billing }: { readonly billing: Billing }) {
           </p>
         ) : null}
         <UsageMeter billing={billing} />
+        <RevealMeter billing={billing} />
         {noAccount ? (
           <p className="text-[11px] text-text-faint">
             No billing account yet — upgrade to a paid plan to manage billing.

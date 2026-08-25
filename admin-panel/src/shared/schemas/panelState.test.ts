@@ -3,19 +3,25 @@ import {
   buildCampaign,
   buildFleetJob,
   buildPanelState,
+  buildReel,
   buildRunActivity,
   buildRunEvent,
 } from '@/test/fixtures';
 import {
   activeRunSchema,
+  billingSchema,
+  billingTierSchema,
   campaignBriefFormSchema,
   campaignSchema,
   channelEntrySchema,
   generatedCampaignDraftSchema,
   matchSchema,
   panelStateSchema,
+  reelSchema,
+  revealLeadResponseSchema,
   runActivitySchema,
   runEventSchema,
+  tickerEntrySchema,
 } from './panelState';
 
 const VALID_BRIEF = {
@@ -328,7 +334,11 @@ describe('runActivitySchema', () => {
     if (parsed.success) {
       expect(parsed.data.runId).toBe('run-001');
       expect(parsed.data.counters.matches).toBe(3);
-      expect(parsed.data.events).toHaveLength(1);
+      // v27/B3: `buildRunActivity()` is the ORG-facing shape, and an org caller can
+      // never receive an event. For a payload WITH events, parse
+      // `buildAdminRunActivity()` against `adminRunActivitySchema` instead.
+      expect(parsed.data.events).toHaveLength(0);
+      expect(parsed.data.eventsRedacted).toBe(true);
     }
   });
 
@@ -426,5 +436,367 @@ describe('runActivitySchema', () => {
     const parsed = runActivitySchema.safeParse(buildRunActivity({ fleetJob: 'oops' as never }));
     expect(parsed.success).toBe(true);
     if (parsed.success) expect(parsed.data.fleetJob).toBeNull();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// v27 redaction + plan limits. These fixtures are built INLINE rather than from
+// @/test/fixtures on purpose: what is under test here is what the BOUNDARY does with
+// a raw wire payload, including one from a bridge older than the field being added.
+// ---------------------------------------------------------------------------
+
+/** A minimally valid org-facing lead row, as `panel._build_matches` now emits it. */
+const WIRE_LEAD = {
+  id: 'cmp-001:instagram:c1',
+  commentId: 'c1',
+  campaignId: 'cmp-001',
+  platform: 'instagram',
+  sessionId: 's1',
+  intent: 'Wants red Nike sneakers, size 42, in Tashkent',
+  lang: 'ru',
+  score: 0.82,
+  reason: 'explicit buying intent',
+  extracted: { phone: '+998901234567' },
+  status: 'new',
+  escalated: false,
+  escalationCost: 0,
+  capturedAt: { date: 'Jun 18', time: '11:04', ts: 1_718_708_640 },
+  reelId: 'r1',
+  statusBy: null,
+  statusAt: null,
+};
+
+describe('matchSchema — v27 lead redaction', () => {
+  test('keeps the derived intent', () => {
+    const parsed = matchSchema.parse(WIRE_LEAD);
+    expect(parsed.intent).toBe('Wants red Nike sneakers, size 42, in Tashkent');
+  });
+
+  test('STRIPS username and comment text even when a payload still carries them', () => {
+    // The bridge no longer sends either, but z.object() dropping unknown keys is the
+    // second line of defence: an older/rogue payload must not reach a component with
+    // identity attached, or the redaction is one stale deployment from being undone.
+    const parsed = matchSchema.parse({ ...WIRE_LEAD, username: 'aziz', text: 'how much?' });
+    expect(parsed).not.toHaveProperty('username');
+    expect(parsed).not.toHaveProperty('text');
+  });
+
+  test('STRIPS reelId — the post pointer left with the handle', () => {
+    // WIRE_LEAD still carries `reelId` precisely so this asserts the stripping and not
+    // just the absence of a key nobody sent. A reel id is `reelUrl()` away from a public
+    // page showing the comment AND the handle, so a lead row holding one is the
+    // redaction undone in a click. The only post pointer in the customer plane is on
+    // `RevealedLead`, from the audited reveal.
+    const parsed = matchSchema.parse(WIRE_LEAD);
+    expect(WIRE_LEAD).toHaveProperty('reelId');
+    expect(parsed).not.toHaveProperty('reelId');
+  });
+
+  test('defaults intent to "" when a pre-v27 bridge omits it (page must not blank)', () => {
+    const { intent: _dropped, ...legacy } = WIRE_LEAD;
+    const parsed = matchSchema.safeParse(legacy);
+    expect(parsed.success).toBe(true);
+    if (parsed.success) expect(parsed.data.intent).toBe('');
+  });
+
+  test('degrades a malformed intent to "" rather than throwing the lead out', () => {
+    const parsed = matchSchema.safeParse({ ...WIRE_LEAD, intent: 42 });
+    expect(parsed.success).toBe(true);
+    if (parsed.success) expect(parsed.data.intent).toBe('');
+  });
+});
+
+describe('tickerEntrySchema — v27', () => {
+  const ROW = {
+    id: 'cmp-001:instagram:c1',
+    intent: 'Wants a CRM for a 12-person sales team',
+    platform: 'instagram',
+    score: 0.9,
+    capturedAt: { date: 'Jun 18', time: '11:04' },
+  };
+
+  test('carries intent, never a handle', () => {
+    const parsed = tickerEntrySchema.parse({ ...ROW, username: 'aziz' });
+    expect(parsed.intent).toBe('Wants a CRM for a 12-person sales team');
+    expect(parsed).not.toHaveProperty('username');
+  });
+
+  test('an omitted intent degrades to "" (placeholder), not a failed row', () => {
+    const { intent: _dropped, ...legacy } = ROW;
+    const parsed = tickerEntrySchema.safeParse(legacy);
+    expect(parsed.success).toBe(true);
+    if (parsed.success) expect(parsed.data.intent).toBe('');
+  });
+});
+
+describe('billing — v27 plan limits', () => {
+  const BILLING = {
+    tier: 'free',
+    interval: null,
+    status: 'active',
+    periodEnd: null,
+    cancelAtPeriodEnd: false,
+    leadCap: 10,
+    leadsUsed: 3,
+    campaignCap: 1,
+    campaignsUsed: 1,
+    revealCap: 10,
+    revealsUsed: 4,
+    maxRunLeads: 10,
+    usageRatio: 0.3,
+    nearLimit: false,
+    tiers: [],
+  };
+
+  test('keeps the campaign allowance + per-run bound', () => {
+    const parsed = billingSchema.parse(BILLING);
+    expect(parsed.campaignCap).toBe(1);
+    expect(parsed.campaignsUsed).toBe(1);
+    expect(parsed.maxRunLeads).toBe(10);
+  });
+
+  test('a null campaignCap means UNLIMITED and must survive the boundary as null', () => {
+    // The gate is `campaignCap !== null && used >= cap`. If null ever degraded to 0 a
+    // paying org would find New Campaign disabled at zero campaigns.
+    const parsed = billingSchema.parse({ ...BILLING, tier: 'pro', campaignCap: null });
+    expect(parsed.campaignCap).toBeNull();
+  });
+
+  test('keeps the reveal allowance (Section F)', () => {
+    const parsed = billingSchema.parse(BILLING);
+    expect(parsed.revealCap).toBe(10);
+    expect(parsed.revealsUsed).toBe(4);
+  });
+
+  test('a null revealCap means UNLIMITED and survives the boundary as null', () => {
+    // Same rule as campaignCap: the meter reads `revealCap !== null`, so a null that
+    // degraded to 0 would draw an at-limit bar for an org with no reveal cap at all.
+    const parsed = billingSchema.parse({ ...BILLING, tier: 'pro', revealCap: null });
+    expect(parsed.revealCap).toBeNull();
+  });
+
+  test('a pre-v27 bridge that omits the new keys parses uncapped, not locked out', () => {
+    const {
+      campaignCap: _c, campaignsUsed: _u, maxRunLeads: _m,
+      revealCap: _rc, revealsUsed: _ru, ...legacy
+    } = BILLING;
+    const parsed = billingSchema.safeParse(legacy);
+    expect(parsed.success).toBe(true);
+    if (parsed.success) {
+      expect(parsed.data.campaignCap).toBeNull();  // unlimited = no client-side block
+      expect(parsed.data.campaignsUsed).toBe(0);
+      expect(parsed.data.maxRunLeads).toBe(0);
+      // A bridge without the reveal cap must not read as "0 reveals allowed" — that
+      // would paint an at-limit meter on an org that has no such limit.
+      expect(parsed.data.revealCap).toBeNull();
+      expect(parsed.data.revealsUsed).toBe(0);
+    }
+  });
+
+  test('each tier row carries its own campaignCap for the comparison grid', () => {
+    const parsed = billingTierSchema.parse({
+      tier: 'lite', displayName: 'Lite', leadCap: 50, campaignCap: 3,
+      selfServe: true, prices: { month: 9.99, year: 99 },
+    });
+    expect(parsed.campaignCap).toBe(3);
+    const legacy = billingTierSchema.parse({
+      tier: 'scale', displayName: 'Scale', leadCap: 0,
+      selfServe: false, prices: { month: null, year: null },
+    });
+    expect(legacy.campaignCap).toBeNull();
+  });
+});
+
+describe('runActivitySchema — v27 redacted progress', () => {
+  /** The org-facing payload exactly as `server._serve_run_activity` constructs it. */
+  const ORG_ACTIVITY = {
+    runId: 'run-001',
+    finished: false,
+    fleetJob: null,
+    counters: {
+      reelsSeen: 40, relevancePasses: 12, commentsScored: 30,
+      matches: 7, spendUsd: 0.12, likes: 0, follows: 0,
+    },
+    phase: 'qualifying',
+    leadsFound: 7,
+    leadsDelivered: 7,
+    itemsScanned: 40,
+    relevantFound: 12,
+    lastEventAt: 1_718_800_000.5,
+    targetLeads: 10,
+    events: [],
+    eventsRedacted: true,
+    flags: [],
+    cursor: 0,
+  };
+
+  test('accepts the scalars-only payload with an empty events array', () => {
+    const parsed = runActivitySchema.parse(ORG_ACTIVITY);
+    expect(parsed.events).toEqual([]);
+    expect(parsed.eventsRedacted).toBe(true);
+    expect(parsed.phase).toBe('qualifying');
+    expect(parsed.leadsFound).toBe(7);
+    expect(parsed.targetLeads).toBe(10);
+    expect(parsed.lastEventAt).toBe(1_718_800_000.5);
+  });
+
+  test('an unknown phase degrades to "working", never to a raw string or "done"', () => {
+    // "done" would stop the poller on a live run; a raw internal phase would leak
+    // engine vocabulary onto a customer's screen.
+    const parsed = runActivitySchema.parse({ ...ORG_ACTIVITY, phase: 'jitter_backoff' });
+    expect(parsed.phase).toBe('working');
+    expect(runActivitySchema.parse({ ...ORG_ACTIVITY, phase: undefined }).phase).toBe('working');
+  });
+
+  test('leadsDelivered is null (UNKNOWN) when the server does not report it', () => {
+    // A bridge older than E.5 omits it. Defaulting to 0 would make every such run look
+    // like "found 7, delivered 0" — the dead-letter warning, on a perfectly healthy run.
+    const { leadsDelivered: _dropped, ...legacy } = ORG_ACTIVITY;
+    const parsed = runActivitySchema.parse(legacy);
+    expect(parsed.leadsDelivered).toBeNull();
+    expect(parsed.leadsFound).toBe(7);
+  });
+
+  test('keeps a leadsFound > leadsDelivered gap instead of reconciling it away', () => {
+    // A dead-lettered run: 15 harvested on the worker, 0 acked to the cloud. Both
+    // numbers must survive the boundary — rendering either alone is a lie (E.5).
+    const parsed = runActivitySchema.parse({
+      ...ORG_ACTIVITY, finished: true, phase: 'failed', leadsFound: 15, leadsDelivered: 0,
+    });
+    expect(parsed.leadsFound).toBe(15);
+    expect(parsed.leadsDelivered).toBe(0);
+  });
+
+  test('a pre-v27 bridge (no progress block at all) still parses', () => {
+    const {
+      phase: _p, leadsFound: _l, leadsDelivered: _d, itemsScanned: _i,
+      relevantFound: _r, lastEventAt: _e, targetLeads: _t, eventsRedacted: _x, ...legacy
+    } = ORG_ACTIVITY;
+    const parsed = runActivitySchema.safeParse(legacy);
+    expect(parsed.success).toBe(true);
+    if (parsed.success) {
+      expect(parsed.data.eventsRedacted).toBe(false);  // it really is still sending events
+      expect(parsed.data.phase).toBe('working');
+      expect(parsed.data.leadsFound).toBe(0);
+      expect(parsed.data.targetLeads).toBeNull();
+      expect(parsed.data.lastEventAt).toBeNull();
+    }
+  });
+});
+
+describe('revealLeadResponseSchema — v27 reveal-on-demand', () => {
+  test('unwraps one lead’s identity', () => {
+    const parsed = revealLeadResponseSchema.parse({
+      ok: true,
+      data: {
+        id: 'cmp-001:instagram:c1', commentId: 'c1', platform: 'instagram',
+        username: 'aziz', text: 'how much?', reelId: 'r1',
+      },
+      error: null,
+    });
+    expect(parsed.data?.username).toBe('aziz');
+    expect(parsed.data?.reelId).toBe('r1');
+    // The echoed identity lets the drawer check the answer is for the lead it asked
+    // about before painting a handle on screen.
+    expect(parsed.data?.id).toBe('cmp-001:instagram:c1');
+  });
+
+  test('REJECTS a malformed identity rather than degrading it to blanks', () => {
+    // Every other schema here degrades. This one must not: a blank handle would read
+    // as "this person has no handle" instead of "the reveal did not work".
+    expect(
+      revealLeadResponseSchema.safeParse({
+        ok: true,
+        data: { id: 'cmp-001:instagram:c1', commentId: 'c1', platform: 'instagram',
+                username: 'aziz' },
+        error: null,
+      }).success,
+    ).toBe(false);
+  });
+
+  test('carries a refusal (403 viewer / 404 unknown lead) as data:null + error', () => {
+    const parsed = revealLeadResponseSchema.parse({
+      ok: false, data: null, error: 'your role does not permit this action',
+    });
+    expect(parsed.data).toBeNull();
+    expect(parsed.error).toContain('does not permit');
+  });
+});
+
+describe('delivery pairing (E.5 / E.7)', () => {
+  test('runActivity carries the trio and keeps a not_delivered verdict intact', () => {
+    const parsed = runActivitySchema.parse({
+      runId: 'run-001',
+      finished: true,
+      counters: {
+        reelsSeen: 40, relevancePasses: 12, commentsScored: 30,
+        matches: 15, spendUsd: 1.4, likes: 0, follows: 0,
+      },
+      phase: 'failed',
+      leadsFound: 15,
+      leadsDelivered: 0,
+      delivery: 'not_delivered',
+      itemsScanned: 40,
+      relevantFound: 12,
+      lastEventAt: 1_718_800_000,
+      targetLeads: 10,
+      events: [],
+      eventsRedacted: true,
+      flags: [],
+      cursor: 0,
+    });
+    // A dead-lettered run: 15 harvested on the worker, 0 acked to the cloud. Rendering
+    // either number alone is a lie, so both must survive the boundary with the verdict.
+    expect(parsed.delivery).toBe('not_delivered');
+    expect(parsed.leadsFound).toBe(15);
+    expect(parsed.leadsDelivered).toBe(0);
+    // targetLeads is a TARGET, not a ceiling — 15 against a target of 10 is legal.
+    expect(parsed.targetLeads).toBe(10);
+  });
+
+  test('a mid-flight fleet gap is "pending", not a fault', () => {
+    const base = campaignSchema.parse(
+      buildCampaign({ leadsFound: 7, leadsDelivered: 0, delivery: 'pending' } as never),
+    );
+    expect(base.delivery).toBe('pending');
+    expect(base.leadsFound).toBe(7);
+  });
+
+  test('an unknown/absent delivery word degrades to "delivered" (no false alarm)', () => {
+    // A bridge that cannot report a gap cannot have one to report. Degrading the other
+    // way would stamp the not-delivered warning on every run against a lagging server.
+    expect(campaignSchema.parse(buildCampaign()).delivery).toBe('delivered');
+    expect(
+      campaignSchema.parse(buildCampaign({ delivery: 'exploded' } as never)).delivery,
+    ).toBe('delivered');
+  });
+
+  test('the campaign pair is null (fall back to `leads`) when a bridge omits it', () => {
+    const parsed = campaignSchema.parse(buildCampaign());
+    expect(parsed.leadsFound).toBeNull();
+    expect(parsed.leadsDelivered).toBeNull();
+  });
+});
+
+describe('reelSchema', () => {
+  test('parses an org reel that omits the watchlist fields', () => {
+    // v27: `panel._build_reels` ships `expiresInDays`/`newSinceLastPoll` only to the
+    // superadmin plane. Both are watchlist-derived, and the engine writes a watchlist
+    // row only for a post that produced a lead — so either one alone marks WHICH
+    // scanned post to open to read the handle and the comment, with no audited reveal.
+    // These MUST stay optional rather than `.catch(0)`: `REELS` is `.catch([])`, so a
+    // required field would blank the whole watchlist instead of failing loudly.
+    const parsed = reelSchema.parse(buildReel());
+    expect(parsed.newSinceLastPoll).toBeUndefined();
+    expect(parsed.expiresInDays).toBeUndefined();
+    expect(parsed.id).toBe('r1');
+  });
+
+  test('still parses a superadmin reel that carries them', () => {
+    const parsed = reelSchema.parse(
+      buildReel({ expiresInDays: 5, newSinceLastPoll: 3 }),
+    );
+    expect(parsed.newSinceLastPoll).toBe(3);
+    expect(parsed.expiresInDays).toBe(5);
   });
 });

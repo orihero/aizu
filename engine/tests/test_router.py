@@ -59,6 +59,30 @@ def test_decision_clamps():
     assert d.score == 1.0 and d.confidence == 0.0
 
 
+def test_decision_carries_the_models_intent(monkeypatch):
+    """v27: the MATCH contract asks for an `intent` key, and the Decision is the only
+    thing standing between the reply and `matching.derive_intent`. While `Decision`
+    had no such field the key was dropped on the floor here, and EVERY lead on every
+    platform silently fell through to the deterministic fallback — the feature was
+    inert on the wire while all of its own unit tests passed."""
+    d = _decision_from_payload(
+        {"label": "match", "score": 0.9, "intent": "Wants a price for the red pair"},
+        "cloud", 0.0, "")
+    assert d.intent == "Wants a price for the red pair"
+
+
+def test_decision_intent_defaults_to_empty_for_a_prompt_that_omits_it():
+    """Campaign-authored match prompts written before v27 do not emit the key. That
+    is the case `derive_intent`'s fallback exists for, so it must arrive as "" — not
+    None, and never as a TypeError that would take the whole classification down."""
+    assert _decision_from_payload({"label": "match", "score": 0.9},
+                                  "cloud", 0.0, "").intent == ""
+    # A flaky model answering with a non-string must not blow up the parse either.
+    assert isinstance(_decision_from_payload(
+        {"label": "match", "score": 0.9, "intent": {"oops": 1}}, "cloud", 0.0, "").intent,
+        str)
+
+
 def test_spend_guard_degrades_over_cap():
     fd, path = tempfile.mkstemp(suffix=".db"); os.close(fd)
     store = Store(path)

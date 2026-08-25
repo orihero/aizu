@@ -25,7 +25,7 @@ describe('LeadBoard view', () => {
 });
 
 describe('ReasonMoveModal', () => {
-  const pending = { lead: buildMatch({ username: 'aziz' }), target: 'closed' as const };
+  const pending = { lead: buildMatch({ intent: 'Wants a demo next week' }), target: 'closed' as const };
 
   function renderModal(overrides: Partial<Parameters<typeof ReasonMoveModal>[0]> = {}) {
     const onConfirm = vi.fn();

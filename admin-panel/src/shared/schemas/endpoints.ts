@@ -96,6 +96,17 @@ export const runStartResponseSchema = z.object({
   data: z.object({
     runId: z.string().nullable().catch(null),
     backend: z.string().nullable().catch(null),
+    // v27 plan bounds the server resolved for THIS run (A9). Optional: a pre-v27 bridge
+    // omits them entirely. `targetLeads` is the CLAMPED target the run actually started
+    // with — the run drawer shows it as the denominator for an IN-PROCESS run, whose
+    // target reaches the panel nowhere else (only a fleet job persists it, in its spec).
+    // A SOFT bound (E.6 — a run can overshoot), so never render it as a promise.
+    // `.default(null)` rather than `.optional()`: an absent field must land as an
+    // explicit "the bridge did not report this", not as `undefined` — the repo's
+    // unknown-is-never-zero invariant, and the shape `RunStartResult` declares.
+    targetLeads: z.number().nullable().default(null).catch(null),
+    maxRunLeads: z.number().nullable().default(null).catch(null),
+    leadsRemaining: z.number().nullable().default(null).catch(null),
   }).nullable().catch(null),
   error: z.string().nullable(),
 });

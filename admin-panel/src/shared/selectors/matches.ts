@@ -45,9 +45,10 @@ export function selectLabeledCount(matches: readonly Match[]): number {
   return counts.closed + counts.couldnt_connect + counts.archived;
 }
 
-export function selectMatchesForReel(matches: readonly Match[], reelId: string): readonly Match[] {
-  return matches.filter((m) => m.reelId === reelId);
-}
+// `selectMatchesForReel` used to live here. It is gone with `Match.reelId` (v27): an
+// org-facing lead carries no post pointer at all, so there is nothing to group by. The
+// only reel id in the customer plane rides on a single `RevealedLead` from the audited
+// reveal, and grouping a list by it would be a bulk reveal wearing a selector's clothes.
 
 export function selectEscalatedCount(matches: readonly Match[]): number {
   return matches.filter((m) => m.escalated).length;

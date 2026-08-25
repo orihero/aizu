@@ -307,6 +307,16 @@ export function CampaignCard({ campaign, run }: CampaignCardProps) {
   const isDraft = campaign.status === 'draft';
   const archived = isArchived(campaign);
   const cadence = scheduleSummary(campaign);
+  // E.7: `spent` and `leads` share this card and fail in OPPOSITE directions — a run
+  // that dead-letters banks its spend to the cloud but strands its leads on the worker,
+  // so the card reads "$X spent, 0 leads" with nothing to explain it. The `delivery`
+  // word is read straight off the payload rather than re-derived from the two numbers,
+  // so this card and the run drawer can never disagree about what the gap means. Both
+  // counts fall back to `leads` when a pre-v27 bridge omits them — i.e. to exactly what
+  // this card used to show.
+  const leadsFound = campaign.leadsFound ?? campaign.leads;
+  const leadsDelivered = campaign.leadsDelivered ?? campaign.leads;
+  const notDelivered = !isDraft && campaign.delivery === 'not_delivered';
 
   return (
     <Card className="flex flex-col p-5">
@@ -349,13 +359,30 @@ export function CampaignCard({ campaign, run }: CampaignCardProps) {
       ) : null}
 
       <div className="mt-4 flex gap-8">
-        <CardStat label="Leads" value={isDraft ? '—' : formatNumber(campaign.leads)} muted={isDraft} />
+        {/* The Leads stat is what actually REACHED the account — the leads an operator
+            can open. CPL stays as the server sent it: it is guarded on WON leads, so it
+            reads "—" on every untriaged campaign, healthy or not, and synthesising one
+            from `leadsFound` would price leads the customer cannot open. */}
+        <CardStat label="Leads" value={isDraft ? '—' : formatNumber(leadsDelivered)} muted={isDraft} />
         <CardStat
           label="CPL"
           value={campaign.cpl == null ? '—' : formatMoney(campaign.cpl)}
           muted={campaign.cpl == null}
         />
       </div>
+
+      {/* Showing the delivered count alone would deny work that happened; showing the
+          found count alone would imply leads that aren't there. Both, or neither. */}
+      {notDelivered ? (
+        <div className="mt-2">
+          <Badge
+            tone="warn"
+            title={`This campaign discovered ${formatNumber(leadsFound)} leads, but ${formatNumber(leadsDelivered)} reached your account — a run ended before it could hand them over.`}
+          >
+            {formatNumber(leadsFound)} found · not delivered
+          </Badge>
+        </div>
+      ) : null}
 
       <div className="mt-4">
         <div className="h-1.5 overflow-hidden rounded-full bg-surface-2">
@@ -370,6 +397,13 @@ export function CampaignCard({ campaign, run }: CampaignCardProps) {
           </span>
           <span>{pct}%</span>
         </div>
+        {/* The spend is never hidden or zeroed — it was really incurred and the
+            accounting is correct. The label is what carries the caveat. */}
+        {notDelivered ? (
+          <p className="mt-1 text-[11px] font-medium text-warn">
+            Includes spend on a run that didn’t deliver its leads.
+          </p>
+        ) : null}
       </div>
 
       <div className="mt-3">

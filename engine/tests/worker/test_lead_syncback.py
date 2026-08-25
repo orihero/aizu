@@ -276,3 +276,56 @@ def test_ack_drops_non_string_entries_and_caps_length(store: Store):
     found = store.matches("c-acme")[0]["found_by_models"]
     assert len(found) == 20
     assert all(isinstance(m, str) for m in found)
+
+
+# ----- v27: the intent has to travel WITH the lead ---------------------------
+
+def test_the_derived_intent_reaches_the_cloud_on_ack(store: Store):
+    """On a hosted deployment the cloud `matches` row is written from the ACK BODY,
+    not by the engine — `derive_intent` only ever ran on the WORKER's local store. If
+    the intent does not ride along, every fleet-harvested lead lands NULL-intent and
+    the customer sees the neutral placeholder on every row, forever."""
+    _register(store)
+    _enqueue_and_lease(store)
+
+    ok = store.ack_job(job_id="j1", worker_id="w1",
+                       summary={"matches": 1, "session_id": "s-loop-1"},
+                       leads=[_lead("cmt-i1", intent="Wants a bulk price for 40 units")])
+
+    assert ok
+    row = next(m for m in store.matches("c-acme") if m["comment_id"] == "cmt-i1")
+    assert row["intent"] == "Wants a bulk price for 40 units"
+
+
+def test_an_older_worker_that_omits_intent_never_blanks_a_stored_one(store: Store):
+    """The key is additive, so a worker built before v27 simply leaves it out. That
+    must degrade to "no new information" — the COALESCE keeps whatever is already
+    stored — rather than erasing an intent the cloud already had."""
+    _register(store)
+    store.upsert_match(campaign_id="c-acme", reel_id="reel-1", comment_id="cmt-i2",
+                       username="buyer", text="t", lang="en", score=0.8,
+                       reason="earlier", extracted=None, tier="local", platform=PLAT,
+                       intent="Wants a bulk price for 40 units")
+    _enqueue_and_lease(store)
+
+    # The pre-v27 DTO shape: every key except `intent`.
+    ok = store.ack_job(job_id="j1", worker_id="w1",
+                       summary={"matches": 1, "session_id": "s-loop-1"},
+                       leads=[_lead("cmt-i2")])
+
+    assert ok
+    row = next(m for m in store.matches("c-acme") if m["comment_id"] == "cmt-i2")
+    assert row["intent"] == "Wants a bulk price for 40 units"
+    assert row["reason"] == "high intent"      # the rest of the row still refreshes
+
+
+def test_lead_dto_carries_the_intent_column():
+    """The store half is only useful if the sidecar actually PUTS the key in the body
+    — the two were written apart, and a DTO that silently drops the column would make
+    every assertion above pass while the wire stayed empty."""
+    from aizu.worker.sidecar import _lead_dto
+    dto = _lead_dto({"comment_id": "c1", "reel_id": "r1", "platform": PLAT,
+                     "username": "buyer", "text": "t", "lang": "en", "score": 0.8,
+                     "reason": "ok", "intent": "Wants a bulk price", "extracted": None,
+                     "tier": "local", "session_id": "s1", "captured_at": 1.0})
+    assert dto["intent"] == "Wants a bulk price"

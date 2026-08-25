@@ -93,6 +93,17 @@ def panel():
     base = f"http://127.0.0.1:{httpd.server_address[1]}"
     cookie = _signup_cookie(base, "readiness-tester@aizu.test", "test-password-123")
     ctx = {"base": base, "db": db_path, "cookie": cookie, "manager": manager}
+    # v27: campaign creation is plan-limited (free = 1) and this fixture needs two
+    # (one CDP platform, one API-only) to tell the gated path from the ungated one.
+    # The cap itself is covered by tests/test_run_redaction_server.py.
+    store = Store(db_path)
+    try:
+        org_id = int(store._conn.execute(
+            "SELECT id FROM organizations ORDER BY id LIMIT 1").fetchone()[0])
+        store.upsert_subscription(org_id, last_event_ts=1.0, tier="pro",
+                                  status="active")
+    finally:
+        store.close()
     ctx["ig"] = _make_campaign(ctx, "ig-gate", "instagram")
     ctx["yt"] = _make_campaign(ctx, "yt-gate", "youtube")
     yield ctx

@@ -25,7 +25,7 @@ from ..base import SOFT_HALT_KINDS, HaltSession, session_crash_guard
 from .actions import ActionPolicy
 from .cascade import Cascade
 from ...core.config import Campaign, Soul
-from ...core.matching import compute_found_by
+from ...core.matching import compute_found_by, derive_intent
 from ...core.feed import FeedSource, Reel
 from ...core.logsetup import SUCCESS_LEVEL, get_logger
 from ...core.pacing import Pacer
@@ -474,6 +474,15 @@ class Session:
                        {"reelId": reel_id, "count": len(comments)})
 
         found = 0
+        # Defect A — per-batch overshoot. The caller raises `self.counters.matches` ONCE
+        # for this whole batch (`self.counters.matches += found`), so the only lead-target
+        # guard in the walk (top of `for reel in self.feed.walk()`) cannot fire mid-batch:
+        # a reel whose comments all qualify delivers the entire batch no matter how little
+        # of the target is left. Measured on a live prod run: one reel produced 13 matches
+        # against a target of 10. `self.counters.matches + found` is the live running
+        # total — reading `self.counters.matches` alone sees the PRE-batch value and still
+        # overshoots, just by less.
+        stopped_early = False
         for comment in comments:
             try:
                 # The reel rides along so extraction can read the advertiser's
@@ -494,10 +503,20 @@ class Session:
             self.counters.comments_scored += 1
             if res.is_match:
                 d = res.decision
+                # v27 redaction: `intent` is the ONLY lead text the org ever
+                # sees — username and raw comment stop at the superadmin plane
+                # from here. `getattr` because a Decision carries the model's own
+                # `intent` only when the MATCH prompt asked for one (a
+                # campaign-authored prompt never does); derive_intent composes the
+                # line from the grounded fields plus the reel caption when it didn't.
                 self.store.upsert_match(
                     campaign_id=cid, reel_id=reel_id, comment_id=comment.comment_id,
                     username=comment.username, text=comment.text, lang=comment.lang,
                     score=d.score, reason=d.reason, extracted=d.extracted, tier=d.tier,
+                    intent=derive_intent(getattr(d, "intent", None),
+                                         extracted=d.extracted,
+                                         post_caption=reel.caption,
+                                         comment_text=comment.text),
                     session_id=self.session_id, platform=plat,
                     found_by_models=compute_found_by(d.model, d.comparisons,
                                                      self.campaign.threshold),
@@ -507,7 +526,16 @@ class Session:
                            f"Match: @{comment.username} (score {d.score:.2f})",
                            {"username": comment.username, "score": d.score,
                             "tier": d.tier, "reelId": reel_id})
-        self.store.set_cursor(cid, reel_id, new_cursor, platform=plat)
+                if (self.lead_target is not None
+                        and self.counters.matches + found >= self.lead_target):
+                    stopped_early = True
+                    break
+        if not stopped_early:
+            # A mid-batch stop leaves the TAIL of this page unscored, and `new_cursor`
+            # covers the WHOLE fetched page — advancing it here would mark comments we
+            # never read as consumed and lose them for good. Leave the cursor put and
+            # re-offer the page: an unread comment is UNKNOWN, never "not a lead".
+            self.store.set_cursor(cid, reel_id, new_cursor, platform=plat)
         if found:
             self.store.add_to_watchlist(cid, reel_id, ttl_days=self.cfg.watchlist_ttl_days,
                                         platform=plat)

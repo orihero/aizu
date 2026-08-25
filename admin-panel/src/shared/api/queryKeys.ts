@@ -18,8 +18,13 @@ export const queryKeys = {
       query.platform ?? '', query.campaign ?? '', query.sort ?? 'capturedAt',
       query.dir ?? 'desc'] as const,
 
-  /** One run's live activity feed (polled while the run is in flight). */
+  /** One run's live activity feed (polled while the run is in flight). v27: this is
+   * the org-facing PROGRESS poll — scalars only, `events` always empty. */
   runActivity: (runId: string) => ['run-activity', runId] as const,
+  // NOTE: there is deliberately NO key for the lead reveal. POST /api/lead/reveal is an
+  // imperative, audited call whose result is session-local and must never be persisted
+  // — a cache entry surviving a drawer close would turn "anonymized by default" into
+  // "anonymized until first viewed", and would silently defeat Section F.
   /** GET /api/agent/readiness — polled globally for the "agent not ready" banner. */
   agentReadiness: ['agent-readiness'] as const,
   /**
@@ -47,6 +52,15 @@ export const queryKeys = {
   /** One org's leads page (keyed by every filter/sort/page like the org leads list). */
   adminOrgLeads: (orgId: number, page: number, pageSize: number) =>
     ['admin', 'orgs', orgId, 'leads', page, pageSize] as const,
+  /** One org's recent runs — the picker for the narrative feed below (v27). */
+  adminOrgRuns: (orgId: number) => ['admin', 'orgs', orgId, 'runs'] as const,
+  /**
+   * One run's FULL narrative feed (v27). Keyed by run id only, NOT by the `after`
+   * cursor: the feed is paged by appending each poll's events to what the console
+   * already holds, so a cursor in the key would give every poll its own cache entry
+   * and lose the accumulated history. Superadmin plane — this is the un-redacted feed.
+   */
+  adminRunActivity: (runId: string) => ['admin', 'run-activity', runId] as const,
   /** GET /api/admin/audit. */
   adminAudit: ['admin', 'audit'] as const,
   /** GET /api/admin/execution-backend — the platform-wide run routing switch. */

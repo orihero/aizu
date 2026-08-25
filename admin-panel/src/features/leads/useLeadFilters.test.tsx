@@ -119,18 +119,36 @@ describe('useLeadFilters persistence', () => {
     const { result } = renderLeads('/leads');
 
     // A new text column sorts ascending; the default (captured) is omitted.
-    act(() => { result.current.filters.toggleSort('username'); });
+    act(() => { result.current.filters.toggleSort('intent'); });
     await waitFor(() => {
-      expect(result.current.filters.sort).toEqual({ key: 'username', dir: 'asc' });
-      expect(result.current.params.get('sort')).toBe('username');
+      expect(result.current.filters.sort).toEqual({ key: 'intent', dir: 'asc' });
+      expect(result.current.params.get('sort')).toBe('intent');
       expect(result.current.params.get('dir')).toBe('asc');
     });
 
     // Clicking the active column flips its direction.
-    act(() => { result.current.filters.toggleSort('username'); });
+    act(() => { result.current.filters.toggleSort('intent'); });
     await waitFor(() => {
-      expect(result.current.filters.sort).toEqual({ key: 'username', dir: 'desc' });
+      expect(result.current.filters.sort).toEqual({ key: 'intent', dir: 'desc' });
     });
+  });
+
+  it('drops a stale username sort — the column no longer exists (v27)', () => {
+    // A bookmark or a stored slice from before the redaction still says sort=username.
+    // It must degrade to the default sort, not resurrect a column with no data behind it.
+    const { result } = renderLeads('/leads?sort=username');
+    expect(result.current.filters.sort).toEqual(DEFAULT_LEAD_SORT);
+
+    localStorage.setItem(
+      STORAGE_KEY,
+      JSON.stringify({
+        filters: { query: '', status: 'all', platform: 'all', campaign: 'all' },
+        sort: { key: 'username', dir: 'asc' },
+        page: 1,
+      }),
+    );
+    const stored = renderLeads('/leads');
+    expect(stored.result.current.filters.sort).toEqual(DEFAULT_LEAD_SORT);
   });
 
   it('selects and clears a page of rows without touching the URL', () => {

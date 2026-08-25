@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { Button } from '@/shared/ui/Button';
 import { Modal } from '@/shared/ui/Modal';
-import { LEAD_STATUS_LABEL } from '@/shared/selectors/leads';
+import { LEAD_STATUS_LABEL, leadIntentLabel } from '@/shared/selectors/leads';
 import type { Match, MatchStatus } from '@/shared/types/domain';
 
 export interface PendingMove {
@@ -48,7 +48,8 @@ export function ReasonMoveModal({ pending, onCancel, onConfirm, isSubmitting }: 
       {pending ? (
         <>
           <p className="mb-2 text-xs text-text-muted">
-            Moving <span className="font-semibold text-text">{pending.lead.username}</span> to{' '}
+            {/* The lead is named by its intent — there is no handle on an org-facing lead. */}
+            Moving <span className="font-semibold text-text">{leadIntentLabel(pending.lead)}</span> to{' '}
             <span className="font-semibold text-text">{LEAD_STATUS_LABEL[pending.target]}</span>. Add a
             reason — it's recorded on the lead's history.
           </p>

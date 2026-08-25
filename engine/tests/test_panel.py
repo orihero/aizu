@@ -60,7 +60,10 @@ def test_sessions_and_matches_reconcile():
     assert s["reelsSeen"] == 2
     assert s["matches"] == len(raw["MATCHES"]) == 1   # only c1 is a lead
     m = raw["MATCHES"][0]
-    assert m["reelId"] == "r1" and m["sessionId"] == s["id"]
+    # No `reelId` on an org-facing lead (v27): the post it names is public and shows
+    # both the handle and the comment, so it lives behind the audited reveal instead.
+    assert "reelId" not in m
+    assert m["sessionId"] == s["id"]
     assert "555" in (m["extracted"].get("phone") or "")
 
 
@@ -185,13 +188,22 @@ def test_lead_payload_keeps_two_campaigns_leads_distinct():
     """
     store = _bare_store()
     try:
-        for cid, platform, user in (("camp-a", "instagram", "alice"),
-                                    ("camp-b", "instagram", "bob"),
-                                    ("camp-a", "x", "carol")):
+        for cid, platform, user, wants in (("camp-a", "instagram", "alice", "roofing"),
+                                           ("camp-b", "instagram", "bob", "gutters"),
+                                           ("camp-a", "x", "carol", "cladding")):
             store.upsert_match(campaign_id=cid, reel_id="r", comment_id="dup-1",
                                username=user, text="t", lang="en", score=0.9,
                                reason="r", extracted=None, tier="local",
-                               platform=platform)
+                               platform=platform,
+                               # v27: the intent is now the only per-row prose an org
+                               # sees, so it is what a collapsed row would visibly
+                               # duplicate — seed a distinct one per record. The seed
+                               # is the WANT, not the handle: `_build_matches` scrubs
+                               # the row's own username out of its org-facing prose,
+                               # so a handle-derived intent would be redacted back to
+                               # a shared prefix and this test would stop testing
+                               # distinctness (see test_lead_redaction_audit.py).
+                               intent=f"Wants a quote for {wants}")
         rows = _build_matches(store, "camp-a") + _build_matches(store, "camp-b")
     finally:
         store.close()
@@ -203,7 +215,84 @@ def test_lead_payload_keeps_two_campaigns_leads_distinct():
     # reads campaignId/platform/commentId off the resolved row.
     for r in rows:
         assert by_id[lead_uid(r["campaignId"], r["platform"], r["commentId"])] is r
-    assert by_id[lead_uid("camp-b", "instagram", "dup-1")]["username"] == "bob"
-    assert by_id[lead_uid("camp-a", "x", "dup-1")]["username"] == "carol"
+    # v27: identity is superadmin-only, so the distinctness has to be visible on a
+    # field the org actually receives — the derived intent.
+    assert all("username" not in r and "text" not in r for r in rows)
+    assert by_id[lead_uid("camp-b", "instagram", "dup-1")]["intent"] \
+        == "Wants a quote for gutters"
+    assert by_id[lead_uid("camp-a", "x", "dup-1")]["intent"] \
+        == "Wants a quote for cladding"
     # The raw platform comment id is still carried for display/export.
     assert {r["commentId"] for r in rows} == {"dup-1"}
+
+
+# ----- v27 lead redaction: intent in, identity out ------------------------------
+
+def test_org_lead_payload_carries_intent_and_no_identity():
+    """The central promise of v27: an org-facing lead row shows what the person
+    WANTS and nothing that says who they are. The username and the comment body stay
+    in the DB — they simply never reach this payload."""
+    store = _bare_store()
+    try:
+        store.upsert_match(campaign_id="camp-a", reel_id="r", comment_id="c1",
+                           username="alice", text="how much for the red ones?",
+                           lang="en", score=0.9, reason="asked price",
+                           extracted=None, tier="local", platform="instagram",
+                           intent="Wants a price for the red sneakers")
+        row = _build_matches(store, "camp-a")[0]
+    finally:
+        store.close()
+    assert "username" not in row and "text" not in row
+    assert row["intent"] == "Wants a price for the red sneakers"
+    # Neither identity may survive anywhere else in the row either (a nested copy in
+    # `extracted` or a reason string would be the same leak by another door).
+    body = json.dumps(row)
+    assert "alice" not in body and "red ones" not in body
+    # The rest of the row is the product and must be untouched.
+    assert row["reason"] == "asked price" and row["score"] == 0.9
+    assert row["commentId"] == "c1"
+    # `reelId` is a POINTER to the identity and goes with it: the post it names is
+    # public and carries the handle and the comment in plain sight, so an org-facing
+    # reelId would have let anyone with devtools rebuild the list without ever
+    # calling the audited reveal.
+    assert "reelId" not in row and "reel" not in body
+
+
+def test_include_identity_is_opt_in_and_off_by_default():
+    """`_build_matches` is shared by the org and superadmin paths, so the flag is the
+    whole gate. It defaults to DENY: a future org-facing caller that forgets it leaks
+    nothing, where a default-allow would leak on every caller someone forgets."""
+    store = _bare_store()
+    try:
+        store.upsert_match(campaign_id="camp-a", reel_id="r", comment_id="c1",
+                           username="alice", text="how much?", lang="en", score=0.9,
+                           reason="asked price", extracted=None, tier="local",
+                           platform="instagram", intent="Wants a price")
+        org = _build_matches(store, "camp-a")[0]
+        admin = _build_matches(store, "camp-a", include_identity=True)[0]
+    finally:
+        store.close()
+    assert "username" not in org and "text" not in org and "reelId" not in org
+    assert admin["username"] == "alice" and admin["text"] == "how much?"
+    # …and the superadmin keeps the post pointer, which is what makes the reveal
+    # endpoint's own `reelId` a re-disclosure of something already visible upstream.
+    assert admin["reelId"] == "r"
+    # The superadmin sees BOTH — the derived line beside the raw evidence it came
+    # from, which is the only way to tell a good intent from a bad one.
+    assert admin["intent"] == org["intent"] == "Wants a price"
+
+
+def test_a_lead_captured_before_v27_renders_an_empty_intent_not_a_guess():
+    """A row migrated in from v26 has `intent IS NULL`. The payload must carry the
+    empty string — the panel's cue for its neutral placeholder — and must never
+    substitute a fallback derived from the comment or the handle."""
+    store = _bare_store()
+    try:
+        store.upsert_match(campaign_id="camp-a", reel_id="r", comment_id="legacy-1",
+                           username="alice", text="how much?", lang="en", score=0.9,
+                           reason="asked price", extracted=None, tier="local",
+                           platform="instagram")          # no intent: pre-v27 row
+        row = _build_matches(store, "camp-a")[0]
+    finally:
+        store.close()
+    assert row["intent"] == ""

@@ -70,6 +70,22 @@ export interface LeadStats {
   readonly wonRate: number;
 }
 
+/**
+ * The prose shown wherever a lead needs a one-line label. `intent` is the ONLY
+ * lead prose an org sees (v27 redaction), and `''` is a real value the server
+ * sends — a pre-v27 lead, or nothing the engine could derive honestly. It gets a
+ * neutral placeholder, never a fallback to an identifier: falling back to a handle
+ * or a comment id is exactly the leak the redaction closed.
+ */
+export const LEAD_INTENT_PLACEHOLDER = 'Intent not captured';
+
+export function leadIntentLabel(lead: Match): string {
+  return lead.intent.trim() === '' ? LEAD_INTENT_PLACEHOLDER : lead.intent;
+}
+
+// Searches the same fields the bridge's own `q` does (`panel_org._matches_filter_sort`
+// searches intent + reason + extracted values), so a client-side filter over an
+// already-loaded list agrees with a server-side one.
 function matchesQuery(lead: Match, query: string): boolean {
   if (!query) return true;
   const q = query.toLowerCase();
@@ -77,8 +93,8 @@ function matchesQuery(lead: Match, query: string): boolean {
     .map((v) => (v == null ? '' : typeof v === 'string' ? v : JSON.stringify(v)))
     .join(' ');
   return (
-    lead.username.toLowerCase().includes(q) ||
-    lead.text.toLowerCase().includes(q) ||
+    lead.intent.toLowerCase().includes(q) ||
+    lead.reason.toLowerCase().includes(q) ||
     extracted.toLowerCase().includes(q)
   );
 }
@@ -92,8 +108,12 @@ export function selectFilteredLeads(matches: readonly Match[], filters: LeadFilt
   );
 }
 
-/** Columns the operator can sort the Leads table by. */
-export type LeadSortKey = 'username' | 'platform' | 'status' | 'score' | 'captured';
+/**
+ * Columns the operator can sort the Leads table by. v27: `username` is gone — an
+ * org-facing lead has no handle — and `intent`, the column that replaced it, sorts
+ * in its place (the server accepts the same key).
+ */
+export type LeadSortKey = 'intent' | 'platform' | 'status' | 'score' | 'captured';
 
 export interface LeadSort {
   readonly key: LeadSortKey;
@@ -110,8 +130,8 @@ const STATUS_SORT_ORDER: Readonly<Record<MatchStatus, number>> = Object.fromEntr
 
 function compareByKey(a: Match, b: Match, key: LeadSortKey): number {
   switch (key) {
-    case 'username':
-      return a.username.localeCompare(b.username);
+    case 'intent':
+      return a.intent.localeCompare(b.intent);
     case 'platform':
       return a.platform.localeCompare(b.platform);
     case 'status':
@@ -210,14 +230,25 @@ export interface LeadExportColumn {
   readonly numeric?: boolean;
 }
 
+/**
+ * v27: the `username` and `text` columns are replaced by a single `intent` column.
+ * An export is a customer-facing artifact that leaves the app entirely — a handle or
+ * a verbatim comment in a spreadsheet is the redaction undone, permanently and at
+ * scale, so identity must not be reachable from here at all. The columns build from
+ * the anonymized `Match` and nothing else: an audited per-lead reveal is session-local
+ * state in the drawer and is deliberately not readable from this module.
+ *
+ * The intent cell writes the raw string, so an un-derived intent is an EMPTY cell:
+ * "Intent not captured" is UI copy for a human reading a table, not data a downstream
+ * CRM import should have to filter back out.
+ */
 export const LEAD_EXPORT_COLUMNS: readonly LeadExportColumn[] = [
   { header: 'id', value: (l) => l.commentId },
-  { header: 'username', value: (l) => l.username },
+  { header: 'intent', value: (l) => l.intent },
   { header: 'platform', value: (l) => l.platform },
   { header: 'status', value: (l) => LEAD_STATUS_LABEL[l.status] },
   { header: 'score', value: (l) => l.score.toFixed(2), numeric: true },
   { header: 'captured', value: (l) => `${l.capturedAt.date} ${l.capturedAt.time}` },
-  { header: 'text', value: (l) => l.text },
 ];
 
 /** Column headers, in order — the first row of every export. */
