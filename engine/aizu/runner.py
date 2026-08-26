@@ -116,6 +116,17 @@ class RunResult:
 Spawner = Callable[[list[str], Path, dict, Path], Any]
 
 
+# A lead-target run carries NO operator-chosen time cap — the panel asks one question
+# ("how many leads?") and `cli._run_one_channel` loops discovery sessions until it has
+# them. That loop's only other exits are a halt and the daytime window, so on an
+# algorithmic feed a campaign that never matches would spin for days. This is the runaway
+# guard behind the target, not a knob: 12h is both the API's own ceiling and the width of
+# the daytime write window, so a run that started inside the window can never hit it
+# first. In-process runs only — a fleet job gets the box's `max_job_minutes` instead, and
+# putting this on the RunSpec would stretch that worker's supervisor deadline with it.
+TARGET_RUN_GUARD_MINUTES = 720
+
+
 def build_argv(spec: RunSpec, python_exe: str, db_path: str,
                config_dir: str) -> list[str]:
     """Pure RunSpec → `aizu` CLI argv.
@@ -123,6 +134,9 @@ def build_argv(spec: RunSpec, python_exe: str, db_path: str,
     `--db` is a global option and must precede the subcommand. A single-campaign
     run always uses `--campaign <id>` (the engine's resolver also accepts the file
     campaign's own id, so no special case is needed). Dry mode appends `--dry-run`.
+
+    A campaign run with a lead target and no duration gets `TARGET_RUN_GUARD_MINUTES`
+    so the session loop cannot spin forever on a campaign that never matches.
     """
     argv = [python_exe, "-m", "aizu.cli", "--db", db_path]
     if spec.scope == "all":
@@ -133,8 +147,10 @@ def build_argv(spec: RunSpec, python_exe: str, db_path: str,
         argv += ["run", "--config", config_dir, "--campaign", spec.campaign_id or ""]
         if spec.target_leads:
             argv += ["--target-leads", str(spec.target_leads)]
-        if spec.duration_minutes:
-            argv += ["--duration-minutes", str(spec.duration_minutes)]
+        guarded = spec.duration_minutes or (
+            TARGET_RUN_GUARD_MINUTES if spec.target_leads else None)
+        if guarded:
+            argv += ["--duration-minutes", str(guarded)]
     if spec.mode == "dry":
         argv.append("--dry-run")
     return argv
@@ -224,6 +240,15 @@ def _extract_run_breakdown(log_path: Path) -> tuple[Optional[dict], Optional[str
             kind if isinstance(kind, str) else None)
 
 
+# cli's `stop_reason` → the operator-facing phrase. "target_met" and "done" say nothing
+# a lead count doesn't already say, so they are deliberately absent (no phrase → no
+# parenthetical). "halt" is omitted too: a halt already prints its own HALTED: line.
+_STOP_REASON_TEXT = {
+    "single_pass": "sources swept - no new posts left to read",
+    "time_cap": "12h safety cap reached",
+}
+
+
 def _summarize(exit_code: int, log_path: Path) -> str:
     """Best-effort one-liner for the panel's recent list.
 
@@ -237,7 +262,14 @@ def _summarize(exit_code: int, log_path: Path) -> str:
             return (f"ran {obj.get('ran')}, ok {obj.get('ok')}, "
                     f"halted {obj.get('halted')}")
         if "matches" in obj:    # single-session summary
-            return f"matches {obj.get('matches')}, spend ${float(obj.get('spend_usd', 0)):.4f}"
+            line = (f"matches {obj.get('matches')}, "
+                    f"spend ${float(obj.get('spend_usd', 0)):.4f}")
+            # Why it stopped, when that is not "it found what you asked for". A run
+            # bounded by its LEAD TARGET (the panel's only launch input) can still end
+            # short — the sources were swept, the daytime window closed, the 12h runaway
+            # guard fired — and the count alone cannot tell those apart.
+            reason = _STOP_REASON_TEXT.get(obj.get("stop_reason") or "")
+            return f"{line} ({reason})" if reason else line
     for line in reversed(tail.splitlines()):
         s = line.strip()
         if s.startswith(("HALTED:", "error:")):

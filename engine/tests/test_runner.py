@@ -6,8 +6,8 @@ import time
 
 import pytest
 
-from aizu.runner import (RunManager, RunSpec, build_argv, _error_detail,
-                              _summarize)
+from aizu.runner import (TARGET_RUN_GUARD_MINUTES, RunManager, RunSpec, build_argv,
+                              _error_detail, _summarize)
 
 
 # ---- build_argv (pure) ----
@@ -422,6 +422,48 @@ def test_summarize_prefers_json_summary_over_traceback(tmp_path):
     log_path.write_text('{"matches": 3, "spend_usd": 0.0125}', encoding="utf-8")
 
     assert _summarize(0, log_path) == "matches 3, spend $0.0125"
+
+
+def test_argv_guards_a_target_run_that_asked_for_no_time_cap():
+    """The panel sends a lead target and NO duration — the run stops when it has the
+    leads. The guard still rides along so a campaign that never matches cannot loop
+    sessions for days on an algorithmic feed."""
+    argv = build_argv(RunSpec("campaign", "c1", "live", target_leads=25),
+                      "/py", "aizu.db", "config")
+    assert argv[argv.index("--duration-minutes") + 1] == str(TARGET_RUN_GUARD_MINUTES)
+
+
+def test_argv_leaves_an_untargeted_run_untimed():
+    """No target and no duration is the legacy single-session run: the guard exists to
+    bound a LOOP, and without a target there is no loop to bound."""
+    argv = build_argv(RunSpec("campaign", "c1", "live"), "/py", "aizu.db", "config")
+    assert "--duration-minutes" not in argv
+
+
+def test_argv_never_overrides_an_explicit_duration():
+    argv = build_argv(RunSpec("campaign", "c1", "live", target_leads=25,
+                              duration_minutes=30), "/py", "aizu.db", "config")
+    assert argv[argv.index("--duration-minutes") + 1] == "30"
+
+
+def test_summarize_names_a_shortfall_reason(tmp_path):
+    """A run bounded only by its lead target can end short of it. The summary has to say
+    which — swept sources vs. the 12h runaway guard — because the count cannot."""
+    log_path = tmp_path / "run-x-campaign.log"
+    log_path.write_text('{"matches": 3, "spend_usd": 0.01, "stop_reason": "single_pass"}',
+                        encoding="utf-8")
+
+    assert _summarize(0, log_path) == (
+        "matches 3, spend $0.0100 (sources swept - no new posts left to read)")
+
+
+def test_summarize_stays_quiet_when_the_target_was_met(tmp_path):
+    """"target_met" adds nothing a lead count doesn't already say — no parenthetical."""
+    log_path = tmp_path / "run-x-campaign.log"
+    log_path.write_text('{"matches": 10, "spend_usd": 0.02, "stop_reason": "target_met"}',
+                        encoding="utf-8")
+
+    assert _summarize(0, log_path) == "matches 10, spend $0.0200"
 
 
 def test_summarize_prefers_halted_line(tmp_path):

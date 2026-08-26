@@ -498,8 +498,26 @@ _AGG_COUNTERS = ("reels_seen", "relevance_passes", "comments_scored", "matches")
 _SINGLE_PASS_PLATFORMS = {"youtube", "telegram", "reddit"}
 
 
+def _stop_reason_for_single_pass(summary: dict, *, target: Optional[int],
+                                 single_pass: bool) -> str:
+    """Why a run that did ONE pass stopped, for the run history.
+
+    `single_pass` is the honest answer for a deterministic platform (YouTube, Telegram,
+    Reddit): its seeded sources were swept once and re-sweeping them re-fetches the same
+    already-seen items, so a shortfall against the target means the SOURCES are spent,
+    not that the run gave up early. Naming it is the difference between "the run ignored
+    my target" and "there was nothing left to read".
+    """
+    if summary.get("halt_reason"):
+        return "halt"
+    if target is not None and int(summary.get("matches") or 0) >= target:
+        return "target_met"
+    return "single_pass" if single_pass else "done"
+
+
 def _run_one_channel(*, campaign: Campaign, store: Store, soul,
-                     args: argparse.Namespace) -> dict:
+                     args: argparse.Namespace,
+                     lead_target: Optional[int] = None) -> dict:
     """Run ONE channel (a single-platform campaign) to completion and return its
     sub-summary. Always runs ≥1 pass (D1); when --target-leads and/or
     --duration-minutes is set it runs back-to-back LIVE sessions until the run is
@@ -519,8 +537,17 @@ def _run_one_channel(*, campaign: Campaign, store: Store, soul,
     sources are seeded/API, so a second session re-fetches the SAME items (now
     already-seen) at full API quota cost for zero new leads. Only Instagram's
     algorithmic feed surfaces fresh items on a re-scroll, so only it loops to target.
+
+    `lead_target` OVERRIDES `args.target_leads` for this channel: the fan-out passes
+    what the RUN still needs (the target minus what earlier channels already banked),
+    so a multi-platform campaign honours ONE run-wide target instead of handing every
+    channel a fresh copy of it. None means "inherit the run's own target".
+
+    The summary carries `stop_reason` — `target_met`, `time_cap`, `halt`,
+    `single_pass` or `done` — so "why did this run stop short of N leads?" is
+    answerable from the run history instead of by reading the log.
     """
-    target = getattr(args, "target_leads", None)
+    target = lead_target if lead_target is not None else getattr(args, "target_leads", None)
     duration = getattr(args, "duration_minutes", None)
 
     summary = _run_one(campaign=campaign, store=store, soul=soul,
@@ -536,10 +563,12 @@ def _run_one_channel(*, campaign: Campaign, store: Store, soul,
                  "re-fetch the same items at full API cost).", campaign.platform)
     if (args.dry_run or summary.get("halt_reason")
             or (not target and not duration) or single_pass):
+        summary["stop_reason"] = _stop_reason_for_single_pass(
+            summary, target=target, single_pass=single_pass)
         return summary
 
     agg = {"sessions": 1, "spend_usd": float(summary.get("spend_usd") or 0.0),
-           "halt_reason": None, "halt_kind": None}
+           "halt_reason": None, "halt_kind": None, "stop_reason": "done"}
     for key in _AGG_COUNTERS:
         agg[key] = int(summary.get(key) or 0)
     deadline = time.monotonic() + duration * 60 if duration else None
@@ -550,8 +579,13 @@ def _run_one_channel(*, campaign: Campaign, store: Store, soul,
         # run resumed past its cap stops at once — the wall-clock is never frozen.
         wait_while_paused(pause_file)
         if target is not None and agg["matches"] >= target:
+            agg["stop_reason"] = "target_met"
             break
         if deadline is not None and time.monotonic() >= deadline:
+            # The wall clock, not the target. With the panel's one-question launch form
+            # this is the runaway guard firing (server-side DEFAULT_TARGET_RUN_MINUTES),
+            # which is exactly the case worth naming in the summary.
+            agg["stop_reason"] = "time_cap"
             break
         # Top up only the leads still missing, so a session can short-circuit once the
         # run as a whole has hit the target (None → bounded only by the reel budget).
@@ -565,6 +599,7 @@ def _run_one_channel(*, campaign: Campaign, store: Store, soul,
         if nxt.get("halt_reason"):
             agg["halt_reason"] = nxt["halt_reason"]
             agg["halt_kind"] = nxt.get("halt_kind")
+            agg["stop_reason"] = "halt"
             break
     agg["spend_usd"] = round(agg["spend_usd"], 6)
     if target is not None:
@@ -595,7 +630,7 @@ def _run_session_loop(*, campaign: Campaign, store: Store, soul,
 
     target = getattr(args, "target_leads", None)
     agg: dict = {"sessions": 0, "spend_usd": 0.0, "halt_reason": None,
-                 "halt_kind": None}
+                 "halt_kind": None, "stop_reason": "done"}
     for key in _AGG_COUNTERS:
         agg[key] = 0
     per_platform: dict[str, dict] = {}
@@ -603,13 +638,22 @@ def _run_session_loop(*, campaign: Campaign, store: Store, soul,
 
     for channel in _effective_channels(campaign):
         plat = channel.platform
+        # ONE run-wide lead target, not one per channel. `args.target_leads` is what the
+        # RUN was asked for; each channel gets what is still MISSING, and once the run
+        # has them the fan-out stops instead of starting another channel on a fresh copy
+        # of the budget. Without this a 3-channel campaign could deliver 3× the target —
+        # and the target is metered against the org's period lead allowance.
+        remaining = None if target is None else target - agg["matches"]
+        if remaining is not None and remaining <= 0:
+            agg["stop_reason"] = "target_met"
+            break
         if cdp_poisoned and plat in _CDP_PLATFORMS:
             per_platform[plat] = {"skipped": "cdp_poisoned"}
             continue
         sub_campaign = _campaign_with_channel(campaign, channel)
         try:
             sub = _run_one_channel(campaign=sub_campaign, store=store, soul=soul,
-                                   args=args)
+                                   args=args, lead_target=remaining)
         except (RuntimeError, NotImplementedError) as e:
             # A mid-fan-out auth/setup failure must never lose prior channels' leads.
             log.warning("Channel %s failed (continuing): %s", plat, e)
@@ -627,6 +671,7 @@ def _run_session_loop(*, campaign: Campaign, store: Store, soul,
             halt_kind = sub.get("halt_kind")
             agg["halt_reason"] = halt_reason
             agg["halt_kind"] = halt_kind
+            agg["stop_reason"] = "halt"
             if halt_kind in _POISON_HALT_KINDS:
                 cdp_poisoned = True            # skip the remaining CDP channels
             elif halt_kind == "daytime":
@@ -645,6 +690,16 @@ def _run_session_loop(*, campaign: Campaign, store: Store, soul,
             and all("error" in sub for sub in per_platform.values())):
         agg["halt_reason"] = next(iter(per_platform.values()))["error"]
         agg["halt_kind"] = "setup"
+        agg["stop_reason"] = "halt"
+    elif agg["stop_reason"] == "done":
+        # Every channel ran and nothing halted: either the run has its leads, or the
+        # channels are spent (every deterministic source swept once). Prefer the
+        # sub-summaries' own verdict over inventing one here.
+        if target is not None and agg["matches"] >= target:
+            agg["stop_reason"] = "target_met"
+        elif any(sub.get("stop_reason") == "single_pass"
+                 for sub in per_platform.values()):
+            agg["stop_reason"] = "single_pass"
     agg["spend_usd"] = round(agg["spend_usd"], 6)
     agg["per_platform"] = per_platform
     if target is not None:

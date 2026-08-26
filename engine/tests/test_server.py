@@ -21,6 +21,7 @@ from aizu.core.config import (MAX_CAMPAIGN_BRIEF_BYTES, campaign_to_brief, load_
 from aizu.core.feed import Comment, FakeFeed, Reel
 from aizu.core.mock_router import MockRouter
 from aizu.core.pacing import PacingConfig, Pacer
+from aizu import runner
 from aizu.runner import RunManager
 from aizu import server
 from aizu.secrets import SecretCipher
@@ -1558,6 +1559,24 @@ def test_run_accepts_target_leads_with_duration_cap(panel):
     argv = panel["spawner"].calls[before]
     assert argv[argv.index("--target-leads") + 1] == "50"
     assert argv[argv.index("--duration-minutes") + 1] == "120"
+
+
+def test_run_without_duration_still_gets_the_runaway_guard(panel):
+    """The panel's launch form asks ONE question ("how many leads?") and sends no
+    durationMinutes — the run is bounded by its target. The engine's session loop has no
+    other exit on an algorithmic feed, so the server still passes the 12h runaway guard;
+    it is a backstop, not a cap the operator chose."""
+    _reset_runner(panel)
+    _give_high_cap_plan(panel)
+    before = len(panel["spawner"].calls)
+    code, _ = _post(panel["base"] + "/api/run",
+                    json.dumps({"campaignId": _campaign_id(), "mode": "live",
+                                "targetLeadCount": 50}).encode())
+    assert code == 202
+    _wait_run_idle(panel)
+    argv = panel["spawner"].calls[before]
+    assert argv[argv.index("--target-leads") + 1] == "50"
+    assert argv[argv.index("--duration-minutes") + 1] == str(runner.TARGET_RUN_GUARD_MINUTES)
 
 
 def test_run_stop_when_idle_returns_409(panel):

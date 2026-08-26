@@ -4567,6 +4567,11 @@ class PanelHandler(SimpleHTTPRequestHandler):
         plan_bounds = {"targetLeads": clamped,
                        "maxRunLeads": billing.tier_max_run_leads(sub["tier"]),
                        "leadsRemaining": remaining}
+        # An omitted durationMinutes stays None on the spec: the run is bounded by its
+        # LEAD TARGET, not by wall clock. Each execution path then applies its OWN
+        # runaway guard behind that target — `runner.TARGET_RUN_GUARD_MINUTES` for an
+        # in-process run, the box's `max_job_minutes` for a fleet one. Injecting one here
+        # would silently stretch a worker's supervisor deadline too.
         spec = RunSpec(scope=fields["scope"], campaign_id=fields["campaignId"],
                        mode=fields["mode"], org_id=org_id,
                        target_leads=clamped,

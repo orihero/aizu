@@ -4,7 +4,6 @@ import { Link } from 'react-router-dom';
 import { Loader2, Pause, Play, Zap } from 'lucide-react';
 import { Button } from '@/shared/ui/Button';
 import { Drawer } from '@/shared/ui/Drawer';
-import { cn } from '@/shared/lib/cn';
 import { formatNumber } from '@/shared/lib/formatters';
 import { queryKeys } from '@/shared/api/queryKeys';
 import { ResultError, type AppError } from '@/shared/lib/result';
@@ -17,20 +16,13 @@ import {
   selectIsAnyRunActive,
   selectIsCampaignRunning,
   selectIsRunPaused,
-  selectLastRunForCampaign,
 } from '@/shared/selectors/campaigns';
 import type { Billing, Campaign, RunBlock } from '@/shared/types/domain';
 import { describeRunStartError } from './describeRunStartError';
 import { RunActivityFeed } from './RunActivityFeed';
 
-// Quick-pick lead targets; custom covers anything in [1, MAX_LEADS].
-const LEAD_PRESETS = [10, 25, 50, 100] as const;
 const DEFAULT_LEADS = 25;
 const MAX_LEADS = 1000; // mirrors the server's MAX_RUN_LEAD_TARGET
-// Wall-clock safety cap (minutes): stop even if the lead target isn't reached.
-const MIN_MINUTES = 5;
-const MAX_MINUTES = 720;
-const DEFAULT_CAP_MINUTES = 120;
 
 const BILLING_PATH = '/settings/billing';
 
@@ -48,16 +40,18 @@ function toAppError(error: unknown): AppError {
 }
 
 /**
- * What this org's plan allows a single run to ask for.
+ * What this org's plan allows a single run to ask for — the ONE bound this drawer has
+ * to express, since asking for leads is now the only question it puts to the operator.
  *
- * Two separate bounds, and the tighter one wins: `maxRunLeads` is the largest target ONE
- * run may request, `leadsRemaining` is what is left of the billing period. The server
- * clamps to exactly this (`clamped = min(requested, remaining)`) and 402s once the
- * period is spent — this mirror exists so the operator sees the bound BEFORE pressing
- * Start rather than discovering it as a run that quietly stopped early.
+ * Two separate numbers, and the tighter one wins: `maxRunLeads` is the largest target
+ * ONE run may request, `leadsRemaining` is what is left of the billing period. The
+ * server clamps to exactly this (`clamped = min(requested, remaining)`) and 402s once
+ * the period is spent — this mirror exists so the operator sees the bound BEFORE
+ * pressing Start rather than discovering it as a run that quietly stopped early.
  *
- * Both are a SOFT bound on the run itself (E.6): the engine's stop condition is
- * per-session, so a run can overshoot its target. Copy says "up to N", never "exactly N".
+ * It is a SOFT bound on the run itself (E.6): the engine's stop condition is tested
+ * per match inside a batch, so a run can overshoot by up to a batch. Copy says "up to
+ * N", never "exactly N".
  */
 interface PlanBounds {
   /** Largest target we will send, or null when billing is unknown (viewer/member, or a
@@ -129,12 +123,18 @@ interface RunDrawerProps {
 }
 
 /**
- * Right-side drawer to launch (and stop) a live run for one campaign. The operator
- * picks how many leads to collect — a preset or a custom count, bounded by the plan —
- * plus a max-time safety cap, and Start fires a single live run; the engine loops
- * discovery sessions until it hits the target (or the cap / 9pm window), then stops on
- * its own. While this campaign's run is in flight the drawer shows its live progress
- * and a Stop control instead.
+ * Right-side drawer to launch (and stop) a live run for one campaign.
+ *
+ * ONE question: how many leads. Bounded by what is left of the plan's period
+ * allowance, because that is the only number that can make the answer wrong. There is
+ * deliberately no operator-facing time cap any more — a run is defined by what it must
+ * FIND, not by how long it may look, and the engine loops discovery sessions until it
+ * has them (the server still passes a 12h runaway guard the operator never picks). A
+ * run can still end short: the seeded sources get swept, or the daytime window closes.
+ * The run summary names which, so a shortfall is explained rather than silent.
+ *
+ * While this campaign's run is in flight the drawer shows its live progress and a Stop
+ * control instead.
  */
 export function RunDrawer({ campaign, run, isOpen, onClose }: RunDrawerProps) {
   const runCampaign = useRunCampaign();
@@ -143,12 +143,7 @@ export function RunDrawer({ campaign, run, isOpen, onClose }: RunDrawerProps) {
   const resumeRun = useResumeRun();
   const queryClient = useQueryClient();
   // Seed the target from the campaign's goal when it has one; fall back to a default.
-  const initialLeads = campaign.goalTarget ?? DEFAULT_LEADS;
-  const [leadSelection, setLeadSelection] = useState<number | 'custom'>(
-    (LEAD_PRESETS as readonly number[]).includes(initialLeads) ? initialLeads : 'custom',
-  );
-  const [customLeads, setCustomLeads] = useState(String(initialLeads));
-  const [capText, setCapText] = useState(String(DEFAULT_CAP_MINUTES));
+  const [leadsText, setLeadsText] = useState(String(campaign.goalTarget ?? DEFAULT_LEADS));
 
   // The drawer is reachable only through the card's Run button (`run_campaigns`), which
   // is the same owner/admin set as `view_billing` — so BILLING is always present here
@@ -160,18 +155,17 @@ export function RunDrawer({ campaign, run, isOpen, onClose }: RunDrawerProps) {
   const inProcessRunning = selectIsCampaignRunning(run, campaign.id);
   const isAnyActive = selectIsAnyRunActive(run);
   const isPaused = selectIsRunPaused(run);
-  const lastRun = selectLastRunForCampaign(run, campaign.id);
 
   // A fleet-routed run does NOT populate the in-process RUN block. Its live run id is
   // exposed DB-derived on the campaign (survives a refresh); prefer that over the
   // transient start-response runId (lost on reload). In-process runs leave both null.
   const fleetRunId = campaign.fleetRunId ?? runCampaign.data?.runId ?? null;
-  // Show the live run while it's in flight; otherwise the just-started fleet run, else
-  // the most recent run's final activity. The bridge serves finished runs too and
-  // reports finished=true, so the poller fetches once and stops — no wasted polling.
-  const feedRunId = inProcessRunning
-    ? (run.active?.id ?? null)
-    : (fleetRunId ?? lastRun?.id ?? null);
+  // Only a run of OURS that is (or may still be) in flight. An idle drawer is the
+  // launch question and nothing else, so there is no last-run feed to render and no
+  // reason to fetch one — the run history on the campaign card is where a finished run
+  // belongs. A just-started fleet run still needs its id: `finished` is how we learn it
+  // ended, since a fleet run never populates the in-process RUN block.
+  const feedRunId = inProcessRunning ? (run.active?.id ?? null) : fleetRunId;
   const { activity, isError: activityError } = useRunActivity(isOpen ? feedRunId : null);
   // An in-process run's clamped target never reaches /api/run/activity (only a fleet
   // job carries it durably in its spec), so pass the one the start response echoed back
@@ -227,7 +221,7 @@ export function RunDrawer({ campaign, run, isOpen, onClose }: RunDrawerProps) {
   // remains the real gate, exactly as the RBAC mirror rule says of UI gating.
   const platformUnready = isOpen && scopedReadiness !== undefined && !scopedReadiness.ready;
 
-  const requested = leadSelection === 'custom' ? Number.parseInt(customLeads, 10) : leadSelection;
+  const requested = Number.parseInt(leadsText, 10);
   const requestedValid = Number.isInteger(requested) && requested >= 1 && requested <= MAX_LEADS;
   // What we actually send. Clamping here (rather than rejecting the input) is what makes
   // the default "just press Start" path correct on a small plan: the server would clamp
@@ -237,29 +231,32 @@ export function RunDrawer({ campaign, run, isOpen, onClose }: RunDrawerProps) {
     ? Math.min(requested, plan.maxLeads)
     : requested;
   const clampedByPlan = requestedValid && plan.maxLeads !== null && requested > plan.maxLeads;
-  // The bound the custom field advertises: the plan's per-run allowance when there is
-  // one, otherwise the global safety cap. Never larger than MAX_LEADS.
-  const customLeadsMax = plan.maxLeads === null ? MAX_LEADS : Math.min(MAX_LEADS, plan.maxLeads);
-  const capMinutes = Number.parseInt(capText, 10);
-  const capValid = Number.isInteger(capMinutes) && capMinutes >= MIN_MINUTES && capMinutes <= MAX_MINUTES;
-  const isValid = requestedValid && capValid && !plan.exhausted;
+  // The bound the field advertises: what is left of the plan's period allowance when
+  // billing is known, otherwise the global safety cap. Never larger than MAX_LEADS.
+  const leadsMax = plan.maxLeads === null ? MAX_LEADS : Math.min(MAX_LEADS, plan.maxLeads);
+  const isValid = requestedValid && !plan.exhausted;
+
+  // ONE line under the field, not two. It carries the plan bound and the clamp in the
+  // same breath — a separate warning would repeat the same number back at the operator,
+  // which is exactly the noise this drawer was cut down to remove. Built as a string so
+  // it lands in the DOM as one text node rather than a run of fragments.
+  const planSuffix = plan.planName ? ` on ${plan.planName}` : '';
+  const planNote = plan.leadsRemaining === null
+    ? 'It keeps searching until it finds them.'
+    : clampedByPlan
+      ? `Only ${formatNumber(plan.maxLeads)} left${planSuffix} — we’ll start it with that.`
+      : `${formatNumber(plan.leadsRemaining)} left this period${planSuffix}. It keeps `
+        + 'searching until it finds them.';
 
   // Don't close on success: keep the drawer open so it transitions into the live
   // preview in place once /api/state reports the run active (that's the whole point
   // of "view activity"). Single-run lock (409) guards a double-fire in the gap.
   const onStart = () => {
     if (!isValid) return;
-    runCampaign.mutate({
-      campaignId: campaign.id, mode: 'live',
-      targetLeadCount: leads, durationMinutes: capMinutes,
-    });
+    // No durationMinutes: the run is bounded by its lead target, not by wall clock. The
+    // server supplies its own runaway guard, which is not an operator's decision to make.
+    runCampaign.mutate({ campaignId: campaign.id, mode: 'live', targetLeadCount: leads });
   };
-
-  const pillClass = (active: boolean) =>
-    cn(
-      'rounded-full px-3.5 py-1.5 text-xs font-bold transition active:scale-95 disabled:cursor-not-allowed disabled:opacity-40',
-      active ? 'bg-accent text-accent-ink' : 'bg-surface-2 text-text hover:bg-border',
-    );
 
   const title = (
     <>
@@ -343,106 +340,34 @@ export function RunDrawer({ campaign, run, isOpen, onClose }: RunDrawerProps) {
       ) : (
         <div className="space-y-4">
           <div>
-            <span className="text-xs font-bold uppercase tracking-wide text-text-faint">Stop after</span>
-            <div className="mt-2 flex flex-wrap items-center gap-2">
-              {LEAD_PRESETS.map((n) => {
-                const overPlan = plan.maxLeads !== null && n > plan.maxLeads;
-                return (
-                  <button
-                    key={n}
-                    type="button"
-                    disabled={overPlan}
-                    title={overPlan && plan.planName
-                      ? `${plan.planName} allows up to ${formatNumber(plan.maxLeads)} leads on one run.`
-                      : undefined}
-                    onClick={() => { setLeadSelection(n); }}
-                    className={pillClass(leadSelection === n)}
-                  >
-                    {n}
-                  </button>
-                );
-              })}
-              <button
-                type="button"
-                aria-label="Custom lead target"
-                onClick={() => { setLeadSelection('custom'); }}
-                className={pillClass(leadSelection === 'custom')}
-              >
-                Custom
-              </button>
-              <span className="text-xs font-medium text-text-faint">leads</span>
-            </div>
-            {/* The plan, named. "Up to N", never "exactly N": the engine's stop condition
-                is per-session, so a run really can overshoot its target (E.6). */}
-            {plan.planName && plan.maxLeads !== null ? (
-              <p className="mt-2 text-xs text-text-faint">
-                {plan.planName} plan: up to {formatNumber(plan.maxLeads)} leads per run
-                {plan.leadsRemaining === null
-                  ? ''
-                  : ` · ${formatNumber(plan.leadsRemaining)} left this period`}
-                .
-              </p>
-            ) : null}
-          </div>
-
-          {leadSelection === 'custom' ? (
-            <div>
-              {/* The field's own bound is the tighter of the global safety cap and the
-                  plan's per-run allowance, so the spinner and the browser's validity
-                  check agree with what Start will actually send. Typing past it is still
-                  ALLOWED and still clamps (with the note below) rather than blocking the
-                  form — a number input's `max` does not stop typing, and turning an
-                  over-plan target into a hard error would break the one-button path this
-                  drawer exists to make work. */}
-              <label htmlFor="run-custom-leads" className="text-xs font-medium text-text-muted">
-                Leads (1–{formatNumber(customLeadsMax)})
-              </label>
-              <input
-                id="run-custom-leads"
-                type="number"
-                min={1}
-                max={customLeadsMax}
-                value={customLeads}
-                onChange={(e) => { setCustomLeads(e.target.value); }}
-                className="mt-1 w-full rounded-tile border border-border bg-surface px-3 py-2 text-sm tabular-nums outline-none focus:border-accent"
-              />
-              {!requestedValid ? (
-                <p className="mt-1 text-xs font-medium text-danger">Enter a whole number from 1 to {MAX_LEADS}.</p>
-              ) : null}
-            </div>
-          ) : null}
-
-          {clampedByPlan ? (
-            <p className="text-xs font-medium text-warn">
-              Your plan caps this run at {formatNumber(plan.maxLeads)} leads — that’s what we’ll
-              start it with.
-            </p>
-          ) : null}
-
-          <div>
-            <label htmlFor="run-cap-minutes" className="text-xs font-bold uppercase tracking-wide text-text-faint">
-              Safety cap (max time)
+            <label htmlFor="run-leads" className="text-xs font-bold uppercase tracking-wide text-text-faint">
+              How many leads?
             </label>
             <input
-              id="run-cap-minutes"
+              id="run-leads"
               type="number"
-              min={MIN_MINUTES}
-              max={MAX_MINUTES}
-              value={capText}
-              onChange={(e) => { setCapText(e.target.value); }}
-              className="mt-1 w-full rounded-tile border border-border bg-surface px-3 py-2 text-sm tabular-nums outline-none focus:border-accent"
+              min={1}
+              max={leadsMax}
+              value={leadsText}
+              onChange={(e) => { setLeadsText(e.target.value); }}
+              className="mt-1 w-full rounded-tile border border-border bg-surface px-3 py-2 text-base tabular-nums outline-none focus:border-accent"
             />
-            {!capValid ? (
-              <p className="mt-1 text-xs font-medium text-danger">Enter minutes from {MIN_MINUTES} to {MAX_MINUTES}.</p>
+            {/* The field ADVERTISES the bound (spinner + browser validity agree with what
+                Start sends), but `max` on a number input cannot stop someone typing past
+                it, so an over-plan entry still CLAMPS rather than blocking the form — the
+                one-button path is the whole point of this drawer. */}
+            {!requestedValid ? (
+              <p className="mt-1 text-xs font-medium text-danger">
+                Enter a whole number from 1 to {formatNumber(leadsMax)}.
+              </p>
             ) : (
-              <p className="mt-1 text-xs text-text-faint">Stops no later than this, even if it hasn’t hit the target.</p>
+              <p className={clampedByPlan
+                ? 'mt-1 text-xs font-medium text-warn'
+                : 'mt-1 text-xs text-text-faint'}>
+                {planNote}
+              </p>
             )}
           </div>
-
-          <p className="text-xs text-text-faint">
-            It watches reels until it finds your target number of leads — or the safety cap or the 9pm
-            daily window, whichever comes first — then stops. You can stop it early from here.
-          </p>
 
           {/* The period allowance is spent: the server answers 402 to any start. Say so
               here, with the way out, rather than letting the operator discover it by
@@ -469,31 +394,6 @@ export function RunDrawer({ campaign, run, isOpen, onClose }: RunDrawerProps) {
             </p>
           ) : null}
           {runCampaign.isError ? <RunStartError error={runCampaign.error} /> : null}
-
-          {feedRunId ? (
-            <div className="border-t border-border pt-3">
-              <div className="flex items-center justify-between gap-2">
-                <span className="text-xs font-bold uppercase tracking-wide text-text-faint">
-                  {fleetRunId ? 'This run (fleet)' : 'Last run'}
-                </span>
-                {lastRun && !fleetRunId ? (
-                  <span className="truncate text-xs text-text-faint">{lastRun.summary || lastRun.outcome}</span>
-                ) : null}
-              </div>
-              <div className="mt-2">
-                <RunActivityFeed
-                  activity={activity}
-                  isError={activityError}
-                  targetLeadsHint={startedTarget}
-                />
-              </div>
-            </div>
-          ) : (
-            <p className="border-t border-border pt-3 text-xs text-text-faint">
-              No runs yet. Start one above — the live progress (leads found against your target, posts
-              seen, spend) shows here while it runs.
-            </p>
-          )}
         </div>
       )}
     </Drawer>

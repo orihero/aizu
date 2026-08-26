@@ -97,6 +97,47 @@ def test_time_cap_stops_unreachable_target(monkeypatch):
     assert summary["matches"] == 0
 
 
+def test_target_run_keeps_looping_with_no_time_cap(monkeypatch):
+    """The panel now launches with a lead target and NO operator-chosen time cap, so the
+    loop's only stop is the target itself. Without a duration the deadline is None and
+    the sessions keep coming until the leads are there."""
+    calls = []
+
+    def fake_run_one(*, lead_target=None, **_kw):
+        calls.append(lead_target)
+        return {"matches": 1, "spend_usd": 0.0}
+
+    monkeypatch.setattr(cli, "_run_one", fake_run_one)
+    summary = _loop(_args(target_leads=5, duration_minutes=None))
+    assert calls == [5, 4, 3, 2, 1]           # five sessions for five leads
+    assert summary["matches"] == 5
+    assert summary["stop_reason"] == "target_met"
+
+
+def test_time_cap_stop_is_named_in_the_summary(monkeypatch):
+    seq = iter([0.0, 0.0, 100.0])
+    monkeypatch.setattr(cli.time, "monotonic", lambda: next(seq))
+
+    def fake_run_one(*, lead_target=None, **_kw):
+        return {"matches": 0, "spend_usd": 0.0}
+
+    monkeypatch.setattr(cli, "_run_one", fake_run_one)
+    summary = _loop(_args(target_leads=1000, duration_minutes=1))
+    # A run that ends on the wall clock rather than the target must say so — the lead
+    # count alone cannot tell "the cap fired" from "there was nothing to find".
+    assert summary["stop_reason"] == "time_cap"
+
+
+def test_single_pass_platform_shortfall_is_named(monkeypatch):
+    def fake_run_one(*, lead_target=None, **_kw):
+        return {"matches": 2, "spend_usd": 0.0}
+
+    monkeypatch.setattr(cli, "_run_one", fake_run_one)
+    summary = _loop(_args(target_leads=50), _YtCampaign())
+    assert summary["matches"] == 2
+    assert summary["stop_reason"] == "single_pass"
+
+
 def test_halt_breaks_the_loop(monkeypatch):
     results = iter([
         {"matches": 1, "spend_usd": 0.0},

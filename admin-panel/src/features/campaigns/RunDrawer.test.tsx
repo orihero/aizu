@@ -74,18 +74,28 @@ describe('RunDrawer run-start error handling', () => {
 });
 
 describe('RunDrawer plan bounds', () => {
-  test('names the plan and its per-run allowance', async () => {
+  test('asks one question and names the credits left', async () => {
     const repository = new FakePanelRepository(buildPanelState());
     repository.billing = planned({ leadsUsed: 3 });
     renderDrawer(repository, 'admin');
 
-    // "up to N", never "exactly N": a run's stop condition is per-session, so it can
-    // overshoot its target (E.6). The remaining period allowance rides along.
-    expect(await screen.findByText(/Free plan: up to 7 leads per run/i)).toBeInTheDocument();
-    expect(screen.getByText(/7 left this period/i)).toBeInTheDocument();
+    expect(await screen.findByText(/Only 7 left on Free/i)).toBeInTheDocument();
+    expect(screen.getByLabelText(/how many leads/i)).toBeInTheDocument();
+    // The launch form is ONE input. A wall-clock cap is not the operator's decision any
+    // more: a run is defined by what it must find, not by how long it may look.
+    expect(screen.queryByLabelText(/safety cap/i)).not.toBeInTheDocument();
   });
 
-  test('pressing Start with the defaults produces an in-plan run', async () => {
+  test('the lead field is bounded by the credits left this period', async () => {
+    const repository = new FakePanelRepository(buildPanelState());
+    repository.billing = planned({ leadCap: 50, leadsUsed: 20, maxRunLeads: 50 });
+    renderDrawer(repository, 'admin');
+
+    await screen.findByText(/30 left this period/i);   // billing resolved
+    expect(screen.getByLabelText(/how many leads/i)).toHaveAttribute('max', '30');
+  });
+
+  test('pressing Start with the defaults produces an in-plan run, and no time cap', async () => {
     // The one-button path. The campaign's goal (25) is over what Free allows, and the
     // free user must not have to solve a form before they can run anything.
     const user = userEvent.setup();
@@ -93,11 +103,14 @@ describe('RunDrawer plan bounds', () => {
     repository.billing = planned();
     renderDrawer(repository, 'admin');
 
-    await screen.findByText(/Free plan: up to 10 leads per run/i);
+    await screen.findByText(/Only 10 left on Free/i);
     await user.click(screen.getByRole('button', { name: /start run/i }));
 
     await waitFor(() => { expect(repository.runRequests).toHaveLength(1); });
     expect(repository.runRequests[0]?.targetLeadCount).toBe(10);
+    // The run is bounded by its TARGET. The 12h runaway guard is the server's, and the
+    // panel must not turn it back into a knob by sending one of its own.
+    expect(repository.runRequests[0]?.durationMinutes).toBeUndefined();
   });
 
   test('says out loud when the plan clamped the chosen target', async () => {
@@ -105,17 +118,9 @@ describe('RunDrawer plan bounds', () => {
     repository.billing = planned();
     renderDrawer(repository, 'admin');
 
-    expect(await screen.findByText(/plan caps this run at 10 leads/i)).toBeInTheDocument();
-  });
-
-  test('a preset above the plan’s allowance is disabled, not silently accepted', async () => {
-    const repository = new FakePanelRepository(buildPanelState());
-    repository.billing = planned();
-    renderDrawer(repository, 'admin');
-
-    await screen.findByText(/Free plan: up to 10 leads per run/i);
-    expect(screen.getByRole('button', { name: '50' })).toBeDisabled();
-    expect(screen.getByRole('button', { name: '10' })).toBeEnabled();
+    // The campaign goal (25) is over Free's 10 remaining: the drawer starts the run with
+    // 10 and says so, rather than accepting 25 and stopping early without explanation.
+    expect(await screen.findByText(/Only 10 left on Free — we’ll start it with that/i)).toBeInTheDocument();
   });
 
   test('an exhausted period blocks Start and offers the upgrade instead of a silent 402', async () => {
@@ -135,9 +140,11 @@ describe('RunDrawer plan bounds', () => {
     });
     renderDrawer(repository, 'admin');
 
-    expect(await screen.findByText(/Pro plan: up to 2,000 leads per run/i)).toBeInTheDocument();
-    expect(screen.queryByText(/plan caps this run/i)).not.toBeInTheDocument();
-    expect(screen.getByRole('button', { name: '100' })).toBeEnabled();
+    expect(await screen.findByText(/2,000 left this period on Pro/i)).toBeInTheDocument();
+    expect(screen.queryByText(/we’ll start it with that/i)).not.toBeInTheDocument();
+    // 1,000 is the SERVER's per-run ceiling (MAX_RUN_LEAD_TARGET), which binds before a
+    // 2,000-lead period allowance does. The field advertises whichever is tighter.
+    expect(screen.getByLabelText(/how many leads/i)).toHaveAttribute('max', '1000');
   });
 
   test('an unreported per-run bound falls back to the period cap, never to zero', async () => {
@@ -147,27 +154,25 @@ describe('RunDrawer plan bounds', () => {
     repository.billing = planned({ maxRunLeads: 0, leadCap: 50, leadsUsed: 0 });
     renderDrawer(repository, 'admin');
 
-    expect(await screen.findByText(/Free plan: up to 50 leads per run/i)).toBeInTheDocument();
+    await screen.findByText(/50 left this period/i);   // billing resolved
+    expect(screen.getByLabelText(/how many leads/i)).toHaveAttribute('max', '50');
     expect(screen.getByRole('button', { name: /start run/i })).toBeEnabled();
   });
 
-  test('the custom lead field is bounded by the plan, and an over-plan entry still clamps', async () => {
-    // Two halves of the same rule. The field ADVERTISES the plan's per-run allowance
-    // (spinner + browser validity agree with what Start sends), and because `max` on a
-    // number input cannot stop someone typing past it, the value that actually leaves
-    // the drawer is clamped rather than rejected — the one-button path must keep working.
+  test('an entry above the credits left still clamps rather than blocking the form', async () => {
+    // `max` on a number input cannot stop someone typing past it, so the value that
+    // actually leaves the drawer is clamped rather than rejected — the one-button path
+    // must keep working.
     const user = userEvent.setup();
     const repository = new FakePanelRepository(buildPanelState());
     repository.billing = planned();
     renderDrawer(repository, 'admin');
 
-    await user.click(await screen.findByRole('button', { name: /custom lead target/i }));
-    const leadsField = screen.getByLabelText(/Leads/);
-    expect(leadsField).toHaveAttribute('max', '10');
-
+    await screen.findByText(/Only 10 left on Free/i);   // billing resolved
+    const leadsField = screen.getByLabelText(/how many leads/i);
     await user.clear(leadsField);
     await user.type(leadsField, '500');
-    expect(await screen.findByText(/plan caps this run at 10 leads/i)).toBeInTheDocument();
+    expect(await screen.findByText(/Only 10 left on Free — we’ll start it with that/i)).toBeInTheDocument();
 
     await user.click(screen.getByRole('button', { name: /start run/i }));
     await waitFor(() => { expect(repository.runRequests).toHaveLength(1); });
@@ -175,14 +180,12 @@ describe('RunDrawer plan bounds', () => {
     expect(repository.runRequests[0]?.targetLeadCount).toBe(10);
   });
 
-  test('a plan with no per-run bound falls back to the global safety cap, not to zero', async () => {
-    const user = userEvent.setup();
+  test('unknown billing falls back to the global safety cap, not to zero', async () => {
     const repository = new FakePanelRepository(buildPanelState());
     repository.billing = undefined;
     renderDrawer(repository, 'admin');
 
-    await user.click(await screen.findByRole('button', { name: /custom lead target/i }));
-    const max = screen.getByLabelText(/Leads/).getAttribute('max');
+    const max = (await screen.findByLabelText(/how many leads/i)).getAttribute('max');
     expect(Number(max)).toBeGreaterThan(10);
   });
 
@@ -198,6 +201,6 @@ describe('RunDrawer plan bounds', () => {
 
     await waitFor(() => { expect(repository.runRequests).toHaveLength(1); });
     expect(repository.runRequests[0]?.targetLeadCount).toBe(25);
-    expect(screen.queryByText(/plan: up to/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/left this period/i)).not.toBeInTheDocument();
   });
 });

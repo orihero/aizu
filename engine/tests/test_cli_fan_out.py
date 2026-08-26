@@ -148,3 +148,67 @@ def test_one_good_channel_prevents_config_halt(monkeypatch):
     summary = _loop(_args(), _multi("instagram", "youtube"))
     assert summary["sessions"] == 1
     assert summary["halt_reason"] is None
+
+
+def _recording_run_one(by_platform, seen):
+    """Like `_fake_run_one`, but records the (platform, lead_target) each channel was
+    handed — the fan-out's budget arithmetic is the thing under test."""
+    def fake(*, campaign, lead_target=None, **_kw):
+        seen.append((campaign.platform, lead_target))
+        return dict(by_platform[campaign.platform])
+    return fake
+
+
+def test_lead_target_is_run_wide_not_per_channel(monkeypatch):
+    # ONE target of 5 across the campaign: youtube banks 3, so reddit is asked for the
+    # 2 that are still missing — not for a fresh 5. Deterministic platforms both, so
+    # neither channel loops back and the arithmetic is the only thing on show.
+    seen = []
+    monkeypatch.setattr(cli, "_run_one", _recording_run_one({
+        "youtube": {"matches": 3, "spend_usd": 0.0},
+        "reddit": {"matches": 1, "spend_usd": 0.0},
+    }, seen))
+    summary = _loop(_args(target_leads=5), _multi("youtube", "reddit"))
+    assert seen == [("youtube", 5), ("reddit", 2)]
+    assert summary["matches"] == 4
+
+
+def test_fan_out_stops_once_the_run_wide_target_is_met(monkeypatch):
+    # youtube alone satisfies the target — reddit must never start. Before this, every
+    # channel got its own copy of the budget, so a 2-channel campaign could deliver 2x
+    # the target the org was billed for.
+    seen = []
+    monkeypatch.setattr(cli, "_run_one", _recording_run_one({
+        "youtube": {"matches": 5, "spend_usd": 0.0},
+        "reddit": {"matches": 9, "spend_usd": 0.0},
+    }, seen))
+    summary = _loop(_args(target_leads=5), _multi("youtube", "reddit"))
+    assert seen == [("youtube", 5)]
+    assert "reddit" not in summary["per_platform"]
+    assert summary["matches"] == 5
+    assert summary["stop_reason"] == "target_met"
+
+
+def test_untargeted_fan_out_still_runs_every_channel(monkeypatch):
+    # No target → no re-basing, no early break: every channel runs, as it always did.
+    seen = []
+    monkeypatch.setattr(cli, "_run_one", _recording_run_one({
+        "youtube": {"matches": 2, "spend_usd": 0.0},
+        "reddit": {"matches": 2, "spend_usd": 0.0},
+    }, seen))
+    summary = _loop(_args(), _multi("youtube", "reddit"))
+    assert seen == [("youtube", None), ("reddit", None)]
+    assert summary["matches"] == 4
+
+
+def test_shortfall_on_deterministic_sources_says_why(monkeypatch):
+    # The run asked for 20 and got 3 with no halt. "single_pass" is the honest reason:
+    # the seeded sources were swept once and re-sweeping re-fetches the same already-seen
+    # items — the run did not give up early.
+    monkeypatch.setattr(cli, "_run_one", _fake_run_one({
+        "youtube": {"matches": 2, "spend_usd": 0.0},
+        "reddit": {"matches": 1, "spend_usd": 0.0},
+    }))
+    summary = _loop(_args(target_leads=20), _multi("youtube", "reddit"))
+    assert summary["matches"] == 3
+    assert summary["stop_reason"] == "single_pass"
