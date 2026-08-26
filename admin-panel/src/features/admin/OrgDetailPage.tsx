@@ -273,7 +273,10 @@ function LeadsCard({ orgId }: { readonly orgId: number }) {
                 </thead>
                 <tbody>
                   {/* Composite key — one org's leads span campaigns and platforms, which
-                      can legitimately share a commentId. */}
+                      can legitimately share a commentId. Note this is the SUPERADMIN
+                      payload, so `commentId` here is still the real platform comment id
+                      (the v28 opaque token is a customer-plane projection only) and the
+                      collision is as live as it ever was. */}
                   {(leads.data?.leads ?? []).map((lead) => (
                     <tr key={leadUidOf(lead)} className="border-b border-border align-top last:border-0">
                       <td className="px-5 py-3">

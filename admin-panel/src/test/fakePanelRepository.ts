@@ -90,6 +90,13 @@ const EMPTY_RUN_COUNTERS: AdminRunActivity['counters'] = {
  * — as this fake used to — makes a write appear to succeed against the wrong
  * campaign's lead, which is exactly the defect the real bug produced; a fake that
  * repeats the bug cannot catch it.
+ *
+ * The `commentId` compared here is whatever the LEAD ROW carries, which on the real
+ * org wire (v28) is the opaque lead token, resolved server-side by
+ * `server._resolve_org_lead` before it touches a row. Comparing the two directly is
+ * the right fake: it models the property the panel depends on — a write addresses the
+ * lead whose key it was handed — without pretending to own the resolution step, which
+ * lives entirely in the bridge and is where the raw-comment-id 404 is enforced.
  */
 function targets(
   lead: Match,
@@ -133,16 +140,17 @@ export class FakePanelRepository implements PanelRepository {
    */
   readonly revealRequests: RevealLeadInput[] = [];
   /**
-   * The raw identity a reveal hands back, keyed by lead uid (`leadUidOf` / `Match.id`).
+   * The HANDLE a reveal hands back, keyed by lead uid (`leadUidOf` / `Match.id`).
    * A lead with no entry still reveals — with a deterministic synthetic handle — so
-   * only a test that asserts on the exact handle or comment has to register one.
+   * only a test that asserts on the exact handle has to register one.
    * Nothing here ever reaches a lead record: the answer is session-local by contract.
    *
-   * `reelId` lives HERE and not on the lead, mirroring the wire: since v27 the post
-   * pointer exists only on the reveal answer, so a fake that read it off `Match` would
-   * be modelling a payload the bridge no longer sends.
+   * There is deliberately no `text` and no `reelId` in this shape. The bridge answers
+   * the reveal with the handle alone (the comment body and the post pointer are
+   * superadmin-only), and a fake that modelled fields the wire does not carry would
+   * let a component read them in a passing test and 500 in production.
    */
-  readonly revealIdentities = new Map<string, { username: string; text: string; reelId?: string }>();
+  readonly revealIdentities = new Map<string, { username: string }>();
   /** Forces the next reveal to fail: `'network'` for a transport error, `'plan_limit'`
    *  for the period reveal-allowance 402. (The role/ownership refusals below are reached
    *  by setting `currentUser` / asking for another org's lead, which is what the
@@ -469,17 +477,15 @@ export class FakePanelRepository implements PanelRepository {
     if (!lead) return Promise.resolve(err(appError('http', 'unknown lead', 404)));
     const identity = this.revealIdentities.get(lead.id) ?? {
       username: `user_${lead.commentId}`,
-      text: `Original comment from ${lead.commentId}`,
     };
+    // The handle and the four echoed key fields — the whole answer. No comment body,
+    // no post pointer: this fake's shape IS the contract test for the drawer, so it
+    // must not offer a component anything the bridge would not.
     return Promise.resolve(ok({
       id: lead.id,
       commentId: lead.commentId,
       platform: lead.platform,
       username: identity.username,
-      text: identity.text,
-      // Synthesized from the comment id, never read off the lead: the anonymized row
-      // has no post pointer to read (v27).
-      reelId: identity.reelId ?? `reel-${lead.commentId}`,
     }));
   }
 

@@ -13,13 +13,14 @@ import type { MatchStatus } from '@/shared/types/domain';
 
 /**
  * Local UI state for the Leads page: the filter set, sort, current page, and
- * the set of selected commentIds. Any filter change resets the page to 1 so the
+ * the set of selected lead ids (the composite `Match.id`, never a bare key — see
+ * `shared/lib/leadId.ts`). Any filter change resets the page to 1 so the
  * operator never lands on an out-of-range page after narrowing the list.
  *
  * The refresh-surviving slice — `{ filters, sort, page }` — is derived purely
  * from the URL search params (the single source of truth); localStorage seeds
  * those params once on mount when the URL arrives bare (the "last used"
- * fallback). `selected` stays ephemeral: it holds commentIds that may not exist
+ * fallback). `selected` stays ephemeral: it holds lead ids that may not exist
  * after a refresh. See usePersistedQueryState for the single-value pages that
  * share this precedence model (URL → storage → default).
  */

@@ -158,10 +158,12 @@ export class DemoPanelRepository extends FakePanelRepository {
   }
 
   // `revealLead` is deliberately NOT overridden. The demo tenant carries no handles
-  // and no comment bodies anywhere — that is the point of the fixture — so a reveal
-  // falls through to the base fake's obviously-synthetic identity. A capture that
-  // needs a plausible handle on screen should register one in `revealIdentities` at
-  // capture time rather than parking fabricated people in the shipped fixture.
+  // anywhere — that is the point of the fixture — so a reveal falls through to the base
+  // fake's obviously-synthetic HANDLE. (There is no comment body to fabricate: the
+  // reveal answers with the handle alone, because a customer never sees the words.) A
+  // capture that needs a plausible handle on screen should register one in
+  // `revealIdentities` at capture time rather than parking fabricated people in the
+  // shipped fixture.
 
   /** Demo pacing: hold the synthesize call in flight long enough for the
    * staged progress copy to play through on camera (capture 03 / beat 03). */

@@ -15,6 +15,7 @@ import hashlib
 import json
 import math
 import os
+import secrets
 import sqlite3
 import time
 import uuid
@@ -34,7 +35,7 @@ if TYPE_CHECKING:
 
 logger = get_logger(__name__)
 
-SCHEMA_VERSION = 27  # v2: platform dimension; v3: panel ops tables; v4: campaign_briefs; v5: auth; v6: lead Kanban (status set + audit log + notes); v7: multi-tenancy (organizations + memberships role + invites; per-org settings/integrations); v8: encrypted per-(org, platform) integration secrets; v9: security audit log; v10: run_events live activity feed; v11: account warming (accounts + state_changes + campaign_accounts + account_secrets; sessions.engine_mode/account_id, health_flags.account_id, actions.account_id); v12: campaign lifecycle controls (campaign_meta.archived_at/paused_reason + fixed-cadence schedule cols: schedule_enabled/kind/dow/hour/minute/tz, next_run_at, last_scheduled_run_at, schedule_target_leads, schedule_duration_minutes); v13: billing subscriptions (Polar + provider-agnostic, soft run-cap); v14: distributed workers pool (token-based registry + presence; status DERIVED not stored); v15: superadmin plane (platform_admins + platform_admin_sessions with impersonation principal + hash-chained admin_audit_log + DB-backed admin_login_throttle); v16: platform_settings (superadmin execution_backend switch — route runs to in-process RunManager vs distributed worker fleet); v17: model comparison (superadmin-switchable LLM fan-out — matches.found_by_models + model_comparison_log; platform_settings.model_comparison_enabled); v18: Uzbek-only local STT transcript (seen_reels.transcript/transcript_lang/transcript_ms; sessions.transcriptions); v19: video-analysis tier (seen_reels.video_analyzed/video_analysis_summary; sessions.video_analyses); v20: session liveness heartbeat (sessions.last_activity_at/pid) so SessionWatchdog can detect a wedged-but-never-excepting session; v21: self-healing anti-bot cooldown (session_cooldowns: per-(campaign_id, platform) attempt counter + exponential-backoff cooldown_until for a SOFT halt, gap #1); v22: per-worker enrolment tokens (worker_enrolment_tokens: single-use, admin-minted, server-assigned org/pool scope for worker enrolment, closing gap B8 — shared bootstrap token could self-declare pool-wide capability); v23: worker launch preflight (workers.preflight_json — the box's own self-check summary, carried on register/heartbeat and surfaced in the fleet console so a box that is online-but-cannot-work says WHY, ledger F9/F10/F12); v24: Campaign Lab per-source attribution (source_stats: one row per (campaign, platform, seed) carrying navigations/yield/redirect/dead verdicts + park/ban lifecycle; seen_reels.source and matches.source so "which seed produced this lead" is finally answerable — Remedy Sheet #1/D); v25: Campaign Lab seed mining (seen_reels.author_id — the author's STABLE, seed-shaped id (YouTube UC-id, LinkedIn canonical profile URL, Telegram @channel) alongside the display name, so mining our own leads yields actionable seeds rather than strings that break on a rename — Remedy Sheet #2/A); v26: Campaign Lab negative capture (eval_candidates — a sampled, labellable record of comments the match gate REJECTED, which the engine paid a model call for and then threw away; plus matches.confidence/raw. Without it a gold set cannot be built at all: the DB held 2 accepted comments and zero rejects — Remedy Sheet #3/E); v27: lead-intent redaction (matches.intent — the customer-facing one-line summary of what the commenter wants, so the panel can hide username/comment)
+SCHEMA_VERSION = 28  # v2: platform dimension; v3: panel ops tables; v4: campaign_briefs; v5: auth; v6: lead Kanban (status set + audit log + notes); v7: multi-tenancy (organizations + memberships role + invites; per-org settings/integrations); v8: encrypted per-(org, platform) integration secrets; v9: security audit log; v10: run_events live activity feed; v11: account warming (accounts + state_changes + campaign_accounts + account_secrets; sessions.engine_mode/account_id, health_flags.account_id, actions.account_id); v12: campaign lifecycle controls (campaign_meta.archived_at/paused_reason + fixed-cadence schedule cols: schedule_enabled/kind/dow/hour/minute/tz, next_run_at, last_scheduled_run_at, schedule_target_leads, schedule_duration_minutes); v13: billing subscriptions (Polar + provider-agnostic, soft run-cap); v14: distributed workers pool (token-based registry + presence; status DERIVED not stored); v15: superadmin plane (platform_admins + platform_admin_sessions with impersonation principal + hash-chained admin_audit_log + DB-backed admin_login_throttle); v16: platform_settings (superadmin execution_backend switch — route runs to in-process RunManager vs distributed worker fleet); v17: model comparison (superadmin-switchable LLM fan-out — matches.found_by_models + model_comparison_log; platform_settings.model_comparison_enabled); v18: Uzbek-only local STT transcript (seen_reels.transcript/transcript_lang/transcript_ms; sessions.transcriptions); v19: video-analysis tier (seen_reels.video_analyzed/video_analysis_summary; sessions.video_analyses); v20: session liveness heartbeat (sessions.last_activity_at/pid) so SessionWatchdog can detect a wedged-but-never-excepting session; v21: self-healing anti-bot cooldown (session_cooldowns: per-(campaign_id, platform) attempt counter + exponential-backoff cooldown_until for a SOFT halt, gap #1); v22: per-worker enrolment tokens (worker_enrolment_tokens: single-use, admin-minted, server-assigned org/pool scope for worker enrolment, closing gap B8 — shared bootstrap token could self-declare pool-wide capability); v23: worker launch preflight (workers.preflight_json — the box's own self-check summary, carried on register/heartbeat and surfaced in the fleet console so a box that is online-but-cannot-work says WHY, ledger F9/F10/F12); v24: Campaign Lab per-source attribution (source_stats: one row per (campaign, platform, seed) carrying navigations/yield/redirect/dead verdicts + park/ban lifecycle; seen_reels.source and matches.source so "which seed produced this lead" is finally answerable — Remedy Sheet #1/D); v25: Campaign Lab seed mining (seen_reels.author_id — the author's STABLE, seed-shaped id (YouTube UC-id, LinkedIn canonical profile URL, Telegram @channel) alongside the display name, so mining our own leads yields actionable seeds rather than strings that break on a rename — Remedy Sheet #2/A); v26: Campaign Lab negative capture (eval_candidates — a sampled, labellable record of comments the match gate REJECTED, which the engine paid a model call for and then threw away; plus matches.confidence/raw. Without it a gold set cannot be built at all: the DB held 2 accepted comments and zero rejects — Remedy Sheet #3/E); v27: lead-intent redaction (matches.intent — the customer-facing one-line summary of what the commenter wants, so the panel can hide username/comment); v28: opaque org-facing lead key (matches.lead_token — a random per-lead token that org payloads ship as `commentId` in place of the platform's own id. The real comment_id is a PERMALINK on four of six platforms — reddit/youtube/telegram compose it as "{reel_id}/{comment_id}" and x uses the reply's tweet id — so shipping it left the whole v27 redaction one hand-built URL from being undone. Every org-scoped lead write now resolves this token server-side)
 
 
 def _now_iso() -> str:
@@ -164,6 +165,12 @@ CREATE TABLE IF NOT EXISTS matches (
     updated_at  REAL NOT NULL,
     source      TEXT,                       -- v24: seed term whose page produced this lead
     intent      TEXT,                       -- v27: customer-facing intent summary
+    -- v28: the OPAQUE org-facing lead key. Random, carries no platform data, and it
+    -- is what an org-facing payload ships as `commentId` in place of the real one.
+    -- The real `comment_id` is a permalink on four of six platforms (reddit/youtube/
+    -- telegram compose it as "{reel_id}/{comment_id}"; x uses the reply's own tweet
+    -- id), so shipping it handed an org the very comment the v27 redaction withholds.
+    lead_token  TEXT,
     PRIMARY KEY (campaign_id, platform, comment_id)
 );
 CREATE INDEX IF NOT EXISTS idx_matches_reel   ON matches(campaign_id, platform, reel_id);
@@ -1107,6 +1114,27 @@ _ADMIN_AUDIT_SEP = "\x1e"
 # adding a counter table keeps one truth — you cannot spend allowance without leaving
 # the row an operator would go looking for, and you cannot delete the row to get the
 # allowance back (audit_log is insert-only by contract).
+# ----- v28 opaque org-facing lead key -----
+#
+# `comment_id` is the platform's own id, and on four of six platforms it is a
+# PERMALINK: reddit/youtube/telegram build it as f"{reel_id}/{comment_id}" and x uses
+# the reply's own tweet rest_id. So an org-facing payload carrying `comment_id` carried
+# the post id as a prefix — and the post prints the handle and the comment in plain
+# sight. That made the v27 redaction and the handle-only reveal cosmetic on those four:
+# the words were one hand-built URL away from a field we shipped on every lead row.
+#
+# The fix is a key with no platform data in it at all. Random rather than derived: an
+# HMAC over the composite key would be stable without a column, but it is only as
+# opaque as the secret, and this repo runs deployments where `AIZU_SECRET_KEY` is
+# unset. A random token has no such dependency and nothing to reverse.
+LEAD_TOKEN_BYTES = 12          # → 16 urlsafe chars; ~96 bits, unguessable
+
+
+def new_lead_token() -> str:
+    """One lead's opaque org-facing key. Unique by construction, not by check."""
+    return secrets.token_urlsafe(LEAD_TOKEN_BYTES)
+
+
 REVEAL_ACTION = "reveal_lead"
 REVEAL_RESULT_REVEALED = "revealed"   # the ONLY outcome that consumes allowance
 
@@ -1491,6 +1519,34 @@ class Store:
             # captured before v27 keep username/text in the DB for the superadmin
             # plane; they simply have no intent until they are re-polled.
             self._add_column_if_missing(c, "matches", "intent TEXT")
+            # v28: the opaque org-facing lead key. Additive, but UNLIKE every other
+            # column here it cannot be left NULL on existing rows: it is the only key
+            # an org-facing write accepts, so a row without one is a lead the customer
+            # can see and can no longer act on (no status change, no note, no reveal).
+            # So the ALTER is followed by a BACKFILL, one fresh token per existing row.
+            #
+            # Backfilled row-by-row rather than with a single UPDATE ... = random():
+            # SQLite has no per-row random string function, and `randomblob` in one
+            # statement is fine until you need the same value shape the writer mints.
+            # One writer for the fact (`new_lead_token`) is worth the loop — this runs
+            # once per database, over a table with at most a few hundred thousand rows.
+            self._add_column_if_missing(c, "matches", "lead_token TEXT")
+            self._backfill_lead_tokens(c)
+            # The UNIQUE index is created HERE and deliberately NOT in SCHEMA above.
+            # SCHEMA runs through `executescript` BEFORE this migration block, and on an
+            # UPGRADING database `CREATE TABLE IF NOT EXISTS matches` does not widen the
+            # existing table — so the column does not exist yet at that point and
+            # `CREATE UNIQUE INDEX ... ON matches(lead_token)` aborts the whole open with
+            # "no such column". That would brick every deployment that has ever stored a
+            # lead, over an index. (Verified against a v27-shaped DB, not assumed.)
+            #
+            # After the backfill, never before: the backfill is what guarantees no two
+            # rows share a value. SQLite treats NULLs as DISTINCT under a UNIQUE index, so
+            # even a row a pre-v28 worker later inserts with NULL cannot collide — but a
+            # blank string is NOT distinct, which is why `_backfill_lead_tokens` and
+            # `ensure_lead_token` both treat '' as missing rather than as a value.
+            self._create_unique_index_if_columns(
+                c, "idx_matches_lead_token", "matches", ["lead_token"])
             # org_id indexes — created now (not in SCHEMA) because the columns may be
             # added by the v7 migration above, after executescript ran. The v24
             # source indexes are here for the same reason.
@@ -1563,11 +1619,49 @@ class Store:
         c.execute(f"CREATE INDEX IF NOT EXISTS {name} ON {table}({', '.join(cols)})")
 
     @staticmethod
+    def _create_unique_index_if_columns(c: sqlite3.Cursor, name: str, table: str,
+                                        cols: list[str]) -> None:
+        """`_create_index_if_columns`, but UNIQUE. Same guard and same reason: a
+        migrating DB reaches the index statements before its ALTERs have necessarily
+        run, and an unguarded CREATE INDEX on a missing column aborts the open — which
+        turns a missing index into an unopenable database."""
+        if not all(Store._has_column(c, table, col) for col in cols):
+            logger.debug("DB skipping unique index %s — %s is missing one of %s",
+                         name, table, ", ".join(cols))
+            return
+        c.execute(
+            f"CREATE UNIQUE INDEX IF NOT EXISTS {name} ON {table}({', '.join(cols)})")
+
+    @staticmethod
     def _add_column_if_missing(c: sqlite3.Cursor, table: str, coldef: str) -> None:
         """ALTER ... ADD COLUMN <coldef> unless the column already exists (idempotent)."""
         col = coldef.split()[0]
         if not Store._has_column(c, table, col):
             c.execute(f"ALTER TABLE {table} ADD COLUMN {coldef}")
+
+    @staticmethod
+    def _backfill_lead_tokens(c: sqlite3.Cursor) -> None:
+        """Give every pre-v28 `matches` row an opaque org-facing key (v28).
+
+        Idempotent by its WHERE clause, so a re-open is a no-op and an upgrade that
+        died halfway resumes where it stopped rather than re-minting tokens for rows
+        that already have one — re-minting would be silently destructive: the panel
+        holds the old token in a URL and in its query cache, and rotating it turns
+        every open drawer into a 404.
+
+        Empty string is treated as missing alongside NULL. A blank token is not a
+        usable key (it would collide with the next blank one under the UNIQUE index),
+        and a hand-edited or partially-migrated DB is exactly where one shows up.
+        """
+        rows = c.execute(
+            "SELECT rowid FROM matches WHERE lead_token IS NULL OR lead_token = ''"
+        ).fetchall()
+        for row in rows:
+            c.execute("UPDATE matches SET lead_token=? WHERE rowid=?",
+                      (new_lead_token(), row["rowid"]))
+        if rows:
+            logger.info("DB v28 — minted %d opaque lead token(s) for existing leads",
+                        len(rows))
 
     def _migrate_to_v7(self, c: sqlite3.Cursor) -> None:
         """Fold existing single-tenant data into one Default org (v6→v7). Idempotent
@@ -2447,8 +2541,13 @@ class Store:
             """INSERT INTO matches
                  (campaign_id, org_id, platform, reel_id, comment_id, session_id,
                   username, text, lang, score, reason, extracted, status, tier,
-                  found_by_models, source, intent, captured_at, updated_at)
-               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                  found_by_models, source, intent, lead_token, captured_at, updated_at)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+               -- v28: `lead_token` is DELIBERATELY absent from the DO UPDATE below.
+               -- A re-poll or a worker sync-back of a lead we already hold must keep
+               -- the token the panel is already holding in a URL and a query cache;
+               -- re-minting it on every upsert would 404 an open drawer and orphan
+               -- the audit rows keyed to it. Minted once, on first insert, forever.
                ON CONFLICT(campaign_id, platform, comment_id) DO UPDATE SET
                  org_id=COALESCE(matches.org_id, excluded.org_id),
                  reel_id=excluded.reel_id,
@@ -2465,7 +2564,8 @@ class Store:
                  updated_at=excluded.updated_at""",
             (campaign_id, org_id, platform, reel_id, comment_id, session_id, username,
              text, lang, score, reason, blob, initial_status, tier, found_by_blob,
-             (source or None), ((intent or "").strip() or None), cap, now),
+             (source or None), ((intent or "").strip() or None), new_lead_token(),
+             cap, now),
         )
 
     def matches_for_run(self, run_id: str) -> list[dict[str, Any]]:
@@ -6309,6 +6409,100 @@ class Store:
         return [{"id": r["id"], "orgId": r["org_id"], "actorUserId": r["actor_user_id"],
                  "action": r["action"], "target": r["target"], "detail": r["detail"],
                  "createdAt": r["created_at"]} for r in rows]
+
+    # ----- v28 opaque org-facing lead key -----
+
+    def resolve_lead_token(self, org_id: Optional[int], token: str
+                           ) -> Optional[dict[str, Any]]:
+        """One org-facing lead key → the real `(campaign_id, platform, comment_id)`.
+
+        This is the ONLY way an org-scoped write reaches a lead. The token is what
+        `/api/leads` ships as `commentId`; the real comment id never leaves the
+        bridge, because on reddit/youtube/telegram/x it IS a permalink to the
+        comment (see `new_lead_token`).
+
+        Scoped by ORG, not by campaign, and the two are not interchangeable. The
+        token is unique table-wide, so the lookup does not need a campaign — and
+        taking the campaign from the CALLER would let one be paired with another
+        org's token to probe existence. So: resolve, then check the row's own
+        `org_id`, and answer None for both "no such token" and "not yours". A caller
+        that needs the campaign checked too compares it against the returned row,
+        which is the row's own value rather than the request's.
+
+        Returns None rather than raising: every caller turns it into the same 404
+        the pre-v28 unknown-lead path returned, and for the same reason — a 403 here
+        would confirm the lead exists and rebuild the cross-tenant existence oracle
+        the reveal endpoint is careful not to be.
+        """
+        token = (token or "").strip()
+        if not token:
+            return None
+        row = self._conn.execute(
+            "SELECT campaign_id, org_id, platform, comment_id FROM matches "
+            "WHERE lead_token=?", (token,)).fetchone()
+        if row is None:
+            return None
+        # An org-scoped caller must own the row. `org_id is None` is the local-first
+        # single-tenant case (no org on the session) — it is NOT a wildcard for a
+        # multi-tenant caller, which always has one.
+        if org_id is not None and row["org_id"] != org_id:
+            return None
+        return {"campaignId": row["campaign_id"], "platform": row["platform"],
+                "commentId": row["comment_id"]}
+
+    def ensure_lead_token(self, campaign_id: str, platform: str,
+                          comment_id: str) -> str:
+        """The opaque org-facing key for one lead, minting it if the row has none.
+
+        Read paths call this instead of reading `lead_token` with a fallback, and the
+        difference is the whole point: every fallback that can be DERIVED from the row
+        is the comment id or something that contains it, which is what an org-facing
+        key must never be. Fail closed by minting, never open by deriving.
+
+        A row without a token is not hypothetical. The v28 backfill covers everything
+        present at upgrade time, but a worker still running a pre-v28 binary inserts
+        into the migrated DB without the column and writes NULL. That box is doing
+        nothing wrong; it simply predates the key. So this heals the row on first read
+        rather than treating a mixed-version fleet as a corruption.
+
+        Idempotent, and safe to call on every row of every lead page: it writes only
+        when the column is NULL/blank, and the UNIQUE index makes a double-mint a
+        loud error rather than a silent duplicate.
+        """
+        row = self._conn.execute(
+            "SELECT lead_token FROM matches "
+            "WHERE campaign_id=? AND platform=? AND comment_id=?",
+            (campaign_id, platform, comment_id)).fetchone()
+        existing = (row["lead_token"] or "").strip() if row else ""
+        if existing:
+            return existing
+        token = new_lead_token()
+        with self._tx() as c:
+            c.execute(
+                "UPDATE matches SET lead_token=? "
+                "WHERE campaign_id=? AND platform=? AND comment_id=? "
+                "  AND (lead_token IS NULL OR lead_token='')",
+                (token, campaign_id, platform, comment_id))
+        # Re-read rather than returning `token`: under a concurrent writer the UPDATE
+        # above may have matched nothing because someone else minted first, and the
+        # caller must get the token that is actually STORED — handing back a token no
+        # row carries would produce a lead the panel can see and can never write to.
+        row = self._conn.execute(
+            "SELECT lead_token FROM matches "
+            "WHERE campaign_id=? AND platform=? AND comment_id=?",
+            (campaign_id, platform, comment_id)).fetchone()
+        return (row["lead_token"] if row and row["lead_token"] else token)
+
+    def lead_token_for(self, campaign_id: str, platform: str,
+                       comment_id: str) -> Optional[str]:
+        """The opaque key for one lead, by its real composite key. The inverse of
+        `resolve_lead_token`, and server-side only — used to echo a token back on a
+        payload built from a row the bridge already resolved."""
+        row = self._conn.execute(
+            "SELECT lead_token FROM matches "
+            "WHERE campaign_id=? AND platform=? AND comment_id=?",
+            (campaign_id, platform, comment_id)).fetchone()
+        return row["lead_token"] if row else None
 
     # ----- v27 reveal metering (reads of the same insert-only audit_log) -----
     @staticmethod

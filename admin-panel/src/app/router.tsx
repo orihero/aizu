@@ -27,6 +27,11 @@ import { ModelPerformancePage } from '@/features/admin/ModelPerformancePage';
  * a lead is (campaignId, platform, commentId). Such a link now lands on the leads list
  * with no drawer instead of opening whichever same-commentId lead sorted first, which
  * is the honest outcome: the URL genuinely does not say which lead it meant.
+ *
+ * Since v28 a stale /leads/<uid> bookmark degrades the same way, and this is the one
+ * place it shows: a uid composed before the opaque lead token landed carries the old
+ * platform comment id, so `selectLeadById` finds nothing and no drawer opens. No write
+ * is attempted and nothing is guessed at — the same honest miss, for the same reason.
  */
 function RedirectMatchToLead() {
   const { matchId } = useParams();

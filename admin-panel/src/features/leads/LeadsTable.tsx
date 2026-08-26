@@ -23,8 +23,9 @@ interface LeadsTableProps {
  * Column headers. `key` is the sort field; a null key is a non-sortable column.
  *
  * v27: the identity column is an INTENT column. A row carries no handle, no comment
- * and no Avatar — raw identity is reachable only one lead at a time, through the
- * drawer's audited reveal.
+ * and no Avatar. The HANDLE is reachable one lead at a time through the drawer's
+ * audited reveal; the COMMENT is not reachable at all — it is superadmin-only, and no
+ * customer surface renders it.
  */
 const HEADERS: readonly { label: string; key: LeadSortKey | null }[] = [
   { label: 'Intent', key: 'intent' },
@@ -55,7 +56,7 @@ export function LeadsTable({
     );
   }
 
-  // Composite lead ids — two campaigns can share a commentId.
+  // Composite lead ids — the one definition of identity, never the bare key.
   const pageIds = rows.map((row) => row.id);
   const allOnPageSelected = pageIds.every((id) => selected.has(id));
 

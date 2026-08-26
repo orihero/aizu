@@ -655,13 +655,17 @@ describe('HttpPanelRepository auth', () => {
 describe('HttpPanelRepository.revealLead (v27 reveal-on-demand)', () => {
   const INPUT = { campaignId: 'cmp-001', platform: 'instagram', commentId: 'c1' } as const;
 
-  test('POSTs the single lead identity and unwraps username/text/reelId', async () => {
+  test('POSTs the single lead and unwraps the handle — and ONLY the handle', async () => {
     mockFetchOnce({
       jsonValue: {
         ok: true,
         data: {
           id: 'cmp-001:instagram:c1', commentId: 'c1', platform: 'instagram',
-          username: 'aziz', text: 'how much?', reelId: 'r1',
+          username: 'aziz',
+          // What a bridge older than this change still sends. The boundary drops both
+          // before the drawer can read them: the comment body and the post it sits on
+          // are superadmin-only, and a stale bridge must not be a way around that.
+          text: 'how much?', reelId: 'r1',
         },
         error: null,
       },
@@ -672,9 +676,10 @@ describe('HttpPanelRepository.revealLead (v27 reveal-on-demand)', () => {
     expect(result.ok).toBe(true);
     if (result.ok) {
       expect(result.value.username).toBe('aziz');
-      expect(result.value.text).toBe('how much?');
-      expect(result.value.reelId).toBe('r1');
       expect(result.value.id).toBe('cmp-001:instagram:c1');
+      expect(result.value).not.toHaveProperty('text');
+      expect(result.value).not.toHaveProperty('reelId');
+      expect(JSON.stringify(result.value)).not.toContain('how much?');
     }
     const [url, init] = vi.mocked(fetch).mock.calls[0] ?? [];
     expect(url).toBe('/api/lead/reveal');
@@ -689,7 +694,7 @@ describe('HttpPanelRepository.revealLead (v27 reveal-on-demand)', () => {
       ok: true,
       data: {
         id: 'cmp-001:instagram:c1', commentId: 'c1', platform: 'instagram',
-        username: 'aziz', text: 'hi', reelId: 'r1',
+        username: 'aziz',
       },
       error: null,
     };

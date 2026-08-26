@@ -111,8 +111,13 @@ export interface PanelRepository {
   // v3 write surfaces — the panel is read-write beyond match status.
   bulkSetStatus(request: BulkStatusRequest): Promise<Result<void>>;
   /**
-   * POST /api/lead/reveal — un-redact ONE lead's handle, comment text and post id
-   * (RBAC action `reveal_lead`: owner/admin/member; a viewer is refused server-side).
+   * POST /api/lead/reveal — un-redact ONE lead's HANDLE, and nothing else (RBAC action
+   * `reveal_lead`: owner/admin/member; a viewer is refused server-side).
+   *
+   * The comment body and the post pointer are NOT part of the answer and have no
+   * customer-plane route at all — they are superadmin-only. An org learns what a lead
+   * wants from `Match.intent` and who to contact from this handle; the words the person
+   * wrote are not the org's to read, and a post link would hand them over by redirect.
    *
    * IMPERATIVE ON PURPOSE. Call it from the drawer's reveal button and hold the answer
    * in component state for that drawer's lifetime — never through useQuery, never

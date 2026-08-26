@@ -64,10 +64,18 @@ export function buildSession(overrides: Partial<Session> = {}): Session {
  * `commentId` — or only `campaignId` — still gets a distinct, realistic id. That
  * mirrors what the engine emits and what matchSchema recomputes at the boundary.
  *
+ * v28: on the real wire an org row's `commentId` is the opaque `matches.lead_token`,
+ * not a platform comment id. The fixtures keep short readable values like `c1` on
+ * purpose — the panel never parses this field, so a test that pinned a token-shaped
+ * string would be asserting a property of `secrets.token_urlsafe`, not of the panel.
+ * The one thing a fixture must not do is imply structure: never build a `commentId`
+ * as `{postId}/{id}`, which is what the token exists to stop the engine shipping.
+ *
  * v27: no `username`, no comment `text` — an org-facing lead carries neither, so a
- * fixture must not either. `intent` is the only lead prose the app renders; the raw
- * identity is reachable only through the audited reveal (see
- * `FakePanelRepository.revealLead`). A test that wants the "nothing derivable" case
+ * fixture must not either. `intent` is the only lead prose the app renders; the HANDLE
+ * is reachable one lead at a time through the audited reveal (see
+ * `FakePanelRepository.revealLead`, whose answer is the handle and nothing else), and
+ * the comment is not reachable at all. A test that wants the "nothing derivable" case
  * overrides `intent: ''`, which is a REAL value the server sends.
  */
 export function buildMatch(overrides: Partial<Match> = {}): Match {

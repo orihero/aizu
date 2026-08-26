@@ -11,6 +11,15 @@
  * `engine/aizu/panel.py::lead_uid` implements the SAME encoding character-for-character
  * — keep the two in lockstep.
  *
+ * The third part is `commentId`, which since v28 means two different things depending
+ * on which plane built the row: a CUSTOMER row carries the opaque `matches.lead_token`
+ * (unique table-wide, so the collision above is now structurally impossible there),
+ * while an ADMIN row (`features/admin/**`, over `/api/admin/*`) still carries the real
+ * platform comment id, where the collision is as live as it ever was. This encoding is
+ * what lets one composite serve both: it cares only that the three parts are strings.
+ * The rule survives the split for a reason that predates it — the app has exactly one
+ * definition of lead identity, and a per-plane shortcut is how a second one appears.
+ *
  * Treat the value as OPAQUE: never parse it back apart. Every write resolves the
  * composite key from the record's own `campaignId` / `platform` / `commentId` fields,
  * which is what makes a status write land on the record the operator actually clicked.

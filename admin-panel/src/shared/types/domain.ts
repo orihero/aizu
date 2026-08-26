@@ -242,6 +242,18 @@ export interface RedditConnectInput {
   readonly userAgent: string;
 }
 
+/**
+ * THE LEAD KEY ON EVERY ORG-FACING WRITE (`StatusWriteRequest`, `BulkStatusItem`,
+ * `AddLeadNoteInput`, `RevealLeadInput`): `commentId` is the value off the record's own
+ * `Match.commentId`, which on a customer payload is the v28 opaque `matches.lead_token`
+ * — NOT the platform's comment id, whatever the field is called. The bridge resolves it
+ * back through `server._resolve_org_lead`, which accepts the token ONLY: posting a real
+ * comment id answers 404 `unknown lead`, deliberately, because a route that took both
+ * would leave the old permalink-bearing key working and the redaction decorative.
+ *
+ * So: always send `lead.commentId` verbatim, never a value assembled from anything
+ * else. There is nothing to construct and nothing to parse — see `shared/lib/leadId.ts`.
+ */
 export interface StatusWriteRequest {
   readonly campaignId: string;
   readonly commentId: string;
@@ -260,7 +272,9 @@ export interface StatusWriteRequest {
  * Identifies the ONE lead to un-redact. There is deliberately no bulk shape and no
  * list variant: a bulk path would quietly restore the export leak the redaction closed.
  * The org is resolved server-side from the session, never from this body (BOLA) — an
- * unowned lead is a 404, not a 403, so it is not an existence oracle.
+ * unowned lead is a 404, not a 403, so it is not an existence oracle. Since v28 that
+ * last point is stronger than a policy: `commentId` is a 96-bit random token, so there
+ * is no guessable (campaign, lead) pair left to probe with in the first place.
  */
 export interface RevealLeadInput {
   readonly campaignId: string;
@@ -269,9 +283,15 @@ export interface RevealLeadInput {
 }
 
 /**
- * One lead's raw identity, returned by the audited reveal. `text` (the comment) rides
- * along on purpose: it is already visible on the post the reveal unlocks, and handing
- * back a handle while withholding the words the person wrote is incoherent, not safer.
+ * One lead's HANDLE, returned by the audited reveal — and nothing else about the person.
+ *
+ * There is deliberately no `text` and no `reelId` here. The comment body is
+ * superadmin-only and has no customer-plane route at all, audited or otherwise: an org
+ * learns WHAT a lead wants from `Match.intent` and WHO to contact from this handle,
+ * never the words the person wrote. `reelId` is held to the same rule because a pointer
+ * to the comment IS the comment — the post it names is public and shows the words in
+ * plain sight, so a post link would reinstate by redirection what dropping `text`
+ * closes. `postLinkContainment.test.ts` asserts that structurally.
  *
  * SESSION-LOCAL AND NEVER PERSISTED. Do not fold this into a lead record, a React Query
  * cache, an export row, or localStorage: reopening the drawer must re-reveal (and
@@ -280,14 +300,15 @@ export interface RevealLeadInput {
 export interface RevealedLead {
   /** The composite lead uid the server resolved, echoed back with `commentId` and
    *  `platform` so the drawer can check the answer is for the lead it asked about
-   *  before painting a handle onto the screen. */
+   *  before painting a handle onto the screen. Both are composed from the TOKEN the
+   *  caller sent, not from the comment id the bridge resolved it to — so this compares
+   *  equal to `Match.id`. (The reveal's audit row and its period meter still key off
+   *  the real comment id server-side, so the cap keeps pointing at the same lead across
+   *  the v28 upgrade; that uid is never sent here.) */
   readonly id: string;
   readonly commentId: string;
   readonly platform: string;
   readonly username: string;
-  readonly text: string;
-  /** The post/reel the comment sits on — the deep link only a revealed lead gets. */
-  readonly reelId: string;
 }
 
 /* ---- v6 lead-note write shapes (POST /api/lead/note) ---- */

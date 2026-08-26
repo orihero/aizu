@@ -61,7 +61,8 @@ def test_sessions_and_matches_reconcile():
     assert s["matches"] == len(raw["MATCHES"]) == 1   # only c1 is a lead
     m = raw["MATCHES"][0]
     # No `reelId` on an org-facing lead (v27): the post it names is public and shows
-    # both the handle and the comment, so it lives behind the audited reveal instead.
+    # both the handle and the comment, so it is superadmin-only — the audited reveal
+    # does not hand it over either, because a pointer to the comment is the comment.
     assert "reelId" not in m
     assert m["sessionId"] == s["id"]
     assert "555" in (m["extracted"].get("phone") or "")
@@ -185,6 +186,14 @@ def test_lead_payload_keeps_two_campaigns_leads_distinct():
 
     The payload used to emit `"id": comment_id`, collapsing all three into one row —
     so clicking a lead in campaign A opened, and wrote status to, campaign B's lead.
+
+    Since v28 the third part of that composite is `matches.lead_token`, minted per
+    ROW under a UNIQUE index, so the three rows no longer share the value the
+    composite was invented to disambiguate. The composite still earns its keep — it
+    is what a client without the DB can key on, and the superadmin plane still
+    composes it over real comment ids that DO collide — but on this plane the
+    collision is now impossible rather than merely handled, and the assertions below
+    say so by looking the rows up through their own emitted keys.
     """
     store = _bare_store()
     try:
@@ -218,12 +227,31 @@ def test_lead_payload_keeps_two_campaigns_leads_distinct():
     # v27: identity is superadmin-only, so the distinctness has to be visible on a
     # field the org actually receives — the derived intent.
     assert all("username" not in r and "text" not in r for r in rows)
-    assert by_id[lead_uid("camp-b", "instagram", "dup-1")]["intent"] \
-        == "Wants a quote for gutters"
-    assert by_id[lead_uid("camp-a", "x", "dup-1")]["intent"] \
-        == "Wants a quote for cladding"
-    # The raw platform comment id is still carried for display/export.
-    assert {r["commentId"] for r in rows} == {"dup-1"}
+    by_record = {(r["campaignId"], r["platform"]): r for r in rows}
+    assert by_record[("camp-b", "instagram")]["intent"] == "Wants a quote for gutters"
+    assert by_record[("camp-a", "x")]["intent"] == "Wants a quote for cladding"
+    # v28: the org-facing key is the per-row token, so the three rows that DO share
+    # a comment id ship three different values for it — and none of them is "dup-1".
+    assert len({r["commentId"] for r in rows}) == 3
+    assert all(r["commentId"] != "dup-1" and "dup-1" not in r["commentId"]
+               for r in rows)
+    # ...while the superadmin projection of the same three rows still carries the
+    # real comment id they share. The redaction is scoped to the org plane, not
+    # applied at the source — losing this half would blind the only plane that can
+    # still read the raw lead.
+    store = _bare_store()
+    try:
+        for cid, platform in (("camp-a", "instagram"), ("camp-b", "instagram"),
+                              ("camp-a", "x")):
+            store.upsert_match(campaign_id=cid, reel_id="r", comment_id="dup-1",
+                               username="u", text="t", lang="en", score=0.9,
+                               reason="r", extracted=None, tier="local",
+                               platform=platform, intent="Wants a quote")
+        admin = (_build_matches(store, "camp-a", include_identity=True)
+                 + _build_matches(store, "camp-b", include_identity=True))
+    finally:
+        store.close()
+    assert {r["commentId"] for r in admin} == {"dup-1"}
 
 
 # ----- v27 lead redaction: intent in, identity out ------------------------------
@@ -232,9 +260,10 @@ def test_org_lead_payload_carries_intent_and_no_identity():
     """The central promise of v27: an org-facing lead row shows what the person
     WANTS and nothing that says who they are. The username and the comment body stay
     in the DB — they simply never reach this payload."""
+    CID = "cm-9f3a1c"
     store = _bare_store()
     try:
-        store.upsert_match(campaign_id="camp-a", reel_id="r", comment_id="c1",
+        store.upsert_match(campaign_id="camp-a", reel_id="r", comment_id=CID,
                            username="alice", text="how much for the red ones?",
                            lang="en", score=0.9, reason="asked price",
                            extracted=None, tier="local", platform="instagram",
@@ -250,11 +279,22 @@ def test_org_lead_payload_carries_intent_and_no_identity():
     assert "alice" not in body and "red ones" not in body
     # The rest of the row is the product and must be untouched.
     assert row["reason"] == "asked price" and row["score"] == 0.9
-    assert row["commentId"] == "c1"
+    # ...except the KEY, which v28 replaced. `commentId` on an org row is the opaque
+    # `matches.lead_token`, not the platform's own id — on reddit/youtube/telegram/x
+    # that id is composed as "{reel_id}/{comment_id}" (or the reply's own tweet id),
+    # so shipping it left the redaction above one hand-built URL from being undone.
+    # The assertion is inverted rather than dropped: "is not the comment id, and does
+    # not contain it" is exactly the property the change buys. The seeded id is long
+    # enough for the substring half to mean something: a token is 16 characters of
+    # urlsafe base64, and a two-character needle turns up inside one about once every
+    # 250 runs, which is a coin flip rather than an assertion.
+    assert row["commentId"] != CID and CID not in row["commentId"]
     # `reelId` is a POINTER to the identity and goes with it: the post it names is
     # public and carries the handle and the comment in plain sight, so an org-facing
     # reelId would have let anyone with devtools rebuild the list without ever
-    # calling the audited reveal.
+    # calling the reveal. It is blocked outright for an org rather than sold behind
+    # an audit row — the reveal hands over the HANDLE and nothing else — because a
+    # pointer to the comment is the comment, and the comment is superadmin-only.
     assert "reelId" not in row and "reel" not in body
 
 
@@ -274,8 +314,10 @@ def test_include_identity_is_opt_in_and_off_by_default():
         store.close()
     assert "username" not in org and "text" not in org and "reelId" not in org
     assert admin["username"] == "alice" and admin["text"] == "how much?"
-    # …and the superadmin keeps the post pointer, which is what makes the reveal
-    # endpoint's own `reelId` a re-disclosure of something already visible upstream.
+    # …and the superadmin keeps the post pointer, which is now the ONLY surface
+    # carrying it: for an org the post is blocked outright, not audited, because the
+    # reveal returns the handle alone. Losing it here would leave nobody able to open
+    # the page the raw comment is read from.
     assert admin["reelId"] == "r"
     # The superadmin sees BOTH — the derived line beside the raw evidence it came
     # from, which is the only way to tell a good intent from a bad one.

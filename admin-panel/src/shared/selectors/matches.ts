@@ -46,9 +46,10 @@ export function selectLabeledCount(matches: readonly Match[]): number {
 }
 
 // `selectMatchesForReel` used to live here. It is gone with `Match.reelId` (v27): an
-// org-facing lead carries no post pointer at all, so there is nothing to group by. The
-// only reel id in the customer plane rides on a single `RevealedLead` from the audited
-// reveal, and grouping a list by it would be a bulk reveal wearing a selector's clothes.
+// org-facing lead carries no post pointer at all, so there is nothing to group by. Nor
+// is there anywhere else to get one — the audited reveal answers with the handle alone,
+// so the customer plane holds no reel id at any point, on any payload. Re-introducing a
+// selector like that would need the pointer back first, which is the change to refuse.
 
 export function selectEscalatedCount(matches: readonly Match[]): number {
   return matches.filter((m) => m.escalated).length;

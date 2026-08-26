@@ -11,11 +11,16 @@ import { LEAD_INTENT_PLACEHOLDER } from '@/shared/selectors/leads';
 import { LeadDrawer } from './LeadDrawer';
 
 /**
- * Section F — reveal-on-demand. The drawer is the ONLY customer surface that can show
- * a lead's handle, their comment, or the post they wrote it on, and only after an
- * explicit click the bridge audits. The property these tests exist to protect is that
- * the reveal is session-local: if it were cached anywhere, "anonymized by default"
- * would decay into "anonymized until first viewed".
+ * Section F — reveal-on-demand. The drawer is the ONLY customer surface that can show a
+ * lead's handle, and only after an explicit click the bridge audits.
+ *
+ * The handle is ALL it can show. The comment body and the post it sits on are
+ * superadmin-only, with no customer-plane route at all — so these tests protect two
+ * properties, not one:
+ *   1. the reveal is session-local — cached anywhere, "anonymized by default" decays
+ *      into "anonymized until first viewed";
+ *   2. the reveal is handle-only — a comment body or a post link on this surface, at
+ *      any point in the flow, is the policy undone.
  */
 
 const LEAD = buildMatch({
@@ -27,17 +32,18 @@ const LEAD = buildMatch({
 const OTHER = buildMatch({ commentId: 'c2', intent: 'Wants a demo next week' });
 
 /**
- * The post pointer lives HERE, on the reveal answer, and no longer on the lead: since
- * v27 an org-facing `Match` carries no `reelId` at all, so there is nothing on the row
- * for a component to build a post URL out of.
+ * A post id that exists NOWHERE in the customer plane — not on the lead row, not on the
+ * reveal answer. It is defined here only so the assertions below have a concrete string
+ * to prove is absent: no org surface may name a post, because the post shows the
+ * comment in plain sight.
  */
 const REEL_ID = 'DXOML7vjQhn';
 
-const IDENTITY = {
-  username: 'dana_t',
-  text: 'How much is the Pro plan? +1 415 555 0142',
-  reelId: REEL_ID,
-};
+/** The comment body, likewise: defined only to be asserted absent. Nothing registers
+ *  it anywhere — the fake cannot hold one, because the wire cannot carry one. */
+const COMMENT_BODY = 'How much is the Pro plan? +1 415 555 0142';
+
+const IDENTITY = { username: 'dana_t' };
 
 /**
  * The page owns which lead the drawer shows, so the test drives that the same way:
@@ -76,6 +82,13 @@ function postLink() {
   return screen.queryByRole('link', { name: new RegExp(REEL_ID) });
 }
 
+/** Every outbound link the drawer currently renders that points at a social platform.
+ *  Must always be empty: a post link is the comment one redirect away. */
+function platformLinks() {
+  return screen.queryAllByRole('link').filter((a) =>
+    /instagram\.com|youtube\.com|reddit\.com|linkedin\.com|t\.me|x\.com/.test(a.getAttribute('href') ?? ''));
+}
+
 describe('LeadDrawer before a reveal', () => {
   test('shows the intent, the reason and the score — and no identity or post link', async () => {
     renderDrawerAs('owner');
@@ -86,7 +99,7 @@ describe('LeadDrawer before a reveal', () => {
     expect(screen.getByText('+14155550142')).toBeInTheDocument();
 
     expect(screen.queryByText(IDENTITY.username)).not.toBeInTheDocument();
-    expect(screen.queryByText(IDENTITY.text)).not.toBeInTheDocument();
+    expect(screen.queryByText(COMMENT_BODY)).not.toBeInTheDocument();
     // No deep link to the post — the comment and the handle are visible ON that post,
     // so a link is the redaction undone in one click. Not even the bare reel id shows:
     // it is one hand-built URL away from the same page.
@@ -106,27 +119,43 @@ describe('LeadDrawer before a reveal', () => {
 });
 
 describe('LeadDrawer reveal', () => {
-  test('revealing shows the handle, the comment and the post link for that lead', async () => {
+  test('revealing shows the handle for that lead — and only the handle', async () => {
     const user = userEvent.setup();
     const repository = renderDrawerAs('owner');
 
-    await user.click(await screen.findByRole('button', { name: /Reveal source/ }));
+    await user.click(await screen.findByRole('button', { name: /Show handle/ }));
 
     expect(await screen.findByText(IDENTITY.username)).toBeInTheDocument();
-    expect(screen.getByText(IDENTITY.text)).toBeInTheDocument();
-    expect(postLink()).toHaveAttribute('href', `https://www.instagram.com/reel/${REEL_ID}/`);
     // One lead, one call — there is no bulk reveal, and the request identifies exactly
     // the lead on screen so the server can scope it to the caller's org.
     expect(repository.revealRequests).toEqual([
       { campaignId: LEAD.campaignId, platform: LEAD.platform, commentId: LEAD.commentId },
     ]);
+    // THE assertion this whole change exists for: revealing a lead is not a route to
+    // the words the person wrote, nor to the page those words are printed on.
+    expect(screen.queryByText(COMMENT_BODY)).not.toBeInTheDocument();
+    expect(document.body.textContent).not.toContain(COMMENT_BODY);
+    expect(postLink()).not.toBeInTheDocument();
+    expect(screen.queryByText(REEL_ID)).not.toBeInTheDocument();
+    expect(platformLinks()).toEqual([]);
+  });
+
+  test('the pre-reveal copy does not promise the comment or the post', async () => {
+    // Copy is the product's own statement of the policy. Promising "the comment and the
+    // post" and then handing over a handle is how a customer learns to file a bug.
+    renderDrawerAs('owner');
+
+    const button = await screen.findByRole('button', { name: /Show handle/ });
+    const section = button.closest('section');
+    expect(section).not.toBeNull();
+    expect(section?.textContent ?? '').not.toMatch(/\bthe comment\b|\bthe post\b/i);
   });
 
   test('a viewer gets no reveal control at all', async () => {
     renderDrawerAs('viewer');
 
     expect(await screen.findByText(/needs an owner, admin, or member/)).toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: /Reveal source/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /Show handle/ })).not.toBeInTheDocument();
   });
 
   test('a failed reveal surfaces the error and reveals nothing', async () => {
@@ -134,7 +163,7 @@ describe('LeadDrawer reveal', () => {
     const repository = renderDrawerAs('owner');
     repository.revealFailure = 'network';
 
-    await user.click(await screen.findByRole('button', { name: /Reveal source/ }));
+    await user.click(await screen.findByRole('button', { name: /Show handle/ }));
 
     expect(await screen.findByRole('alert')).toHaveTextContent(/bridge server unreachable/);
     expect(screen.queryByText(IDENTITY.username)).not.toBeInTheDocument();
@@ -150,7 +179,7 @@ describe('LeadDrawer reveal', () => {
     const user = userEvent.setup();
     const repository = renderDrawerAs('owner');
 
-    await user.click(await screen.findByRole('button', { name: /Reveal source/ }));
+    await user.click(await screen.findByRole('button', { name: /Show handle/ }));
     expect(await screen.findByText(IDENTITY.username)).toBeInTheDocument();
 
     // Close the drawer the way the page does — the lead prop goes null.
@@ -168,7 +197,7 @@ describe('LeadDrawer reveal', () => {
     });
     expect(repository.revealRequests).toHaveLength(1);
 
-    await user.click(screen.getByRole('button', { name: /Reveal source/ }));
+    await user.click(screen.getByRole('button', { name: /Show handle/ }));
     expect(await screen.findByText(IDENTITY.username)).toBeInTheDocument();
     expect(repository.revealRequests).toHaveLength(2);
   });
@@ -184,7 +213,7 @@ describe('LeadDrawer reveal', () => {
     const repository = renderDrawerAs('owner');
     repository.revealFailure = 'plan_limit';
 
-    await user.click(await screen.findByRole('button', { name: /Reveal source/ }));
+    await user.click(await screen.findByRole('button', { name: /Show handle/ }));
 
     const alert = await screen.findByRole('alert');
     expect(alert).toHaveTextContent(/revealed every lead your plan includes/i);
@@ -210,7 +239,7 @@ describe('LeadDrawer reveal', () => {
     const repository = renderDrawerAs('owner');
     repository.revealFailure = 'plan_limit';
 
-    await user.click(await screen.findByRole('button', { name: /Reveal source/ }));
+    await user.click(await screen.findByRole('button', { name: /Show handle/ }));
     expect(await screen.findByRole('alert')).toHaveTextContent(/revealed every lead your plan/i);
 
     // Reopen the same lead — an already-revealed lead is exactly this case on the wire.
@@ -219,7 +248,7 @@ describe('LeadDrawer reveal', () => {
     // The refusal did not survive the reopen: the drawer is back to its hidden state.
     expect(screen.queryByRole('alert')).not.toBeInTheDocument();
 
-    await user.click(screen.getByRole('button', { name: /Reveal source/ }));
+    await user.click(screen.getByRole('button', { name: /Show handle/ }));
     expect(await screen.findByText(IDENTITY.username)).toBeInTheDocument();
     expect(screen.queryByRole('alert')).not.toBeInTheDocument();
     expect(screen.queryByRole('link', { name: /Upgrade plan/ })).not.toBeInTheDocument();
@@ -229,7 +258,7 @@ describe('LeadDrawer reveal', () => {
     const user = userEvent.setup();
     renderDrawerAs('owner');
 
-    await user.click(await screen.findByRole('button', { name: /Reveal source/ }));
+    await user.click(await screen.findByRole('button', { name: /Show handle/ }));
     expect(await screen.findByText(IDENTITY.username)).toBeInTheDocument();
 
     await user.click(screen.getByRole('button', { name: 'open lead two' }));
@@ -237,6 +266,6 @@ describe('LeadDrawer reveal', () => {
     await waitFor(() => {
       expect(screen.queryByText(IDENTITY.username)).not.toBeInTheDocument();
     });
-    expect(screen.getByRole('button', { name: /Reveal source/ })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Show handle/ })).toBeInTheDocument();
   });
 });

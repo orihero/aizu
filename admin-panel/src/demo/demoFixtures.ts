@@ -210,7 +210,8 @@ export const DEMO_DRAFT_CAMPAIGN: Campaign = buildCampaign({
 
 /**
  * v27: a demo lead carries NO handle and NO comment body — the demo tenant is a
- * customer-facing surface, and a customer's lead is anonymous until they press Reveal.
+ * customer-facing surface, where a lead is anonymous until someone asks for the handle,
+ * and the comment body is never shown at all.
  * `intent` is the whole story of a lead here: one plain-language line saying what the
  * person wants, with no name, no @handle and no phone/e-mail in it (those are
  * `extracted` fields, which the drawer shows as contact chips).

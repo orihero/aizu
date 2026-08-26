@@ -102,10 +102,11 @@ describe('exports never carry lead identity', () => {
       orgId: 1,
       org: { id: 1, name: 'Test Co', logo: null, description: null },
     };
-    repository.revealIdentities.set(lead.id, {
-      username: 'dana_t',
-      text: 'How much is the Pro plan? +1 415 555 0142',
-    });
+    // The handle is the WHOLE reveal answer now — there is no comment body to register,
+    // because the bridge does not send one to a customer. So this test asserts what is
+    // still assertable: the one identity field a reveal CAN put in this process must
+    // not find its way from component state into a file on disk.
+    repository.revealIdentities.set(lead.id, { username: 'dana_t' });
 
     const revealed = await repository.revealLead({
       campaignId: lead.campaignId,
@@ -122,7 +123,11 @@ describe('exports never carry lead identity', () => {
     for (const artifact of [csv, xml, pdf]) {
       expect(artifact).toContain('Wants pricing for the Pro plan');
       expect(artifact).not.toContain('dana_t');
-      expect(artifact).not.toContain('+1 415 555 0142');
+    }
+    // ...and the reveal answer itself has no comment body to leak in the first place.
+    if (revealed.ok) {
+      expect(revealed.value).not.toHaveProperty('text');
+      expect(revealed.value).not.toHaveProperty('reelId');
     }
   });
 

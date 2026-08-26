@@ -179,6 +179,11 @@ export function selectLeadStats(matches: readonly Match[]): LeadStats {
  * id legitimately exists under two campaigns (and on two platforms), so that lookup
  * returned whichever copy happened to sort first — the drawer then showed, and wrote
  * status to, the wrong campaign's lead.
+ *
+ * v28 removed the collision on this plane rather than the rule — a customer row's
+ * `commentId` is a table-wide-unique token now — but the rule stands, because the
+ * lookup this feeds is the URL param `/leads/:leadId`, which is a composite uid and
+ * nothing else. Matching it against a bare key would silently fail instead.
  */
 export function selectLeadById(matches: readonly Match[], leadId: string): Match | null {
   return matches.find((m) => m.id === leadId) ?? null;
@@ -241,6 +246,16 @@ export interface LeadExportColumn {
  * The intent cell writes the raw string, so an un-derived intent is an EMPTY cell:
  * "Intent not captured" is UI copy for a human reading a table, not data a downstream
  * CRM import should have to filter back out.
+ *
+ * v28: the `id` column carries `commentId`, which on a customer payload is now the
+ * opaque lead token. This is where that change pays off hardest — before it, an export
+ * wrote a reddit/youtube/telegram permalink component into a spreadsheet that leaves
+ * the app forever, which is the redaction undone on disk. The token is stable per lead
+ * (the engine's `upsert_match` deliberately does not rewrite it on a re-poll), so it
+ * remains a valid CRM key. But it is a DIFFERENT value from the same lead's `id` in any
+ * export taken before v28 — a downstream system keyed on the old column will insert a
+ * second record rather than update the first, and that is worth saying out loud to
+ * whoever gets the support ticket.
  */
 export const LEAD_EXPORT_COLUMNS: readonly LeadExportColumn[] = [
   { header: 'id', value: (l) => l.commentId },

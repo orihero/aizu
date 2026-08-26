@@ -133,8 +133,9 @@ export function LeadsPage() {
   const totalPages = Math.max(1, pageCount(total, pageSize));
   const safePage = Math.min(page, totalPages);
 
-  // Selection, the drawer lookup and the route all key on the composite lead `id`
-  // — a bare commentId is shared by leads in different campaigns/platforms.
+  // Selection, the drawer lookup and the route all key on the composite lead `id`,
+  // which is the app's single definition of identity — never the bare `commentId`,
+  // whose uniqueness now depends on which plane built the row (see leadId.ts).
   const selectedLeads = useMemo(
     () => items.filter((m) => selected.has(m.id)),
     [items, selected],

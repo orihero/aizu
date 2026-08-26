@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { Eye, ExternalLink, Trash2 } from 'lucide-react';
+import { Eye, Trash2 } from 'lucide-react';
 import { Button } from '@/shared/ui/Button';
 import { Drawer } from '@/shared/ui/Drawer';
 import { LeadDetails } from '@/shared/ui/LeadDetails';
@@ -11,7 +11,6 @@ import { useAddLeadNote, useDeleteLeadNote, isTempNoteId } from '@/shared/hooks/
 import { useAuth } from '@/shared/hooks/useAuth';
 import { useCan } from '@/shared/hooks/useCan';
 import { cn } from '@/shared/lib/cn';
-import { reelUrl } from '@/shared/lib/reelUrl';
 import {
   LEAD_INTENT_PLACEHOLDER,
   LEAD_STATUS_LABEL,
@@ -42,28 +41,6 @@ function Section({ title, children }: { readonly title: string; readonly childre
       <h3 className="mb-2 text-[10px] font-bold uppercase tracking-wider text-text-faint">{title}</h3>
       {children}
     </section>
-  );
-}
-
-/**
- * Link out to the source reel on its platform. Falls back to the plain reel id
- * when the platform exposes no derivable per-reel URL (e.g. Telegram).
- */
-function ReelLink({ platform, reelId }: { readonly platform: string; readonly reelId: string }) {
-  const href = reelUrl(platform, reelId);
-  if (!href) {
-    return <span className="font-mono text-[11px] text-text-muted">{reelId}</span>;
-  }
-  return (
-    <a
-      href={href}
-      target="_blank"
-      rel="noopener noreferrer"
-      className="inline-flex max-w-full items-center gap-1 font-mono text-[11px] text-brand hover:underline"
-    >
-      <span className="truncate">{reelId}</span>
-      <ExternalLink className="size-3 shrink-0" aria-hidden />
-    </a>
   );
 }
 
@@ -157,35 +134,30 @@ function RevealError({ error }: { readonly error: AppError }) {
 }
 
 /**
- * The ONE place in the customer app where a lead's handle, their comment and the post
- * it sits on can appear — after an explicit, server-audited click, for this lead, for
- * as long as this drawer stays open. Viewers get no control (`reveal_lead` excludes
- * them) and the bridge refuses them regardless: UI gating is UX, the server is the gate.
+ * The ONE place in the customer app where a lead's handle can appear — after an
+ * explicit, server-audited click, for this lead, for as long as this drawer stays open.
+ * Viewers get no control (`reveal_lead` excludes them) and the bridge refuses them
+ * regardless: UI gating is UX, the server is the gate.
+ *
+ * The handle is ALL it can show. The comment body and the post it sits on are
+ * superadmin-only and have no customer-plane route at all — not behind this button,
+ * not behind any other. If a future edit wants to render either one here, the fix is
+ * not in this component: the fields do not exist on `RevealedLead`, the bridge does
+ * not send them, and `postLinkContainment.test.ts` fails on the attempt.
  */
 function RevealSection({ lead }: { readonly lead: Match }) {
   const canReveal = useCan('reveal_lead');
   const { state, reveal } = useLeadReveal(lead);
 
   if (state.kind === 'revealed') {
+    // The handle, alone. There is no Comment blockquote and no Post link here, and
+    // neither is a layout decision: `RevealedLead` has no `text` and no `reelId`
+    // because the bridge does not send them. What the person wrote is superadmin-only.
     return (
       <dl className="space-y-2 text-xs">
         <div className="flex items-baseline justify-between gap-3">
           <dt className="shrink-0 text-text-muted">Handle</dt>
           <dd className="min-w-0 truncate font-semibold">{state.source.username}</dd>
-        </div>
-        <div>
-          <dt className="mb-1 text-text-muted">Comment</dt>
-          <dd>
-            <blockquote className="rounded-lg border-l-2 border-brand bg-surface-2 px-3 py-2 text-sm">
-              {state.source.text}
-            </blockquote>
-          </dd>
-        </div>
-        <div className="flex items-baseline justify-between gap-3">
-          <dt className="shrink-0 text-text-muted">Post</dt>
-          <dd className="min-w-0 text-right">
-            <ReelLink platform={state.source.platform} reelId={state.source.reelId} />
-          </dd>
         </div>
       </dl>
     );
@@ -194,7 +166,7 @@ function RevealSection({ lead }: { readonly lead: Match }) {
   if (!canReveal) {
     return (
       <p className="text-xs text-text-faint">
-        Leads are anonymized. Revealing who wrote one needs an owner, admin, or member
+        Leads are anonymized. Seeing who wrote one needs an owner, admin, or member
         account.
       </p>
     );
@@ -203,9 +175,9 @@ function RevealSection({ lead }: { readonly lead: Match }) {
   return (
     <>
       <p className="mb-2 text-xs text-text-muted">
-        The handle, the comment, and the post stay hidden until you ask for them.
-        Revealing is recorded against your account, and it is not stored — reopening this
-        lead asks again.
+        The handle stays hidden until you ask for it. Asking is recorded against your
+        account, and the answer is not stored — reopening this lead asks again. What the
+        person actually wrote is never shown here; the summary above is what we captured.
       </p>
       <Button
         type="button"
@@ -214,7 +186,7 @@ function RevealSection({ lead }: { readonly lead: Match }) {
         disabled={state.kind === 'revealing'}
       >
         <Eye className="size-3.5" aria-hidden />
-        {state.kind === 'revealing' ? 'Revealing…' : 'Reveal source'}
+        {state.kind === 'revealing' ? 'Showing…' : 'Show handle'}
       </Button>
       {state.kind === 'failed' ? <RevealError error={state.error} /> : null}
     </>
@@ -339,7 +311,9 @@ export function LeadDrawer({ lead, threshold, onClose }: LeadDrawerProps) {
         onClose={onClose}
         title={
           lead ? (
-            // No avatar and no handle: the lead's own words are the title now.
+            // No avatar and no handle: the DERIVED intent line is the title now —
+            // what we captured the person as WANTING, never the words they actually
+            // wrote. Those are superadmin-only and no customer surface renders them.
             <div className="min-w-0">
               <div
                 className={cn(
@@ -389,7 +363,7 @@ export function LeadDrawer({ lead, threshold, onClose }: LeadDrawerProps) {
               <LeadDetails extracted={lead.extracted} />
             </Section>
 
-            <Section title="Original comment">
+            <Section title="Who wrote this">
               {/* Keyed on the lead id so switching leads remounts with a clean, hidden
                   state instead of carrying one lead's revealed identity into another. */}
               <RevealSection key={lead.id} lead={lead} />
@@ -400,8 +374,22 @@ export function LeadDrawer({ lead, threshold, onClose }: LeadDrawerProps) {
               {canEdit ? <NoteComposer lead={lead} /> : null}
             </Section>
 
-            {/* Provenance only. The post link lives behind the reveal: a reel id is one
-                hand-built URL away from the comment and the handle on it. */}
+            {/* Provenance only, and there is no post link anywhere in this drawer: a
+                reel id is one hand-built URL away from the comment, which the customer
+                plane does not get to see.
+
+                "Lead ref" below is `lead.commentId`, which on a customer payload is
+                the v28 `matches.lead_token` — a random key OUR OWN database mints per
+                lead. It is safe on screen precisely because it resolves NOWHERE off
+                this platform: it is not the comment's id, not the post's, not the
+                person's, and pasting it into reddit/youtube/telegram/x finds nothing.
+                It used to be labelled `comment_id`, and until v28 that label was
+                accurate — which was the bug: on four of six platforms the engine
+                composes a comment id as f"{reel_id}/{comment_id}", so the label named,
+                and the row printed, a permalink the v27 redaction had just finished
+                withholding. Do not relabel this back to anything platform-shaped; an
+                operator quoting it into a support ticket is quoting an internal
+                reference, and that is the whole point of showing it. */}
             <Section title="Source">
               <dl className="space-y-1.5 text-xs">
                 <div className="flex items-baseline justify-between gap-3">
@@ -415,7 +403,7 @@ export function LeadDrawer({ lead, threshold, onClose }: LeadDrawerProps) {
                   </dd>
                 </div>
                 <div className="flex items-baseline justify-between gap-3">
-                  <dt className="shrink-0 text-text-muted">comment_id</dt>
+                  <dt className="shrink-0 text-text-muted">Lead ref</dt>
                   <dd className="font-mono text-[11px]">{lead.commentId}</dd>
                 </div>
               </dl>

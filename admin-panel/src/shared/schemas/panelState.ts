@@ -370,9 +370,22 @@ export const leadNoteSchema = z.object({
  * A lead. `id` is the composite identity `(campaignId, platform, commentId)` — the
  * engine's own `matches` primary key — and is RECOMPUTED at this boundary rather than
  * trusted from the wire, so a single client-side definition guarantees the invariant
- * the whole app leans on: one id ⇔ one lead record. `commentId` stays on the record as
- * the raw platform comment id (display, export, and the write payload); it is NOT
- * unique on its own, so never key a lookup, a React key, or a selection on it.
+ * the whole app leans on: one id ⇔ one lead record.
+ *
+ * `commentId` KEEPS ITS WIRE NAME but no longer means what the name says. On a
+ * customer payload (v28) it is `matches.lead_token` — an opaque random key the engine
+ * mints per lead, unique across the whole table, minted once on first insert and
+ * deliberately never rotated on a re-poll or a worker sync-back, so an open drawer's
+ * URL survives. The REAL platform comment id reaches only the superadmin schemas
+ * (`schemas/admin.ts`), which is the same `include_identity` split as `username` and
+ * `text`. The field was left named `commentId` on purpose — the rename would have
+ * touched every write path for no behavioural gain — so this paragraph, not the name,
+ * carries the meaning.
+ *
+ * Still never key a lookup, a React key, or a selection on it. The old reason (a bare
+ * comment id is not unique) is now false on THIS plane and still true on the admin
+ * one; the reason that outlives both is that the app has exactly ONE definition of
+ * lead identity — the composite `id` recomputed here — and a second one drifts.
  *
  * v27 redaction: there is NO `username`, NO comment `text` and NO `reelId` on an
  * org-facing lead — the bridge stopped sending all three (`panel._build_matches`), and
@@ -384,9 +397,24 @@ export const leadNoteSchema = z.object({
  * `reelUrl(platform, reelId)` turns it into a public URL where the comment and the
  * handle are both on screen, so a lead row carrying one is the redaction undone in a
  * single click — by a component, by an export, or by anyone reading the network tab.
- * The only post pointer in the customer plane now arrives on `RevealedLead`, from the
- * audited per-lead reveal (`PanelRepository.revealLead`), which is deliberately NOT
- * part of this type — see Section F.
+ * No LEAD carries a post pointer anywhere in the customer plane, and neither does the
+ * audited reveal (`PanelRepository.revealLead` answers with the handle alone). The
+ * comment body follows the same rule and for the same reason — see `RevealedLead` and
+ * `postLinkContainment.test.ts`.
+ *
+ * Scoped to LEADS on purpose, because one org-facing surface still names posts and a
+ * blanket claim here would hide it: `reelSchema.id`/`thumbSeed` (above) carry every
+ * scanned post's real id off `/api/state`'s `REELS`. The watchlist is the product, and
+ * it deliberately does not mark which post produced a lead — so an org can see WHICH
+ * POSTS were scanned and can see ITS LEADS, and has no edge joining one to the other.
+ * That is the honest claim; do not widen it to "an org cannot reach a post".
+ *
+ * The second exception that used to stand here is gone as of v28. `commentId` was
+ * built engine-side as `{reelId}/{commentId}` on reddit/youtube/telegram (and as the
+ * reply's own tweet id on x), so a lead row shipped its own post id as a prefix and
+ * the comment was one hand-built URL away — which made the whole redaction cosmetic on
+ * four of six platforms. The opaque token closed it: no lead field on this type
+ * carries platform data any more, on any of the six.
  */
 export const matchSchema = z.object({
   id: z.string(),
@@ -904,6 +932,11 @@ export const panelStateSchema = z.object({
 
 export const statusWriteResponseSchema = z.object({
   ok: z.boolean(),
+  // `commentId` here is the key the CALLER sent — the opaque lead token — echoed
+  // straight back, never the real comment id the bridge resolved it to. That is the
+  // discipline every org-facing write response follows: an echo can only return what
+  // the customer already had, so it can never become a second delivery route for the
+  // id the payload dropped.
   data: z.object({ commentId: z.string(), status: matchStatusSchema }).nullable(),
   error: z.string().nullable(),
 });
@@ -925,9 +958,12 @@ export const revealedLeadSchema = z.object({
   id: z.string(),
   commentId: z.string(),
   platform: z.string(),
+  // The handle, and ONLY the handle. `text` and `reelId` are not parsed here because
+  // the server does not send them: the comment body is superadmin-only, and a post
+  // link is the comment one redirect away. `z.object` is non-strict, so a bridge that
+  // predates this change (or a replayed old response) still parses — and its `text`
+  // and `reelId` are DROPPED at this boundary rather than reaching a component.
   username: z.string(),
-  text: z.string(),
-  reelId: z.string(),
 });
 
 export const revealLeadResponseSchema = z.object({

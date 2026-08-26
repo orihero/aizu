@@ -186,6 +186,27 @@ def _campaign_id() -> str:
     return load_campaign(CONFIG / "campaign.md").campaign_id
 
 
+def _lead_key(panel, comment_id: str = "c1", campaign_id: str | None = None,
+              platform: str = "instagram") -> str:
+    """The v28 opaque key the panel would have been handed for a seeded lead.
+
+    Since v28 an org-facing lead row names its lead by `matches.lead_token`, and
+    `server._resolve_org_lead` accepts that and nothing else — a raw `comment_id`
+    is refused exactly like a made-up string, which is what keeps the change from
+    being decorative. These tests seed through the Store, so they know the lead by
+    its real composite key and have to ask for the customer's key explicitly.
+
+    Falls back to `comment_id` when the row does not exist: the callers that pass a
+    nonexistent id are asserting a 404, and a raw id is what they should be sending.
+    """
+    store = Store(panel["db"])
+    try:
+        return store.lead_token_for(campaign_id or _campaign_id(),
+                                    platform, comment_id) or comment_id
+    finally:
+        store.close()
+
+
 def _owner_org_id(panel) -> int:
     """The org the module-scoped `panel` fixture's owner signed up into. Needed
     wherever a test seeds a campaign row straight into the store: an UNREGISTERED
@@ -274,7 +295,12 @@ def test_api_state_returns_raw_json(panel):
                 "ESCALATION_LOG", "ALERTS", "HEALTH", "SOUL"]:
         assert key in raw
     assert raw["MATCHES"], "seeded match should flow through to /api/state"
-    assert raw["MATCHES"][0]["commentId"] == "c1"
+    # v28: the org-facing `commentId` is the opaque `matches.lead_token`, never the
+    # platform's own id. Asserted as an inequality rather than dropped, because the
+    # property this test now buys is precisely that the seeded id does NOT appear —
+    # and on reddit/youtube/telegram/x that id is a permalink component.
+    assert raw["MATCHES"][0]["commentId"] == _lead_key(panel, "c1")
+    assert raw["MATCHES"][0]["commentId"] != "c1"
 
 
 def test_api_state_cors_for_local_dev_origin(panel):
@@ -306,10 +332,13 @@ def test_status_preflight_allows_local_dev_origin(panel):
 
 def test_status_write_persists(panel):
     code, resp = _post(panel["base"] + "/api/status", json.dumps({
-        "campaignId": _campaign_id(), "commentId": "c1", "status": "interested",
+        "campaignId": _campaign_id(), "commentId": _lead_key(panel, "c1"),
+        "status": "interested",
     }).encode())
     assert code == 200
     assert resp["ok"] is True and resp["error"] is None
+    # The response echoes the key the CALLER sent, never the resolved comment id.
+    assert resp["data"]["commentId"] == _lead_key(panel, "c1") != "c1"
     store = Store(panel["db"])
     try:
         row = [m for m in store.matches(_campaign_id()) if m["comment_id"] == "c1"][0]
@@ -320,7 +349,8 @@ def test_status_write_persists(panel):
 
 def test_status_write_invalid_status_rejected(panel):
     code, resp = _post(panel["base"] + "/api/status", json.dumps({
-        "campaignId": _campaign_id(), "commentId": "c1", "status": "banana",
+        "campaignId": _campaign_id(), "commentId": _lead_key(panel, "c1"),
+        "status": "banana",
     }).encode())
     assert code == 400
     assert resp["ok"] is False and "status" in resp["error"]
@@ -350,7 +380,8 @@ def test_status_write_missing_fields_rejected(panel):
 def test_status_write_cross_origin_rejected(panel):
     req = urllib.request.Request(
         panel["base"] + "/api/status",
-        data=json.dumps({"campaignId": _campaign_id(), "commentId": "c1",
+        data=json.dumps({"campaignId": _campaign_id(),
+                         "commentId": _lead_key(panel, "c1"),
                          "status": "in_progress"}).encode(),
         headers={"Content-Type": "application/json", "Origin": "https://evil.example"},
         method="POST")
@@ -365,7 +396,8 @@ def test_status_write_cross_origin_rejected(panel):
 def test_status_write_local_origin_allowed(panel):
     req = urllib.request.Request(
         panel["base"] + "/api/status",
-        data=json.dumps({"campaignId": _campaign_id(), "commentId": "c1",
+        data=json.dumps({"campaignId": _campaign_id(),
+                         "commentId": _lead_key(panel, "c1"),
                          "status": "in_progress"}).encode(),
         headers={"Content-Type": "application/json",
                  "Origin": panel["base"], "Cookie": panel["cookie"]},
@@ -406,7 +438,8 @@ def test_post_from_configured_origin_allowed(panel, monkeypatch):
     monkeypatch.setenv(server.ALLOWED_ORIGINS_ENV, "https://panel.example")
     req = urllib.request.Request(
         panel["base"] + "/api/status",
-        data=json.dumps({"campaignId": _campaign_id(), "commentId": "c1",
+        data=json.dumps({"campaignId": _campaign_id(),
+                         "commentId": _lead_key(panel, "c1"),
                          "status": "in_progress"}).encode(),
         headers={"Content-Type": "application/json",
                  "Origin": "https://panel.example", "Cookie": panel["cookie"]},
@@ -420,7 +453,8 @@ def test_post_from_unlisted_origin_still_rejected(panel, monkeypatch):
     monkeypatch.setenv(server.ALLOWED_ORIGINS_ENV, "https://panel.example")
     req = urllib.request.Request(
         panel["base"] + "/api/status",
-        data=json.dumps({"campaignId": _campaign_id(), "commentId": "c1",
+        data=json.dumps({"campaignId": _campaign_id(),
+                         "commentId": _lead_key(panel, "c1"),
                          "status": "in_progress"}).encode(),
         headers={"Content-Type": "application/json",
                  "Origin": "https://evil.example", "Cookie": panel["cookie"]},
@@ -475,7 +509,7 @@ def test_api_state_scoped_to_known_campaign(panel):
     _, raw = _get(panel["base"] + "/api/state?campaign=" + _campaign_id())
     data = json.loads(raw)
     assert data["CAMPAIGNS"][0]["id"] == _campaign_id()
-    assert data["MATCHES"][0]["commentId"] == "c1"
+    assert data["MATCHES"][0]["commentId"] == _lead_key(panel, "c1") != "c1"
 
 
 def test_api_state_unknown_campaign_404(panel):
@@ -505,16 +539,19 @@ def test_unknown_api_get_returns_json_404_not_spa(panel):
 def test_bulk_status_partial_success(panel):
     code, resp = _post(panel["base"] + "/api/status/bulk", json.dumps({
         "campaignId": _campaign_id(), "status": "in_progress",
-        "items": [{"commentId": "c1"}, {"commentId": "missing-x"}],
+        "items": [{"commentId": _lead_key(panel, "c1")}, {"commentId": "missing-x"}],
     }).encode())
     assert code == 200 and resp["ok"] is True
     assert resp["data"]["updated"] == 1
+    # `missing` echoes the key the CALLER sent for the item that did not resolve —
+    # an unresolvable key must not be answered with somebody's real comment id.
     assert resp["data"]["missing"] == ["missing-x"]
 
 
 def test_bulk_status_rejects_bad_status(panel):
     code, resp = _post(panel["base"] + "/api/status/bulk", json.dumps({
-        "campaignId": _campaign_id(), "status": "banana", "items": [{"commentId": "c1"}],
+        "campaignId": _campaign_id(), "status": "banana",
+        "items": [{"commentId": _lead_key(panel, "c1")}],
     }).encode())
     assert code == 400 and resp["ok"] is False
 
@@ -535,7 +572,8 @@ def _post_as(url: str, body: bytes, cookie: str) -> tuple[int, dict]:
 
 def test_status_write_logs_actor(panel):
     code, _ = _post(panel["base"] + "/api/status", json.dumps({
-        "campaignId": _campaign_id(), "commentId": "c1", "status": "interested",
+        "campaignId": _campaign_id(), "commentId": _lead_key(panel, "c1"),
+        "status": "interested",
     }).encode())
     assert code == 200
     store = Store(panel["db"])
@@ -549,13 +587,14 @@ def test_status_write_logs_actor(panel):
 def test_status_into_closed_requires_reason_400(panel):
     # No reason → 400 (forced-reason status).
     code, resp = _post(panel["base"] + "/api/status", json.dumps({
-        "campaignId": _campaign_id(), "commentId": "c1", "status": "closed",
+        "campaignId": _campaign_id(), "commentId": _lead_key(panel, "c1"),
+        "status": "closed",
     }).encode())
     assert code == 400 and "reason" in resp["error"]
     # With a reason → 200 and the reason is stored on the audit row.
     code, resp = _post(panel["base"] + "/api/status", json.dumps({
-        "campaignId": _campaign_id(), "commentId": "c1", "status": "closed",
-        "note": "client went with a competitor",
+        "campaignId": _campaign_id(), "commentId": _lead_key(panel, "c1"),
+        "status": "closed", "note": "client went with a competitor",
     }).encode())
     assert code == 200
     store = Store(panel["db"])
@@ -569,7 +608,7 @@ def test_status_into_closed_requires_reason_400(panel):
 def test_bulk_status_forced_reason_400(panel):
     code, resp = _post(panel["base"] + "/api/status/bulk", json.dumps({
         "campaignId": _campaign_id(), "status": "archived",
-        "items": [{"commentId": "c1"}],
+        "items": [{"commentId": _lead_key(panel, "c1")}],
     }).encode())
     assert code == 400 and "reason" in resp["error"]
 
@@ -579,7 +618,8 @@ def test_bulk_status_archive_with_reason_records_audit(panel):
     reason on each lead's status-change audit row."""
     code, resp = _post(panel["base"] + "/api/status/bulk", json.dumps({
         "campaignId": _campaign_id(), "status": "archived",
-        "items": [{"commentId": "c1"}], "note": "end of campaign cleanup",
+        "items": [{"commentId": _lead_key(panel, "c1")}],
+        "note": "end of campaign cleanup",
     }).encode())
     assert code == 200 and resp["data"]["updated"] == 1
     store = Store(panel["db"])
@@ -604,19 +644,21 @@ def test_bulk_status_forbidden_for_member(panel):
         store.close()
     code, resp = _post_as(panel["base"] + "/api/status/bulk", json.dumps({
         "campaignId": _campaign_id(), "status": "archived",
-        "items": [{"commentId": "c1"}], "note": "bulk cleanup",
+        "items": [{"commentId": _lead_key(panel, "c1")}], "note": "bulk cleanup",
     }).encode(), member)
     assert code == 403 and "role" in resp["error"]
 
 
 def test_lead_note_create_lists_in_state(panel):
     code, resp = _post(panel["base"] + "/api/lead/note", json.dumps({
-        "op": "create", "campaignId": _campaign_id(), "commentId": "c1",
+        "op": "create", "campaignId": _campaign_id(),
+        "commentId": _lead_key(panel, "c1"),
         "body": "left a voicemail",
     }).encode())
     assert code == 200 and resp["data"]["body"] == "left a voicemail"
     _, raw = _get(panel["base"] + "/api/state")
-    lead = [m for m in json.loads(raw)["MATCHES"] if m["commentId"] == "c1"][0]
+    lead = [m for m in json.loads(raw)["MATCHES"]
+            if m["commentId"] == _lead_key(panel, "c1")][0]
     assert any(n["body"] == "left a voicemail" for n in lead["notes"])
     assert lead["notes"][-1]["authorEmail"] == "panel-tester@aizu.test"
 
@@ -624,7 +666,8 @@ def test_lead_note_create_lists_in_state(panel):
 def test_lead_note_owner_only_delete(panel):
     # Author (the module user) creates a note.
     _, resp = _post(panel["base"] + "/api/lead/note", json.dumps({
-        "op": "create", "campaignId": _campaign_id(), "commentId": "c1",
+        "op": "create", "campaignId": _campaign_id(),
+        "commentId": _lead_key(panel, "c1"),
         "body": "owner-only note",
     }).encode())
     note_id = resp["data"]["id"]
@@ -641,7 +684,8 @@ def test_lead_note_owner_only_delete(panel):
 
 def test_lead_note_create_rejects_empty_body(panel):
     code, resp = _post(panel["base"] + "/api/lead/note", json.dumps({
-        "op": "create", "campaignId": _campaign_id(), "commentId": "c1", "body": "   ",
+        "op": "create", "campaignId": _campaign_id(),
+        "commentId": _lead_key(panel, "c1"), "body": "   ",
     }).encode())
     assert code == 400 and resp["ok"] is False
 

@@ -46,7 +46,8 @@ from .core.config import (CDP_PLATFORMS, MAX_CAMPAIGN_BRIEF_BYTES, PER_ORG_CREDE
                      SUPPORTED_PLATFORMS, Campaign, campaign_from_brief, campaign_to_brief,
                      load_campaign, load_soul, resolve_campaign)
 from . import billing
-from .panel import build_empty_raw, build_raw, delivery_state, lead_uid
+from .panel import (build_empty_raw, build_raw, delivery_state, lead_uid,
+                    org_flag_summary)
 from .panel_org import (LEADS_PAGE_SIZE_DEFAULT, build_admin_org_campaigns,
                         build_admin_org_leads, build_campaigns_org,
                         build_dashboard_org, build_leads_org, build_reports_org,
@@ -3131,6 +3132,39 @@ class PanelHandler(SimpleHTTPRequestHandler):
         BOLA rule); `org_id` is the EFFECTIVE org (impersonation passes the foreign org)."""
         return store.campaign_in_org(campaign_id, org_id)
 
+    @staticmethod
+    def _resolve_org_lead(store: Store, org_id: Optional[int], campaign_id: str,
+                          platform: str, lead_key: str) -> Optional[str]:
+        """One org-facing lead key → the REAL `comment_id`, or None (v28).
+
+        Every org-scoped lead write goes through here, and it accepts the opaque
+        `lead_token` and NOTHING else. That strictness is the feature: if a raw
+        `comment_id` still worked, the whole change would be decorative — a caller who
+        already knows the real id (from a pre-v28 bookmark, an old export, or by
+        guessing a permalink) would keep writing with it, and any code path that kept
+        accepting one would be a standing invitation to keep SHIPPING one.
+
+        Three checks, and the order matters:
+          1. the token resolves at all (unique table-wide, so no campaign needed);
+          2. the row belongs to the caller's org — done inside `resolve_lead_token`,
+             which is why the campaign is not passed to it: pairing a caller-supplied
+             campaign with someone else's token is exactly the probe to refuse;
+          3. the row's OWN campaign and platform match what the request claimed, so a
+             token cannot be used to write across the caller's own campaigns under a
+             mismatched key.
+
+        Returns None for every failure, which every caller renders as the same 404 as
+        an unknown lead. Never distinguish them: a 403 or a distinct message would
+        confirm the row exists and turn a write endpoint into an existence oracle,
+        which is the property `_handle_lead_reveal` documents at length.
+        """
+        resolved = store.resolve_lead_token(org_id, lead_key)
+        if resolved is None:
+            return None
+        if resolved["campaignId"] != campaign_id or resolved["platform"] != platform:
+            return None
+        return str(resolved["commentId"])
+
     def _request_is_https(self) -> bool:
         """Whether THIS request genuinely arrived over TLS.
 
@@ -3310,7 +3344,16 @@ class PanelHandler(SimpleHTTPRequestHandler):
             if not self._campaign_in_org(store, fields["campaignId"], user["orgId"]):
                 self._send_json(404, False, error="unknown campaign")  # cross-org → hide
                 return
-            updated = store.set_status(fields["campaignId"], fields["commentId"],
+            # v28: the body carries the OPAQUE lead key, never the platform's own
+            # comment id — see `_resolve_org_lead`. An unresolvable key is the same
+            # 404 as a lead that does not exist, deliberately.
+            comment_id = self._resolve_org_lead(
+                store, user["orgId"], fields["campaignId"], fields["platform"],
+                fields["commentId"])
+            if comment_id is None:
+                self._send_json(404, False, error="unknown lead")
+                return
+            updated = store.set_status(fields["campaignId"], comment_id,
                                        fields["status"], platform=fields["platform"],
                                        user=user, reason=fields["note"])
         except ValueError as e:  # invalid status or missing forced reason → client error
@@ -3322,8 +3365,10 @@ class PanelHandler(SimpleHTTPRequestHandler):
         finally:
             store.close()
         if not updated:
+            # The key the CALLER sent, not the resolved comment id: echoing the real
+            # one back would hand over the very field v28 stopped shipping.
             self._send_json(404, False,
-                            error=f"no match for comment_id {fields['commentId']!r}")
+                            error=f"no match for lead {fields['commentId']!r}")
             return
         self._send_json(200, True,
                         data={"commentId": fields["commentId"], "status": fields["status"]})
@@ -3341,8 +3386,18 @@ class PanelHandler(SimpleHTTPRequestHandler):
                 return
             updated, missing = 0, []
             for item in fields["items"]:
+                # v28: resolve each opaque key on its own. An item that does not
+                # resolve joins `missing` rather than aborting the batch — same shape
+                # as a lead that was deleted between the page load and the write, and
+                # `missing` echoes the key the CALLER sent, never the real comment id.
+                comment_id = self._resolve_org_lead(
+                    store, user["orgId"], fields["campaignId"], item["platform"],
+                    item["commentId"])
+                if comment_id is None:
+                    missing.append(item["commentId"])
+                    continue
                 # One shared reason applies to every item's audit row.
-                if store.set_status(fields["campaignId"], item["commentId"],
+                if store.set_status(fields["campaignId"], comment_id,
                                     fields["status"], platform=item["platform"],
                                     user=user, reason=fields["note"]):
                     updated += 1
@@ -3372,9 +3427,25 @@ class PanelHandler(SimpleHTTPRequestHandler):
                 if not self._campaign_in_org(store, fields["campaignId"], user["orgId"]):
                     self._send_json(404, False, error="unknown campaign")
                     return
-                note = store.add_note(fields["campaignId"], fields["commentId"],
+                # v28: opaque key in, real comment id resolved here (see
+                # `_resolve_org_lead`). Without this a note would be the one write
+                # that still accepted a permalink-bearing id from a customer.
+                comment_id = self._resolve_org_lead(
+                    store, user["orgId"], fields["campaignId"], fields["platform"],
+                    fields["commentId"])
+                if comment_id is None:
+                    self._send_json(404, False, error="unknown lead")
+                    return
+                note = store.add_note(fields["campaignId"], comment_id,
                                       fields["body"], author=user,
                                       platform=fields["platform"])
+                # `add_note` echoes back the comment id it was GIVEN — which is the
+                # real one, because we just resolved it. Re-mask it before it leaves:
+                # the note response is org-facing, and shipping the resolved id here
+                # would hand back through the write path exactly the value v28 stopped
+                # shipping on the read path. Overwrite rather than rebuild, so a future
+                # column added to a note record still reaches the panel.
+                note = {**note, "commentId": fields["commentId"]}
                 self._send_json(200, True, data=note)
                 return
             # delete is gated by authorship (delete_note); a note's author can only
@@ -3417,12 +3488,19 @@ class PanelHandler(SimpleHTTPRequestHandler):
         * Reveal is a READ. It writes no status, no history row, no `updated_at` —
           the only thing it writes is the audit row.
 
-        Returns `{username, text, reelId}`. The comment text ships deliberately: the
-        handle alone unlocks the public post where the comment is already visible, so
-        withholding the words while handing over the author is incoherent, not safer.
-        `reelId` ships here and NOWHERE else org-facing (`panel._build_matches` moved
-        it behind `include_identity`): it is a pointer to the identity, so it belongs
-        on the audited path with the identity itself.
+        Returns `{username}` and NOTHING else about the person. The comment body and
+        `reelId` are BOTH superadmin-only (`panel._build_matches(include_identity=True)`,
+        `GET /api/admin/orgs/{id}/leads`) and neither has an org-facing route at all —
+        not here, not on any list payload.
+
+        The earlier build shipped `text` and `reelId` from this handler, reasoning that
+        a handle already unlocks the public post, so withholding the words was
+        incoherent. That reasoning is retired, and deliberately: the product promise is
+        that an org learns WHAT a lead wants (`intent`, derived at capture) and WHO to
+        contact (this handle), never the words the person wrote. `reelId` goes with the
+        text rather than with the handle because it is a POINTER to the text — a post
+        link is the comment one hand-built URL away, so shipping it would re-open by
+        redirection exactly what dropping `text` closes.
 
         FIFTH rule, and the one that makes the other four hold at scale: the reveal is
         CAPPED by the plan's period lead allowance (free 10 … scale = override). An
@@ -3437,8 +3515,26 @@ class PanelHandler(SimpleHTTPRequestHandler):
             return
         user = self._current_user()  # non-None: route is behind the auth gate
         org_id = user["orgId"]
-        uid = lead_uid(fields["campaignId"], fields["platform"], fields["commentId"])
         store = Store(self.db_path)
+        # v28: the body names the lead by its OPAQUE key. Resolve to the real comment
+        # id FIRST, because everything below is keyed on it — including `uid`, the
+        # audit target that doubles as the reveal meter.
+        #
+        # `uid` stays built from the REAL comment id on purpose, even though the
+        # customer never sees one. It is a server-side identity, and the period cap
+        # counts DISTINCT targets: re-deriving it from the token would orphan every
+        # audit row written before v28 and silently hand every org a fresh allowance
+        # the moment this shipped. The meter has to keep pointing at the same lead.
+        comment_id = self._resolve_org_lead(
+            store, org_id, fields["campaignId"], fields["platform"],
+            fields["commentId"])
+        uid = (lead_uid(fields["campaignId"], fields["platform"], comment_id)
+               if comment_id is not None
+               # Unresolvable: still audit the ATTEMPT (a denial is audited before the
+               # lead is even looked up), keyed by the token the caller offered. It
+               # resolves to no lead, so it can never collide with a real target.
+               else lead_uid(fields["campaignId"], fields["platform"],
+                             fields["commentId"]))
 
         def audit(result: str) -> None:
             """One row per call, whatever the outcome. `result` is the only thing that
@@ -3467,9 +3563,15 @@ class PanelHandler(SimpleHTTPRequestHandler):
                 audit("not_found")
                 self._send_json(404, False, error="unknown lead")  # cross-org → hide
                 return
+            # v28: an opaque key that resolves to nothing is indistinguishable from a
+            # lead that is not ours — same audit result, same 404, same message.
+            if comment_id is None:
+                audit("not_found")
+                self._send_json(404, False, error="unknown lead")
+                return
             match = None
             for m in store.matches(fields["campaignId"]):
-                if (m.get("comment_id") == fields["commentId"]
+                if (m.get("comment_id") == comment_id
                         and (m.get("platform") or DEFAULT_PLATFORM) == fields["platform"]):
                     match = m
                     break
@@ -3507,13 +3609,20 @@ class PanelHandler(SimpleHTTPRequestHandler):
         # CONSTRUCT the response from named fields — never `dict(match)` minus keys.
         # An inverted filter would ship every future `matches` column (source, tier,
         # found_by_models, …) to the customer the day it is added.
+        # NOTE: `text` and `reelId` are absent BY CONTRACT, not by oversight — see the
+        # docstring. Re-adding either key here is the single edit that undoes the whole
+        # policy, which is why `tests/test_lead_reveal.py` pins the key set exactly.
+        # `id` and `commentId` are the OPAQUE key the caller sent, echoed back so the
+        # drawer can match the answer to the lead it asked about. NOT `uid`, which is
+        # built from the real comment id: it is the audit/meter key and stays server-
+        # side. Echoing it here would ship the permalink-bearing id on the one
+        # endpoint whose entire job is to disclose less than it used to.
         self._send_json(200, True, data={
-            "id": uid,
+            "id": lead_uid(fields["campaignId"], fields["platform"],
+                           fields["commentId"]),
             "commentId": fields["commentId"],
             "platform": fields["platform"],
             "username": match.get("username") or "",
-            "text": match.get("text") or "",
-            "reelId": match.get("reel_id") or "",
         })
 
     def _resolve_campaign_target(
@@ -6290,8 +6399,16 @@ class PanelHandler(SimpleHTTPRequestHandler):
             # the panel's poll contract is unchanged. The real feed is superadmin-only.
             "events": [],
             "eventsRedacted": True,
+            # `detail` is the flag's ENGINE-AUTHORED prose and is never customer-safe:
+            # youtube/telegram raise `parse_skip` with f"comment {comment_id}", where
+            # that id is f"{reel_id}/{comment_id}" — a permalink. Redacting `events`
+            # here while shipping this verbatim left the same disclosure open under a
+            # different key, which is precisely how it survived the v27 sweep. The
+            # superadmin feed (`_handle_admin_run_activity`) still carries the raw
+            # detail, because that is the plane an operator debugs a flag from.
             "flags": [{"kind": f.get("kind"), "severity": f.get("severity"),
-                       "detail": f.get("detail")} for f in flags],
+                       "detail": org_flag_summary(f.get("kind") or "")}
+                      for f in flags],
             # Never advances: there is nothing to page. Kept so a client that echoes it
             # back keeps working, and so `after` stays a no-op rather than a 400.
             "cursor": after,

@@ -206,47 +206,59 @@ describe('Lead identity is the composite (campaign, platform, comment) key', () 
   });
 });
 
-describe('Lead drawer reel link (revealed leads only)', () => {
-  test('links out to the source reel on its platform after an audited reveal', async () => {
+describe('Lead drawer identity disclosure — the handle, and nothing else', () => {
+  test('an audited reveal shows the handle and never the comment or a post link', async () => {
     const user = userEvent.setup();
     const lead = buildMatch({ commentId: 'c1', platform: 'instagram' });
     const repo = new FakePanelRepository(buildPanelState({ MATCHES: [lead] }));
-    // The reel id is registered on the REVEAL answer, not on the lead: since v27 the
-    // anonymized row carries no post pointer, so this is the only place one exists.
-    repo.revealIdentities.set(lead.id, { username: 'dana_t', text: 'how much?', reelId: 'DXOML7vjQhn' });
+    repo.revealIdentities.set(lead.id, { username: 'dana_t' });
     renderWithProviders(<LeadsPage />, {
       repository: repo,
       route: leadRoute(lead.id),
       path: '/leads/:leadId',
     });
 
-    // v27: no post link until the lead is revealed — the handle and the comment are
-    // visible ON that post, so the link is the redaction undone in one click.
-    expect(await screen.findByRole('button', { name: /Reveal source/ })).toBeInTheDocument();
-    expect(screen.queryByRole('link', { name: /DXOML7vjQhn/ })).not.toBeInTheDocument();
+    // Hidden until asked for, and the ask is the audited round-trip.
+    expect(await screen.findByRole('button', { name: /Show handle/ })).toBeInTheDocument();
+    expect(screen.queryByText('dana_t')).not.toBeInTheDocument();
 
-    await user.click(screen.getByRole('button', { name: /Reveal source/ }));
+    await user.click(screen.getByRole('button', { name: /Show handle/ }));
 
-    const link = await screen.findByRole('link', { name: /DXOML7vjQhn/ });
-    expect(link).toHaveAttribute('href', 'https://www.instagram.com/reel/DXOML7vjQhn/');
-    expect(link).toHaveAttribute('target', '_blank');
+    expect(await screen.findByText('dana_t')).toBeInTheDocument();
+    expect(repo.revealRequests).toHaveLength(1);
+    // The whole point of the change: the words the person wrote are superadmin-only,
+    // and so is the post they sit on (a post link is the comment one redirect away).
+    // Asserted on the rendered document rather than on a component's props, because
+    // this is the thing a customer can actually see.
+    expect(document.body.textContent).not.toContain('how much?');
+    expect(screen.queryByRole('link', { name: /instagram\.com/ })).not.toBeInTheDocument();
+    for (const link of screen.queryAllByRole('link')) {
+      expect(link.getAttribute('href') ?? '').not.toMatch(
+        /instagram\.com|youtube\.com|reddit\.com|t\.me|x\.com|\/reel\/|\/shorts\//,
+      );
+    }
   });
 
-  test('shows the plain reel id when the platform has no derivable URL', async () => {
+  test('no post link appears for a platform whose posts have derivable URLs', async () => {
+    // The old build rendered a reel link here, keyed off the reveal answer's `reelId`.
+    // There is no `reelId` on that answer any more, so the assertion inverts: for the
+    // one platform where a lead's post URL is trivially derivable, there must still be
+    // nothing on screen that opens it.
     const user = userEvent.setup();
-    const lead = buildMatch({ commentId: 'c1', platform: 'telegram' });
+    const lead = buildMatch({ commentId: 'c1', platform: 'instagram' });
     const repo = new FakePanelRepository(buildPanelState({ MATCHES: [lead] }));
-    repo.revealIdentities.set(lead.id, { username: 'dana_t', text: 'how much?', reelId: 'tg-42' });
+    repo.revealIdentities.set(lead.id, { username: 'dana_t' });
     renderWithProviders(<LeadsPage />, {
       repository: repo,
       route: leadRoute(lead.id),
       path: '/leads/:leadId',
     });
 
-    await user.click(await screen.findByRole('button', { name: /Reveal source/ }));
+    await user.click(await screen.findByRole('button', { name: /Show handle/ }));
+    await screen.findByText('dana_t');
 
-    expect(await screen.findByText('tg-42')).toBeInTheDocument();
-    expect(screen.queryByRole('link', { name: /tg-42/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole('link', { name: /DXOML7vjQhn|reel/i })).not.toBeInTheDocument();
+    expect(document.body.textContent).not.toContain('DXOML7vjQhn');
   });
 });
 
@@ -671,7 +683,7 @@ describe('Campaign run', () => {
     expect(screen.queryByRole('button', { name: 'Run' })).not.toBeInTheDocument();
   });
 
-  test('starting a run from the drawer sends a live run with the chosen lead target', async () => {
+  test('starting a run from the drawer sends the lead target and nothing else', async () => {
     const user = userEvent.setup();
     const repo = new FakePanelRepository(
       buildPanelState({ CAMPAIGNS: [runnableCampaign({ id: 'cmp-001', goalTarget: null })] }),
@@ -683,39 +695,16 @@ describe('Campaign run', () => {
     renderWithProviders(<CampaignsPage />, { repository: repo });
 
     await user.click(await screen.findByRole('button', { name: 'Run' }));
-    await user.click(screen.getByRole('button', { name: '50' }));
-    await user.click(screen.getByRole('button', { name: 'Start run' }));
-
-    await waitFor(() => { expect(repo.runRequests).toHaveLength(1); });
-    expect(repo.runRequests[0]).toEqual({
-      campaignId: 'cmp-001', mode: 'live', targetLeadCount: 50, durationMinutes: 120,
-    });
-  });
-
-  test('a custom lead target is sent as entered, with the safety cap', async () => {
-    const user = userEvent.setup();
-    const repo = new FakePanelRepository(
-      buildPanelState({ CAMPAIGNS: [runnableCampaign({ id: 'cmp-001', goalTarget: null })] }),
-    );
-    // v27: the default Free fixture caps a run at 10 leads (7 remaining). This test is
-    // about the target the drawer SENDS, not about the clamp, so put the org on a plan
-    // roomy enough that no clamp fires.
-    repo.billing = buildBilling({ tier: 'pro', leadCap: 2000, leadsUsed: 0, maxRunLeads: 2000, campaignCap: null, campaignsUsed: 1 });
-    renderWithProviders(<CampaignsPage />, { repository: repo });
-
-    await user.click(await screen.findByRole('button', { name: 'Run' }));
-    await user.click(screen.getByRole('button', { name: 'Custom lead target' }));
-    const leadsField = screen.getByLabelText(/Leads/);
+    const leadsField = await screen.findByLabelText(/how many leads/i);
     await user.clear(leadsField);
-    await user.type(leadsField, '37');
-    const capField = screen.getByLabelText(/Safety cap/);
-    await user.clear(capField);
-    await user.type(capField, '90');
+    await user.type(leadsField, '50');
     await user.click(screen.getByRole('button', { name: 'Start run' }));
 
     await waitFor(() => { expect(repo.runRequests).toHaveLength(1); });
+    // The whole request: one campaign, one target. No durationMinutes — the run stops
+    // when it has the leads, not when a clock the operator guessed at runs out.
     expect(repo.runRequests[0]).toEqual({
-      campaignId: 'cmp-001', mode: 'live', targetLeadCount: 37, durationMinutes: 90,
+      campaignId: 'cmp-001', mode: 'live', targetLeadCount: 50,
     });
   });
 
@@ -731,13 +720,12 @@ describe('Campaign run', () => {
     renderWithProviders(<CampaignsPage />, { repository: repo });
 
     await user.click(await screen.findByRole('button', { name: 'Run' }));
-    // 200 isn't a preset → the drawer opens on Custom, pre-filled with the goal.
-    expect(screen.getByLabelText(/Leads/)).toHaveValue(200);
+    expect(screen.getByLabelText(/how many leads/i)).toHaveValue(200);
     await user.click(screen.getByRole('button', { name: 'Start run' }));
 
     await waitFor(() => { expect(repo.runRequests).toHaveLength(1); });
     expect(repo.runRequests[0]).toEqual({
-      campaignId: 'cmp-001', mode: 'live', targetLeadCount: 200, durationMinutes: 120,
+      campaignId: 'cmp-001', mode: 'live', targetLeadCount: 200,
     });
   });
 
@@ -849,7 +837,7 @@ describe('Campaign run', () => {
     });
   });
 
-  test('an idle campaign drawer shows the last run activity (not only live runs)', async () => {
+  test('an idle campaign drawer is the launch question alone — no last-run feed, no fetch', async () => {
     const user = userEvent.setup();
     const repo = new FakePanelRepository(
       buildPanelState({
@@ -867,12 +855,15 @@ describe('Campaign run', () => {
     });
     renderWithProviders(<CampaignsPage />, { repository: repo });
 
-    // The card is idle → button says "Run"; opening it still surfaces the last run.
+    // The card is idle → button says "Run". The drawer asks how many leads and stops
+    // there: a finished run belongs to the campaign's run history, not to the form that
+    // starts the next one. Nothing renders it, so nothing fetches it either.
     await user.click(await screen.findByRole('button', { name: 'Run' }));
 
-    expect(await screen.findByText('of 10 leads')).toBeInTheDocument();
-    expect(screen.getByText('Last run')).toBeInTheDocument();
-    expect(repo.runActivityFetches[0]).toEqual({ runId: 'run-009', afterSeq: 0 });
+    expect(await screen.findByLabelText(/how many leads/i)).toBeInTheDocument();
+    expect(screen.queryByText('Last run')).not.toBeInTheDocument();
+    expect(screen.queryByText('of 10 leads')).not.toBeInTheDocument();
+    expect(repo.runActivityFetches).toHaveLength(0);
   });
 });
 

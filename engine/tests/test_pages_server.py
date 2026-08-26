@@ -67,6 +67,25 @@ def _post(base, path, body, cookie=None):
     return code, resp
 
 
+def _key(srv, campaign_id, comment_id, platform="instagram"):
+    """A seeded lead's v28 opaque org-facing key (`matches.lead_token`).
+
+    Everything below seeds through the Store and therefore knows a lead by its real
+    composite key, while every org-facing payload and every org-scoped write speaks
+    only in tokens. `Store.lead_token_for` is the bridge between the two."""
+    store = Store(srv["db"])
+    try:
+        return store.lead_token_for(campaign_id, platform, comment_id)
+    finally:
+        store.close()
+
+
+def _uid(srv, campaign_id, comment_id, platform="instagram"):
+    """The composite panel `id` for a seeded lead, composed the way the payload
+    composes it — over the TOKEN, not the comment id."""
+    return lead_uid(campaign_id, platform, _key(srv, campaign_id, comment_id, platform))
+
+
 def _cookie(set_cookie):
     return set_cookie.split(";", 1)[0]
 
@@ -330,8 +349,11 @@ def test_leads_archived_visible_when_filter_selected(srv):
     """Explicitly selecting the Archived filter surfaces the archived lead."""
     data = _get(srv["base"], "/api/leads?status=archived", srv["cookies"]["owner"])[1]["data"]
     assert data["total"] == 1
-    # `id` is the composite lead identity, not the bare comment id.
-    assert [m["id"] for m in data["items"]] == [lead_uid("camp-a2", "instagram", "a2-arch")]
+    # `id` is the composite lead identity, not the bare comment id — and since v28
+    # the third part of that composite is the opaque token, so the id no longer
+    # carries the platform's own comment id either.
+    assert [m["id"] for m in data["items"]] == [_uid(srv, "camp-a2", "a2-arch")]
+    assert "a2-arch" not in data["items"][0]["id"]
 
 
 def test_dashboard_matches_exclude_archived(srv):
@@ -404,13 +426,30 @@ def test_lead_ids_are_unique_across_campaigns_sharing_a_comment_id(srv):
 
     The payload used to flatten a lead to `"id": comment_id`, so the shared
     `a1-c1` collapsed to ONE row: clicking it in camp-a2 resolved camp-a1's lead
-    and a status write landed on the wrong campaign's record."""
+    and a status write landed on the wrong campaign's record.
+
+    v28 STRENGTHENS this rather than retiring it. The composite id is still what the
+    panel keys on, but its comment-id part is now `matches.lead_token`, minted per
+    ROW and carrying a UNIQUE index — so two campaigns sharing a comment id no longer
+    even share the value the composite is guarding against. The collision the old
+    payload suffered is now structurally impossible instead of merely guarded, and
+    the pair of rows below proves both halves: distinct tokens AND distinct ids.
+    """
     data = _get(srv["base"], "/api/leads?pageSize=200", srv["cookies"]["owner"])[1]["data"]
     ids = [m["id"] for m in data["items"]]
     assert len(set(ids)) == len(ids), "every lead row needs its own id"
-    dupes = [m for m in data["items"] if m["commentId"] == "a1-c1"]
+    shared = {_key(srv, "camp-a1", "a1-c1"), _key(srv, "camp-a2", "a1-c1")}
+    assert len(shared) == 2, "one comment id under two campaigns must mint two tokens"
+    dupes = [m for m in data["items"] if m["commentId"] in shared]
     assert {m["campaignId"] for m in dupes} == {"camp-a1", "camp-a2"}
     assert len({m["id"] for m in dupes}) == 2
+    # ...and neither row's KEY names the comment id they actually share. Scoped to
+    # `id`/`commentId` rather than swept over the whole row on purpose: this
+    # fixture's `intent` is seeded as "Wants a quote for order <comment_id>", which
+    # is authored prose, not a leak. The whole-payload sweep over real permalink
+    # shapes lives in tests/test_lead_token.py.
+    for m in dupes:
+        assert "a1-c1" not in m["commentId"] and "a1-c1" not in m["id"]
     # The id must resolve back to the row's own composite key, never a sibling's.
     for m in data["items"]:
         assert m["id"] == lead_uid(m["campaignId"], m["platform"], m["commentId"])
@@ -418,10 +457,15 @@ def test_lead_ids_are_unique_across_campaigns_sharing_a_comment_id(srv):
 
 def test_status_write_on_a_shared_comment_id_hits_only_its_own_campaign(srv):
     """The write path resolves the full composite key, so marking camp-a2's copy of
-    `a1-c1` leaves camp-a1's copy untouched."""
+    `a1-c1` leaves camp-a1's copy untouched.
+
+    Since v28 the request carries only the token, and `server._resolve_org_lead`
+    re-derives the campaign and platform from the ROW that token belongs to — then
+    checks them against what the request claimed. So the isolation no longer depends
+    on the caller spelling the composite correctly; it holds even if they lie."""
     data = _get(srv["base"], "/api/leads?pageSize=200", srv["cookies"]["owner"])[1]["data"]
     by_id = {m["id"]: m for m in data["items"]}
-    target = by_id[lead_uid("camp-a2", "instagram", "a1-c1")]
+    target = by_id[_uid(srv, "camp-a2", "a1-c1")]
     code, resp = _post(srv["base"], "/api/status",
                        {"campaignId": target["campaignId"], "platform": target["platform"],
                         "commentId": target["commentId"], "status": "in_progress"},
@@ -429,8 +473,16 @@ def test_status_write_on_a_shared_comment_id_hits_only_its_own_campaign(srv):
     assert code == 200 and resp["ok"] is True
     after = {m["id"]: m for m in
              _get(srv["base"], "/api/leads?pageSize=200", srv["cookies"]["owner"])[1]["data"]["items"]}
-    assert after[lead_uid("camp-a2", "instagram", "a1-c1")]["status"] == "in_progress"
-    assert after[lead_uid("camp-a1", "instagram", "a1-c1")]["status"] == "interested"
+    assert after[_uid(srv, "camp-a2", "a1-c1")]["status"] == "in_progress"
+    assert after[_uid(srv, "camp-a1", "a1-c1")]["status"] == "interested"
+    # The same token under the OTHER campaign is refused outright rather than
+    # silently landing on the sibling row — the mismatch check, not a lucky lookup.
+    code, _ = _post(srv["base"], "/api/status",
+                    {"campaignId": "camp-a1", "platform": "instagram",
+                     "commentId": target["commentId"], "status": "closed",
+                     "note": "should never apply"},
+                    srv["cookies"]["owner"])
+    assert code == 404
 
 
 # ----- spend is reported from spend_log, not inferred from leads -----

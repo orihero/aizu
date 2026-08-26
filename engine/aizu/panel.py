@@ -262,11 +262,13 @@ def _build_matches(store: Store, cid: str, *,
     wants, derived at capture time by `core.matching.derive_intent` — plus the
     classifier's reason, the grounded `extracted` fields, and the workflow state.
     The raw identity stays in `matches` and is served ONLY through the superadmin
-    plane, which opts in with `include_identity=True`. So does `reelId`: a POINTER
-    to the identity is the identity. The post it names is public and carries both
-    the handle and the comment, so an org-facing `reelId` let anyone with devtools
-    reconstruct the whole list without touching /api/lead/reveal — an audited
-    disclosure with an unaudited side door is just an unaudited disclosure.
+    plane, which opts in with `include_identity=True`. So do the comment `text` and
+    `reelId` — and for those two there is no org-facing route AT ALL, audited or
+    otherwise. `POST /api/lead/reveal` hands an org the HANDLE and nothing else: an
+    org learns who to contact, never the words the person wrote. `reelId` is held to
+    the same rule because a POINTER to the comment is the comment — the post it names
+    is public and carries the words in plain sight, so an org-facing `reelId` would
+    reinstate by redirection exactly what dropping `text` closes.
 
     The flag defaults to DENY on purpose: a future org-facing caller that forgets
     it leaks nothing, whereas a default-allow with an opt-out leaks on every
@@ -306,10 +308,30 @@ def _build_matches(store: Store, cid: str, *,
             reason = redact_identity(reason, username=handle, comment_text=comment)
             extracted = redact_extracted(extracted, username=handle,
                                          comment_text=comment)
+        # v28: the key an ORG sees. The platform's own `comment_id` is a PERMALINK on
+        # four of six platforms (reddit/youtube/telegram compose it as
+        # f"{reel_id}/{comment_id}"; x uses the reply's own tweet id), so shipping it
+        # handed the customer the post — and the post prints the handle and the words
+        # the v27 redaction withholds. The opaque token carries no platform data, and
+        # the bridge resolves it back on every write (`Store.resolve_lead_token`).
+        #
+        # The superadmin plane keeps the REAL id: it is the plane that exists to see
+        # the raw row, and an operator debugging a lead needs the id the platform
+        # knows it by. That is the same include_identity split as `username`/`text`.
+        # `ensure_lead_token` rather than `m["lead_token"] or <fallback>`: the fallback
+        # is the trap. A row can legitimately reach here with no token — a worker on a
+        # pre-v28 binary inserting into a migrated DB writes NULL — and ANY fallback
+        # that derives from the row re-leaks the comment id on exactly the platforms
+        # this exists to protect. So there is no fallback: a missing token is MINTED
+        # and persisted here, idempotently, which is the same self-heal the v28
+        # backfill does, just reached later.
+        lead_key = (m["comment_id"] if include_identity
+                    else store.ensure_lead_token(m["campaign_id"], platform,
+                                                 m["comment_id"]))
         row = {
-            # Unique per (campaign, platform, comment) — never a bare comment_id.
-            "id": lead_uid(m["campaign_id"], platform, m["comment_id"]),
-            "commentId": m["comment_id"],
+            # Unique per (campaign, platform, lead key) — never a bare comment id.
+            "id": lead_uid(m["campaign_id"], platform, lead_key),
+            "commentId": lead_key,
             "campaignId": m["campaign_id"],
             "platform": platform,
             "sessionId": m.get("session_id"),
@@ -350,13 +372,32 @@ def _build_matches(store: Store, cid: str, *,
             row["username"] = m["username"]
             row["text"] = m["text"]
             # `reelId` rides WITH the identity, not with the product fields, and
-            # that is the whole point of moving it here: the post it names is
+            # that is the whole point of keeping it here: the post it names is
             # public, and the lead's comment — handle and words — is plainly
-            # readable on it. Shipping it org-facing meant any operator with
-            # devtools could walk the anonymized list straight to every identity
-            # without ever calling /api/lead/reveal, i.e. the reveal endpoint's
-            # audit trail was optional. The reveal response returns `reelId`
-            # itself, so the post is still one click away — one AUDITED click.
+            # readable on it. The audited reveal does NOT return it (it answers
+            # with the handle alone), so no org-facing LEAD ROW and no org-facing
+            # RESPONSE TO A REVEAL names the post a lead came from.
+            #
+            # That is the scoped claim, and it is worth stating exactly rather than
+            # rounding up to "an org cannot reach the post", because ONE org-facing
+            # route to a post id still exists by design:
+            #   * `_build_reels` (below) ships every scanned post's raw `reel_id`
+            #     as `id`/`thumbSeed` on `/api/state`, unconditionally — the A7
+            #     "a scanned post is the product" contract. It is a list of real
+            #     post ids, but it does not mark WHICH post produced a lead (the
+            #     watchlist fields that would are behind `include_identity`), so it
+            #     does not join a lead to a comment. Changing that is a PRODUCT
+            #     decision about A7, not a redaction bug.
+            #
+            # The other route that used to sit here is CLOSED as of v28. The
+            # org-facing `commentId` was the platform's own id, which the reddit/
+            # youtube/telegram feeds compose as f"{reel_id}/{comment_id}" and the x
+            # parser sets to the reply's own tweet id — so the post id was a PREFIX
+            # of a key shipped on every lead row and the comment was one hand-built
+            # URL away, which made this whole redaction decorative on four of six
+            # platforms. Org rows now carry `matches.lead_token` instead (see the
+            # `lead_key` assignment above), and every org-scoped write resolves it
+            # back through `server._resolve_org_lead`.
             row["reelId"] = m["reel_id"]
         out.append(row)
     return out
@@ -438,6 +479,51 @@ def _build_escalation_log(store: Store, cid: str) -> list[dict[str, Any]]:
 
 _TIER_MAP = {"halt": "halt", "soft": "soft"}
 
+# What an ORG is told a health flag means. Keyed by `kind`, and deliberately FIXED
+# strings rather than the flag's own `detail`.
+#
+# `health_flags.detail` is ENGINE-AUTHORED free prose, written at the throw site with
+# whatever was in scope — and on two platforms what was in scope is a permalink:
+# `engines/youtube/session.py` raises `parse_skip` with f"comment {comment.comment_id}"
+# and `engines/telegram/session.py` with f"reply {reply.comment_id}", where that id is
+# f"{reel_id}/{comment_id}". Shipping `detail` to an org therefore handed over the post
+# AND the comment id under a key named `desc` — which is why no `commentId` sweep ever
+# caught it, and why the v28 opaque key alone does not close this: the leak is in a
+# different field, on a different payload, in prose nobody constrained.
+#
+# The fix is not to scrub the prose (there is no reliable way to find an id inside a
+# sentence an engineer wrote a year ago, and a scrubber that misses once is worse than
+# none). It is to stop shipping the prose. The customer-actionable part of a flag is
+# WHICH KIND of thing went wrong and how badly — both of which survive here. The raw
+# detail stays in the DB and on the superadmin run-activity feed, which is where an
+# operator debugging one actually looks.
+_FLAG_SUMMARY = {
+    "account_challenge": "The platform asked this account to verify itself. Runs are paused until it is cleared.",
+    "action_error":      "An action failed on the platform and was skipped.",
+    "cloud_degraded":    "The AI backend was unreachable, so some comments were judged with reduced confidence.",
+    "feed_health":       "The feed started repeating itself — the campaign re-steered to find fresh posts.",
+    "halt":              "The run stopped early. Check the campaign's sources and try again.",
+    "parse_skip":        "Some comments could not be read and were skipped.",
+    "post_unavailable":  "A post could not be opened — it was removed or made private.",
+    "read_budget":       "The run reached its reading budget for this platform.",
+    "reddit_api":        "Reddit refused the request. Check the Reddit integration in Settings.",
+    "reel_unavailable":  "A post could not be opened — it was removed or made private.",
+    "scheduled_run_skipped": "A scheduled run was skipped.",
+    "seeds_all_dead":    "None of this campaign's sources returned anything. Try broader search terms.",
+    "spend_cap":         "The run reached its spending cap.",
+    "stt_failed":        "Audio from a video could not be transcribed.",
+    "video_analysis_failed": "A video could not be analysed.",
+    "youtube_api":       "YouTube refused the request. Check the YouTube integration in Settings.",
+}
+# Never the flag's own `detail`: an unknown kind is exactly the case where the prose is
+# least likely to have been written with a customer in mind.
+_FLAG_SUMMARY_FALLBACK = "Something needed attention during this run."
+
+
+def org_flag_summary(kind: str) -> str:
+    """The customer-safe one-liner for a health flag. See `_FLAG_SUMMARY`."""
+    return _FLAG_SUMMARY.get(kind or "", _FLAG_SUMMARY_FALLBACK)
+
 
 def _build_alerts(store: Store, cid: str) -> list[dict[str, Any]]:
     out = []
@@ -446,7 +532,9 @@ def _build_alerts(store: Store, cid: str) -> list[dict[str, Any]]:
             "time": f"{_date_label(f['created_at'])} {_time_label(f['created_at'])}",
             "tier": _TIER_MAP.get(f["severity"], "info"),
             "title": f["kind"].replace("_", " ").title(),
-            "desc": f["detail"] or "",
+            # NOT `f["detail"]` — see `_FLAG_SUMMARY`. That column is engine-authored
+            # prose and on youtube/telegram it embeds a comment permalink.
+            "desc": org_flag_summary(f["kind"]),
         })
     return out
 
@@ -464,7 +552,10 @@ def _build_health(store: Store, cid: str, sessions: list[dict[str, Any]],
         "login": {"state": "valid", "detail": "Cookie session — status not independently tracked"},
         "checkpoint": {
             "state": "halted" if open_halt else "clear",
-            "detail": open_halt[0]["detail"] if open_halt else "No open challenge",
+            # Same rule as `_build_alerts`: a flag's own `detail` is engine-authored
+            # and never customer-safe, whatever its severity.
+            "detail": (org_flag_summary(open_halt[0]["kind"]) if open_halt
+                       else "No open challenge"),
         },
         "canary": {"emptyStreak": 0, "limit": canary_limit, "lastJson": "—",
                    "detail": "Interceptor reading reel + comment JSON"},

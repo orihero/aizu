@@ -49,8 +49,11 @@ export const PERMISSIONS: Record<Action, readonly Role[]> = {
   run_campaigns: ['owner', 'admin'],
   edit_leads: ['owner', 'admin', 'member'],
   bulk_edit_leads: ['owner', 'admin'],
-  // v27 reveal-on-demand: un-redact ONE lead's handle + comment (POST /api/lead/reveal).
-  // Every lead is anonymized by default; this is the explicit, audited un-redaction.
+  // v27 reveal-on-demand: un-redact ONE lead's HANDLE, and nothing else about the
+  // person (POST /api/lead/reveal). Every lead is anonymized by default; this is the
+  // explicit, audited un-redaction — and its scope is the handle ALONE. The comment
+  // body and the post it sits on are superadmin-only with no org-facing route at all,
+  // so this permission is not the gate on them: there is no gate, there is no route.
   // It is a WRITE-shaped permission even though the request itself only reads, because
   // what it grants is disclosure, not access to a page. `viewer` is deliberately
   // excluded: it is the read-only role, and the anonymized list is what it may read.

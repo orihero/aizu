@@ -373,6 +373,13 @@ export const adminOrgCampaignsResponseSchema = adminEnvelope(
  * removed `username` and the comment `text` from every ORG-facing payload; here they
  * STAY, and the derived `intent` is added beside them — that pairing is how an operator
  * checks that the redaction is summarising honestly. Keep the three together.
+ *
+ * v28 added a fourth to the list, and this one is easy to miss because the field name
+ * did not change: `commentId` below is the REAL platform comment id, while the same key
+ * on the customer `matchSchema` is now an opaque per-lead token. The split is deliberate
+ * — an operator debugging a lead needs the id the platform knows it by — and it is why
+ * an admin row and a customer row for the same lead compose two DIFFERENT `leadUidOf`
+ * values. Never carry a key across the two planes.
  */
 export const adminOrgLeadSchema = z.object({
   commentId: z.string(),

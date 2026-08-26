@@ -1,27 +1,31 @@
 import { readdirSync, readFileSync, statSync } from 'node:fs';
 import { join, relative, sep } from 'node:path';
 import { describe, expect, test } from 'vitest';
-import { matchSchema } from '@/shared/schemas/panelState';
+import { matchSchema, revealedLeadSchema } from '@/shared/schemas/panelState';
 import { leadsToCsv } from '@/shared/selectors/leads';
-import type { Match } from '@/shared/types/domain';
+import type { Match, RevealedLead } from '@/shared/types/domain';
 import { buildMatch } from '@/test/fixtures';
 import { leadsToExcelXml } from './exportLeads';
 
 /**
- * THE INVARIANT: in the customer plane, a POST URL is reachable only from a lead that
- * has been revealed through the audited `POST /api/lead/reveal`.
+ * THE INVARIANT: in the customer plane, a POST URL is not reachable AT ALL — not from a
+ * lead row, not from the audited reveal, not from anywhere.
  *
- * Why this test exists rather than a few per-component assertions: the redaction hides a
- * handle and a comment, but the post those live on is PUBLIC. One reel id plus
- * `reelUrl()` reproduces both, so the redaction is only as strong as the absence of a
- * post pointer on the anonymized lead. That absence is a property of the whole customer
- * plane — every component, every selector, every exporter — and a per-component test
- * only ever proves it about the components someone remembered to write one for. The
- * next lead surface added would be born unguarded.
+ * This used to be the weaker claim "reachable only from a revealed lead". It was
+ * tightened because the reveal itself was: an org now gets a lead's HANDLE and nothing
+ * else, because the words the person wrote are superadmin-only. A post link would make
+ * that promise hollow — the post is public and shows the comment in plain sight, so one
+ * click reinstates by redirection exactly what dropping `text` closes. A pointer to the
+ * comment is the comment.
  *
- * So this asserts it structurally: `Match` has no post pointer at all (type + wire), and
- * the one module that can turn one into a URL is imported by exactly one file, whose
- * only call site is fed by a `RevealedLead`.
+ * Why a structural test rather than a few per-component assertions: the absence of a
+ * post pointer is a property of the WHOLE customer plane — every component, every
+ * selector, every exporter — and a per-component test only ever proves it about the
+ * components someone remembered to write one for. The next lead surface added would be
+ * born unguarded.
+ *
+ * So this asserts it structurally: neither `Match` nor `RevealedLead` carries a post
+ * pointer (type + wire), and no customer-plane file so much as names one.
  *
  * The superadmin plane (`features/admin/**`) is deliberately out of scope — seeing the
  * raw rows is its entire purpose.
@@ -37,26 +41,26 @@ const EXCLUDED_DIRS = [
   // The superadmin plane. IP-allowlisted, platform-admin only, and it is SUPPOSED to
   // show identity — that is the other half of the v27 decision.
   join('features', 'admin'),
-  // Test doubles and fixtures. The fake repository has to model the reveal ANSWER,
-  // which legitimately carries a reel id.
+  // Test doubles and fixtures. They model the wire, and a fixture naming a post is
+  // how the "an older bridge still sends one" boundary cases above are written.
   'test',
 ];
 
 /**
  * Files allowed to name a post pointer, with the reason each one is not a leak.
- * Anything else appearing here means a reel id has grown a second home in the customer
- * plane — which is the failure this test exists to catch, so widen the product, not
- * this list, unless the new site is genuinely reveal-fed.
+ * Anything else appearing here means a reel id has grown a home in the customer plane —
+ * which is the failure this test exists to catch. Widen the product, not this list:
+ * there is no longer any customer surface a post pointer legitimately belongs on.
  */
 const ALLOWED = new Map<string, string>([
   // The superadmin plane's wire schemas. They live under `shared/` for import reasons
   // only; the payloads they describe (`/api/admin/*`) never reach a customer surface,
   // and keeping identity in them is the explicit other half of the v27 decision.
   [join('shared', 'schemas', 'admin.ts'), 'superadmin wire schemas'],
-  [join('shared', 'lib', 'reelUrl.ts'), 'the URL builder itself'],
-  [join('shared', 'types', 'domain.ts'), 'the RevealedLead type'],
-  [join('shared', 'schemas', 'panelState.ts'), 'revealedLeadSchema (the reveal answer)'],
-  [join('features', 'leads', 'LeadDrawer.tsx'), 'the reveal UI — asserted below to be reveal-fed'],
+  // The builder itself. It has NO customer-plane importer any more (asserted below);
+  // it survives as the one canonical place a post URL is ever constructed, so a future
+  // superadmin surface that needs one does not hand-roll a second.
+  [join('shared', 'lib', 'reelUrl.ts'), 'the URL builder itself — unimported by this plane'],
 ]);
 
 /** Every non-test TS/TSX file in the customer plane, as a src-relative path. */
@@ -87,13 +91,21 @@ function stripComments(source: string): string {
     .replace(/(^|[^:])\/\/[^\n]*/g, '$1');
 }
 
-describe('post-link containment — an unrevealed lead has no route to a post URL', () => {
-  test('the Match type carries no post pointer', () => {
-    // Compile-time half: this line stops type-checking the day `reelId` returns to
-    // `Match`, which is the moment every runtime guard below becomes bypassable.
+describe('post-link containment — the customer plane has no route to a post URL', () => {
+  test('neither the Match type nor the reveal answer carries a post pointer', () => {
+    // Compile-time half: these lines stop type-checking the day `reelId` returns to
+    // either type, which is the moment every runtime guard below becomes bypassable.
     type HasReelId<T> = 'reelId' extends keyof T ? true : false;
     const matchHasPostPointer: HasReelId<Match> = false;
-    expect(matchHasPostPointer).toBe(false);
+    const revealHasPostPointer: HasReelId<RevealedLead> = false;
+    expect([matchHasPostPointer, revealHasPostPointer]).toEqual([false, false]);
+  });
+
+  test('the reveal answer carries no comment body either', () => {
+    // The handle is the WHOLE answer. `text` on this type would be the change undone.
+    type HasText<T> = 'text' extends keyof T ? true : false;
+    const revealHasComment: HasText<RevealedLead> = false;
+    expect(revealHasComment).toBe(false);
   });
 
   test('the wire boundary strips a post pointer a rogue payload still sends', () => {
@@ -106,24 +118,43 @@ describe('post-link containment — an unrevealed lead has no route to a post UR
     expect(matchSchema.parse(wire)).not.toHaveProperty('reelId');
   });
 
-  test('only the reveal UI can reach the post-URL builder', () => {
+  test('the reveal boundary strips a comment body AND a post pointer', () => {
+    // The same second line, on the other payload that used to carry both. A bridge
+    // older than this change still answers with `text`/`reelId`; the schema is what
+    // guarantees a stale deployment is not a way around the policy.
+    const parsed = revealedLeadSchema.parse({
+      id: 'cmp-001:instagram:c1', commentId: 'c1', platform: 'instagram',
+      username: 'dana_t', text: 'how much?', reelId: 'DXOML7vjQhn',
+    });
+    expect(parsed).not.toHaveProperty('text');
+    expect(parsed).not.toHaveProperty('reelId');
+    expect(JSON.stringify(parsed)).not.toContain('how much?');
+  });
+
+  test('NOTHING in the customer plane names a post pointer', () => {
     const offenders = customerPlaneFiles()
       .filter((rel) => !ALLOWED.has(rel))
       .filter((rel) => /\breelUrl\b|\breelId\b/.test(stripComments(readFileSync(join(SRC_ROOT, rel), 'utf8'))));
     expect(offenders).toEqual([]);
   });
 
-  test("the drawer's post link is fed by the reveal answer, never by the lead row", () => {
-    const drawer = readFileSync(join(SRC_ROOT, 'features', 'leads', 'LeadDrawer.tsx'), 'utf8');
-    // `<ReelLink .../>` is the sole consumer of `reelUrl` in the customer app. Every one
-    // of its call sites must read `state.source` — the RevealedLead — so a future edit
-    // cannot quietly re-point it at the `lead` prop that is in scope right beside it.
-    const callSites = [...drawer.matchAll(/<ReelLink\b[^>]*\/>/g)].map((m) => m[0]);
-    expect(callSites).toHaveLength(1);
-    for (const site of callSites) {
-      expect(site).toContain('state.source.reelId');
-      expect(site).not.toMatch(/\blead\./);
-    }
+  test('the post-URL builder has no customer-plane importer at all', () => {
+    // The strong form of the invariant, and the reason the drawer-specific call-site
+    // assertion this replaced is gone: there is no call site to constrain. `reelUrl`
+    // is unreachable from the customer plane, so no future edit can re-point one at a
+    // lead row — it would have to add the import back, and this fails on that.
+    const importers = customerPlaneFiles()
+      .filter((rel) => rel !== join('shared', 'lib', 'reelUrl.ts'))
+      .filter((rel) => /from\s+['"][^'"]*reelUrl['"]/.test(readFileSync(join(SRC_ROOT, rel), 'utf8')));
+    expect(importers).toEqual([]);
+  });
+
+  test('the lead drawer renders no outbound platform link', () => {
+    // Belt to the braces above: even a hand-built URL string — no `reelUrl`, no
+    // `reelId` identifier, so invisible to the scans above — is caught here.
+    const drawer = stripComments(readFileSync(join(SRC_ROOT, 'features', 'leads', 'LeadDrawer.tsx'), 'utf8'));
+    expect(drawer).not.toMatch(/instagram\.com|youtube\.com|reddit\.com|t\.me|x\.com|linkedin\.com/);
+    expect(drawer).not.toMatch(/target=["']_blank["']/);
   });
 
   test('no exporter can emit a post URL, revealed or not', () => {

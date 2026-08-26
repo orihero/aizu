@@ -1120,3 +1120,182 @@ def test_run_event_runs_lists_a_run_that_has_no_session_row():
     assert row["runId"] == "run-dead" and row["campaignId"] == "c1"
     assert row["sessions"] == 2                      # one run id spans many sessions
     assert row["firstAt"] <= row["lastAt"]
+
+
+# ----- v28: matches.lead_token (the opaque org-facing lead key) ------------------
+
+_V28_SEED = [
+    # The four platforms whose comment id is a PERMALINK, spelled the way their own
+    # feeds compose it — reddit/feed.py:209, youtube/feed.py:339, telegram/feed.py:160
+    # (whose `reel_id` is itself "{channel}/{message}"), x/parsers.py:157.
+    ("reddit", "t3_post", "t3_post/t1_xyz"),
+    ("youtube", "vid123", "vid123/UgxABC"),
+    ("telegram", "channel/55", "channel/55/61"),
+    ("x", "1700000000000000001", "1900000000000000009"),
+    ("instagram", "reel-a", "c-ig-1"),
+]
+
+
+def _make_v27_matches_db():
+    """A database that looks like it was written by the last release before v28:
+    `matches` with no `lead_token`, no unique index over it, version stamped 27.
+
+    Built by seeding through the NORMAL path and then winding the column back, the
+    same way `test_v27_intent_column_is_added_to_a_legacy_db` does, so the rows carry
+    every default a real pre-v28 row has (captured_at, status, org attribution) rather
+    than the subset a hand-built INSERT would remember to set.
+    """
+    store, path = fresh_store()
+    store.upsert_campaign_meta("c1", org_id=1)
+    for platform, reel_id, comment_id in _V28_SEED:
+        store.upsert_match(campaign_id="c1", reel_id=reel_id, comment_id=comment_id,
+                           username="u", text="t", lang="en", score=0.9, reason="x",
+                           extracted=None, tier="local", platform=platform)
+    store.close()
+    conn = sqlite3.connect(path)
+    # The index has to go first: SQLite refuses to drop a column an index references.
+    conn.execute("DROP INDEX IF EXISTS idx_matches_lead_token")
+    conn.execute("ALTER TABLE matches DROP COLUMN lead_token")
+    conn.execute("UPDATE meta SET value='27' WHERE key='schema_version'")
+    conn.commit()
+    conn.close()
+    return path
+
+
+def test_the_lead_token_index_is_created_in_the_migration_block_not_in_SCHEMA():
+    """A guard on WHERE the unique index is declared, because the wrong answer is a
+    total outage rather than a missing index.
+
+    `_init_schema` runs `executescript(SCHEMA)` long before the `_add_column_if_missing`
+    ALTER. On an UPGRADING database `CREATE TABLE IF NOT EXISTS matches` does not widen
+    the existing table, so at that point `lead_token` does not exist — and a
+    `CREATE UNIQUE INDEX ... ON matches(lead_token)` inside the script raises
+    `OperationalError: no such column`, which propagates straight out of `Store.__init__`.
+    Bridge, worker and CLI all build a Store at startup, so every deployment that has
+    ever stored a lead would fail to open, permanently, over an index.
+
+    Nothing in the fresh-DB suites can see that: they all start from a `matches` that
+    already has the column. This assertion is cheap and catches the statement being
+    moved back, which is the only way the bug returns.
+    """
+    from aizu.core.store import SCHEMA
+    assert "idx_matches_lead_token" not in SCHEMA, (
+        "the lead_token unique index must be created AFTER the migration's ALTER and "
+        "backfill, not inside the SCHEMA executescript")
+
+
+def test_a_v27_db_gains_lead_tokens_on_open():
+    """The upgrade itself: `lead_token` is the one v28 column that could NOT be left
+    NULL on existing rows, because it is the org plane's only handle on a lead. So the
+    migration is an ALTER plus a backfill loop, and this pins all of it."""
+    path = _make_v27_matches_db()
+    store = Store(path)
+    try:
+        assert store._conn.execute(
+            "SELECT value FROM meta WHERE key='schema_version'").fetchone()[0] \
+            == str(SCHEMA_VERSION)
+        rows = store.matches("c1")
+        assert len(rows) == len(_V28_SEED)
+        tokens = [r["lead_token"] for r in rows]
+        assert all(t and t.strip() for t in tokens), "a pre-v28 row was left keyless"
+        assert len(set(tokens)) == len(tokens), "the backfill reused a token"
+        # ...and no token echoes the id it stands in for. A derived key would leak
+        # the permalink the whole change exists to withhold.
+        for r in rows:
+            assert r["lead_token"] != r["comment_id"]
+            assert r["comment_id"] not in r["lead_token"]
+            assert r["reel_id"] not in r["lead_token"]
+        # The unique index is present and actually UNIQUE — a plain index here would
+        # let two rows share a key, and one org's write would land on the other's lead.
+        idx = store._conn.execute(
+            "SELECT name, sql FROM sqlite_master "
+            "WHERE type='index' AND name='idx_matches_lead_token'").fetchone()
+        assert idx is not None, "the v28 unique index was not created"
+        assert "UNIQUE" in idx["sql"].upper()
+    finally:
+        store.close()
+
+
+def test_reopening_a_migrated_db_does_not_rotate_the_tokens():
+    """The backfill's WHERE clause is what makes a re-open a no-op, and that is not a
+    performance nicety: the panel holds a token in the /leads/<uid> URL and in its
+    query cache, so re-minting on every open would turn every drawer a customer has
+    open into a 404 each time the process restarts."""
+    path = _make_v27_matches_db()
+    store = Store(path)
+    try:
+        first = {r["comment_id"]: r["lead_token"] for r in store.matches("c1")}
+    finally:
+        store.close()
+    for _ in range(2):
+        store = Store(path)
+        try:
+            again = {r["comment_id"]: r["lead_token"] for r in store.matches("c1")}
+        finally:
+            store.close()
+        assert again == first
+
+
+def test_a_row_written_by_a_pre_v28_worker_is_healed_on_read():
+    """A mixed-version fleet is the normal state during a rollout, not a corruption.
+
+    A worker still running a pre-v28 binary INSERTs into the migrated DB without the
+    column, so the row lands with `lead_token` NULL — the box is doing nothing wrong,
+    it simply predates the key. `ensure_lead_token` heals that on first read by
+    MINTING, never by deriving: every value that could be derived from the row is the
+    comment id or contains it, which is exactly what an org-facing key must not be.
+
+    NULLs coexist under the UNIQUE index (SQLite treats them as distinct), which is
+    why the un-healed row can sit there at all rather than failing the insert.
+    """
+    store, path = fresh_store()
+    try:
+        store.upsert_campaign_meta("c1", org_id=1)
+        # The pre-v28 shape: an explicit column list that omits lead_token entirely.
+        with store._tx() as c:
+            c.execute(
+                "INSERT INTO matches (campaign_id, org_id, platform, reel_id, "
+                "comment_id, username, text, lang, score, reason, tier, status, "
+                "captured_at, updated_at) "
+                "VALUES (?,1,'reddit',?,?,'u','t','en',0.9,'x','local','new',?,?)",
+                ("c1", "t3_old", "t3_old/t1_old", time.time(), time.time()))
+        assert store.matches("c1")[0]["lead_token"] is None
+        # Read path heals it...
+        token = store.ensure_lead_token("c1", "reddit", "t3_old/t1_old")
+        assert token and token != "t3_old/t1_old"
+        assert "t3_old" not in token and "t1_old" not in token
+        # ...and PERSISTS it, so the key the customer was just handed still resolves.
+        assert store.matches("c1")[0]["lead_token"] == token
+        assert store.lead_token_for("c1", "reddit", "t3_old/t1_old") == token
+        # Idempotent: a second read returns the same key rather than a second one.
+        assert store.ensure_lead_token("c1", "reddit", "t3_old/t1_old") == token
+        # ...and it round-trips back to the real lead, for the caller's org only.
+        assert store.resolve_lead_token(1, token) == {
+            "campaignId": "c1", "platform": "reddit", "commentId": "t3_old/t1_old"}
+        assert store.resolve_lead_token(2, token) is None
+    finally:
+        store.close()
+
+
+def test_a_repoll_never_rewrites_an_existing_lead_token():
+    """`upsert_match`'s ON CONFLICT clause deliberately omits `lead_token`.
+
+    Everything else about a lead refreshes on a re-poll — score, reason, intent, the
+    extracted dict — because the latest verdict is the true one. The KEY must not,
+    for the same reason the backfill is idempotent: it is the value the panel is
+    holding right now. Asserted alongside a field that DOES refresh, so a change that
+    froze the whole row would not pass by accident."""
+    store, _ = fresh_store()
+    try:
+        kw = dict(campaign_id="c1", reel_id="t3_post", comment_id="t3_post/t1_xyz",
+                  username="u", text="t", lang="en", extracted=None, tier="local",
+                  platform="reddit")
+        store.upsert_match(score=0.9, reason="first", intent="Wants size 42", **kw)
+        first = store.matches("c1")[0]["lead_token"]
+        assert first
+        store.upsert_match(score=0.4, reason="second", intent="Wants size 43", **kw)
+        row = store.matches("c1")[0]
+        assert row["lead_token"] == first, "a re-poll rotated the panel's lead key"
+        assert row["reason"] == "second" and row["intent"] == "Wants size 43"
+    finally:
+        store.close()

@@ -34,6 +34,11 @@ from aizu.panel_org import build_admin_org_leads, build_leads_org
 COMMENT = ("Salom! Menga 42 razmer qizil Nike krossovka kerak, Toshkentda. "
            "Yozing @alibek_uz")
 HANDLE = "alibek_uz"
+# The post id the sweeps below look for BY VALUE. Deliberately longer than two or
+# three characters: since v28 an org lead row carries a 16-char `secrets.token_urlsafe`
+# token, and a two-character needle turns up inside one about once every 250 runs
+# (measured), which would make the headline invariant a coin flip rather than a test.
+REEL = "reel-9f3a1c"
 
 
 def _bare_store():
@@ -57,7 +62,7 @@ def _leaky_lead(store, *, cid="c1", org_id=None, comment_id="cm1"):
         "phone": "+998901234567",     # hallucinated — grounding drops it
     }, COMMENT)
     store.upsert_match(
-        campaign_id=cid, reel_id="r1", comment_id=comment_id, username=HANDLE,
+        campaign_id=cid, reel_id=REEL, comment_id=comment_id, username=HANDLE,
         text=COMMENT, lang="uz", score=0.9,
         reason=f'Commenter @{HANDLE} writes "{COMMENT}" — clear buying intent.',
         extracted=extracted, tier="local", platform="instagram", session_id="s1",
@@ -97,11 +102,15 @@ def test_no_org_facing_payload_carries_the_post_pointer():
     """A POINTER to the identity is the identity.
 
     `reelId` names the public post the comment sits on, where the handle and the
-    words are both plainly readable. While the org payload carried it, the audited
-    `POST /api/lead/reveal` was optional: any org user could walk the anonymized
-    list, join each row's `reelId` against the reels list, open the post and read
-    everything the redaction had just removed — with no audit row anywhere. So the
-    field moved behind `include_identity` with the two it points at.
+    words are both plainly readable. While the org payload carried it, the whole
+    redaction was optional: any org user could walk the anonymized list, join each
+    row's `reelId` against the reels list, open the post and read everything the
+    redaction had just removed — with no audit row anywhere. So the field moved
+    behind `include_identity` with the two it points at, and it is BLOCKED for an
+    org rather than sold at the price of an audit row: `POST /api/lead/reveal`
+    hands over the handle and nothing else, so there is no org-facing route to the
+    post at all. An audited route to the post would be an audited route to the
+    comment, and the comment is superadmin-only.
 
     Asserted over the WHOLE serialized payload of BOTH org producers, not just the
     key, so a future field that smuggles the same id under another name is caught.
@@ -115,22 +124,27 @@ def test_no_org_facing_payload_carries_the_post_pointer():
         store.close()
     assert "reelId" not in row
     # The id itself must be gone from the row, not merely renamed out of sight.
-    assert "r1" not in repr(row)
+    assert REEL not in repr(row)
     for item in page["items"]:
         assert "reelId" not in item, "the /api/leads row still points at the post"
 
 
 def test_the_superadmin_lead_keeps_the_post_pointer():
-    """The other half: the plane that is allowed to see the identity is also the
-    plane that keeps the way to it. The reveal endpoint returns the same `reelId`,
-    which is what makes reaching the post an AUDITED act rather than a blocked one."""
+    """The other half: the plane that is allowed to read the comment is the only
+    plane that keeps the way to it.
+
+    For an org the post is blocked outright — the reveal returns the handle alone,
+    so there is no audited route and no other route. That makes this the SOLE
+    surviving surface for `reelId`, which is why it is asserted rather than assumed:
+    a scrub that reached `include_identity=True` would leave the platform admin
+    unable to open the post their own investigation depends on."""
     store = _bare_store()
     try:
         _leaky_lead(store, org_id=1)
         row = _build_matches(store, "c1", include_identity=True)[0]
     finally:
         store.close()
-    assert row["reelId"] == "r1"
+    assert row["reelId"] == REEL
 
 
 def test_reason_keeps_its_verdict_after_the_quotation_is_cut():
@@ -380,12 +394,13 @@ def _scanned_campaign(store, *, cid="c1", org_id=None):
 
 
 def test_org_reels_do_not_mark_the_post_the_lead_came_from():
-    """The whole point of moving `reelId` behind the reveal, undone one payload over.
+    """The whole point of withholding `reelId`, undone one payload over.
 
     An org-facing reel row used to carry `newSinceLastPoll` (the watchlist
     `match_count`) and `expiresInDays` (its TTL). Both exist only for a post that
     produced a lead, so each one alone answered "which of these posts do I open to
-    read the handle and the comment" — with no reveal call and no audit row.
+    read the handle and the comment" — restoring, from the reels payload, the exact
+    route the lead payload closed, and doing it for a `viewer` too.
     """
     store = _bare_store()
     cid = _scanned_campaign(store)

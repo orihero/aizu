@@ -158,6 +158,9 @@ describe('matchSchema', () => {
     // Identity is not the wire's to decide: a payload that flattens a lead to its
     // bare commentId (what the engine used to emit) must still parse to an id that
     // is unique per record, or two campaigns' leads collapse into one panel row.
+    // The fixture key is deliberately NOT token-shaped: the boundary must not care
+    // what the key is, so a v28 token, a legacy platform comment id, and this
+    // three-letter string all have to compose the same way.
     const base = buildPanelState().MATCHES[0];
     const a = matchSchema.safeParse({
       ...base, id: 'dup', commentId: 'dup', campaignId: 'cmp-a', platform: 'instagram',
@@ -171,7 +174,7 @@ describe('matchSchema', () => {
     expect(a.success && b.success && x.success).toBe(true);
     const ids = [a, b, x].map((r) => (r.success ? r.data.id : ''));
     expect(new Set(ids).size).toBe(3);
-    expect(a.success && a.data.commentId).toBe('dup');  // raw comment id preserved
+    expect(a.success && a.data.commentId).toBe('dup');  // wire value passed through untouched
   });
 });
 
@@ -481,12 +484,13 @@ describe('matchSchema — v27 lead redaction', () => {
     expect(parsed).not.toHaveProperty('text');
   });
 
-  test('STRIPS reelId — the post pointer left with the handle', () => {
+  test('STRIPS reelId — the post pointer that leads back to the comment', () => {
     // WIRE_LEAD still carries `reelId` precisely so this asserts the stripping and not
     // just the absence of a key nobody sent. A reel id is `reelUrl()` away from a public
     // page showing the comment AND the handle, so a lead row holding one is the
-    // redaction undone in a click. The only post pointer in the customer plane is on
-    // `RevealedLead`, from the audited reveal.
+    // redaction undone in a click. There is now NO post pointer anywhere in the customer
+    // plane — the audited reveal answers with the handle alone — so this is not "the
+    // pointer moved to the reveal answer", it is "the pointer has no org-facing home".
     const parsed = matchSchema.parse(WIRE_LEAD);
     expect(WIRE_LEAD).toHaveProperty('reelId');
     expect(parsed).not.toHaveProperty('reelId');
@@ -685,7 +689,27 @@ describe('runActivitySchema — v27 redacted progress', () => {
 });
 
 describe('revealLeadResponseSchema — v27 reveal-on-demand', () => {
-  test('unwraps one lead’s identity', () => {
+  test('unwraps one lead’s handle', () => {
+    const parsed = revealLeadResponseSchema.parse({
+      ok: true,
+      data: {
+        id: 'cmp-001:instagram:c1', commentId: 'c1', platform: 'instagram',
+        username: 'aziz',
+      },
+      error: null,
+    });
+    expect(parsed.data?.username).toBe('aziz');
+    // The echoed identity lets the drawer check the answer is for the lead it asked
+    // about before painting a handle on screen.
+    expect(parsed.data?.id).toBe('cmp-001:instagram:c1');
+  });
+
+  test('STRIPS a comment body and a post pointer an older bridge still sends', () => {
+    // The bridge stopped sending `text` and `reelId` from the reveal: the comment and
+    // the post it sits on are superadmin-only. This boundary is the second line — a
+    // bridge that predates the change, or a replayed old response, must not be able to
+    // hand a component the words the person wrote. `z.object` drops them here, so the
+    // customer plane never sees either key even when the wire still carries it.
     const parsed = revealLeadResponseSchema.parse({
       ok: true,
       data: {
@@ -694,21 +718,27 @@ describe('revealLeadResponseSchema — v27 reveal-on-demand', () => {
       },
       error: null,
     });
-    expect(parsed.data?.username).toBe('aziz');
-    expect(parsed.data?.reelId).toBe('r1');
-    // The echoed identity lets the drawer check the answer is for the lead it asked
-    // about before painting a handle on screen.
-    expect(parsed.data?.id).toBe('cmp-001:instagram:c1');
+    expect(parsed.data).not.toHaveProperty('text');
+    expect(parsed.data).not.toHaveProperty('reelId');
+    expect(JSON.stringify(parsed)).not.toContain('how much?');
   });
 
   test('REJECTS a malformed identity rather than degrading it to blanks', () => {
     // Every other schema here degrades. This one must not: a blank handle would read
-    // as "this person has no handle" instead of "the reveal did not work".
+    // as "this person has no handle" instead of "the reveal did not work". The handle
+    // is now the WHOLE answer, so this is the only field left that can be malformed.
+    expect(
+      revealLeadResponseSchema.safeParse({
+        ok: true,
+        data: { id: 'cmp-001:instagram:c1', commentId: 'c1', platform: 'instagram' },
+        error: null,
+      }).success,
+    ).toBe(false);
     expect(
       revealLeadResponseSchema.safeParse({
         ok: true,
         data: { id: 'cmp-001:instagram:c1', commentId: 'c1', platform: 'instagram',
-                username: 'aziz' },
+                username: null },
         error: null,
       }).success,
     ).toBe(false);
